@@ -31,23 +31,30 @@ with st.sidebar:
     seq_table = st.text_input("SEQ status table", value="seq_status")
     cameras = st.multiselect("Cameras", DEFAULT_CAMERAS, default=DEFAULT_CAMERAS)
 
-def fetch_camera_stats(db_path: str, table: str, cameras: list[str]) -> tuple[int, dict]:
+def fetch_camera_stats(db_path: str, table: str, cameras: list[str], threshold_mb: int = 200) -> tuple[int, dict]:
+    """
+    Fetch camera statistics by deriving status from size_mb:
+    - 1 (>=200MB) if size_mb >= threshold_mb
+    - 2 (<200MB) if size_mb < threshold_mb
+    - 3 (Missing) if size_mb is NULL
+    """
     with connect(db_path) as conn:
         cur = conn.cursor()
         # Count distinct cases in the normalized table
         cur.execute(f"SELECT COUNT(DISTINCT recording_date || '-' || case_no) FROM {table}")
         total_cases = cur.fetchone()[0]
         camera_stats = {cam: Counter() for cam in cameras}
-        # Query normalized schema: (recording_date, case_no, camera_name, value, comments, size_mb)
+        # Query normalized schema: (recording_date, case_no, camera_name, size_mb)
         placeholders = ','.join(['?'] * len(cameras))
-        cur.execute(f"SELECT camera_name, value FROM {table} WHERE camera_name IN ({placeholders})", cameras)
-        for camera_name, status_value in cur.fetchall():
-            if status_value is None:
-                continue
-            try:
-                camera_stats[camera_name][int(status_value)] += 1
-            except (TypeError, ValueError):
-                pass
+        cur.execute(f"SELECT camera_name, size_mb FROM {table} WHERE camera_name IN ({placeholders})", cameras)
+        for camera_name, size_mb in cur.fetchall():
+            if size_mb is None:
+                status = 3  # Missing
+            elif size_mb >= threshold_mb:
+                status = 1  # >=200MB
+            else:
+                status = 2  # <200MB
+            camera_stats[camera_name][status] += 1
         return total_cases, camera_stats
 
 def stats_to_dataframe(camera_stats: dict, labels: dict, status_order) -> pd.DataFrame:

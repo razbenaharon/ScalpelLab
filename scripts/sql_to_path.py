@@ -107,15 +107,17 @@ def get_paths(sql_query: str,
               root_path: str = DEFAULT_ROOT,
               status_value: int = 1,
               largest_only: bool = False,
-              only_cameras: Optional[List[str]] = None) -> List[Tuple[str, int, str, str, float]]:
+              only_cameras: Optional[List[str]] = None,
+              threshold_mb: int = 200) -> List[Tuple[str, int, str, str, float]]:
     """
     Run SQL query and return list of (recording_date, case_no, camera, mp4_path, size_mb).
+    Status is derived from size_mb: 1=>=threshold_mb, 2=<threshold_mb, 3=NULL
     """
     root = Path(root_path)
     conn = sqlite3.connect(db_path)
     try:
         colnames, rows = run_sql(conn, sql_query)
-        required_cols = ["recording_date", "case_no", "camera_name", "value"]
+        required_cols = ["recording_date", "case_no", "camera_name", "size_mb"]
         if not rows or not all(col in colnames for col in required_cols):
             return []
 
@@ -125,9 +127,17 @@ def get_paths(sql_query: str,
             recording_date = row_map["recording_date"]
             case_no = row_map["case_no"]
             camera_name = row_map["camera_name"]
-            value = row_map["value"]
+            size_mb_db = row_map["size_mb"]
 
-            if int(value or 0) != status_value:
+            # Derive status from size_mb
+            if size_mb_db is None:
+                derived_status = 3  # Missing
+            elif size_mb_db >= threshold_mb:
+                derived_status = 1  # >=200MB
+            else:
+                derived_status = 2  # <200MB
+
+            if derived_status != status_value:
                 continue
 
             if only_cameras and camera_name not in only_cameras:
@@ -186,7 +196,7 @@ def main():
             print("[INFO] Query returned no rows.")
             return
 
-        required_cols = ["recording_date", "case_no", "camera_name", "value"]
+        required_cols = ["recording_date", "case_no", "camera_name", "size_mb"]
         missing_cols = [col for col in required_cols if col not in colnames]
         if missing_cols:
             raise SystemExit(f"[ERROR] SQL must SELECT: {', '.join(missing_cols)}")
@@ -196,19 +206,26 @@ def main():
 
         out_rows: List[Tuple[str, int, str, str, float]] = []  # (recording_date, case_no, camera, path_str, size_mb)
 
-        # Iterate rows and emit paths for cameras whose status equals --status-value
+        # Define threshold
+        threshold_mb = 200  # Same as in update scripts
+
+        # Iterate rows and emit paths for cameras whose derived status equals --status-value
         for row in rows:
             row_map = dict(zip(colnames, row))
             recording_date = row_map["recording_date"]
             case_no = row_map["case_no"]
             camera_name = row_map["camera_name"]
-            value = row_map["value"]
+            size_mb_db = row_map["size_mb"]
 
-            try:
-                st_int = int(value) if value is not None else None
-            except (TypeError, ValueError):
-                st_int = None
-            if st_int != args.status_value:
+            # Derive status from size_mb
+            if size_mb_db is None:
+                derived_status = 3  # Missing
+            elif size_mb_db >= threshold_mb:
+                derived_status = 1  # >=200MB
+            else:
+                derived_status = 2  # <200MB
+
+            if derived_status != args.status_value:
                 continue
 
             if restrict and camera_name not in restrict:

@@ -8,8 +8,43 @@ import subprocess
 import select
 from subprocess import Popen, CREATE_NEW_CONSOLE, PIPE, STDOUT
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Iterable
+from typing import Dict, List, Optional, Tuple, Iterable, Set
 import argparse
+
+# ============================================
+# Load damaged paths from file
+# ============================================
+def load_damaged_paths() -> Set[str]:
+    """Load damaged SEQ paths from damaged_seq_path.py"""
+    try:
+        damaged_file = Path(__file__).parent / "damaged_seq_path.py"
+        if not damaged_file.exists():
+            return set()
+
+        # Import the damaged_seq_path variable
+        with open(damaged_file, 'r') as f:
+            content = f.read()
+
+        # Extract paths from the multiline string
+        import re
+        match = re.search(r'damaged_seq_path\s*=\s*"""(.+?)"""', content, re.DOTALL)
+        if not match:
+            return set()
+
+        paths_text = match.group(1)
+        # Parse paths and normalize them
+        damaged_paths = set()
+        for line in paths_text.strip().split('\n'):
+            line = line.strip()
+            if line and line.startswith('F:'):
+                # Normalize path (remove trailing slashes, convert to Path for consistency)
+                normalized = str(Path(line).resolve())
+                damaged_paths.add(normalized)
+
+        return damaged_paths
+    except Exception as e:
+        print(f"[WARN] Could not load damaged paths: {e}")
+        return set()
 
 # ============================================
 # Aggressive process killing for Windows
@@ -89,11 +124,11 @@ CLEXPORT_PATHS = [
 # ============================================
 MAX_RETRIES_MP4 = 2  # attempts for MP4
 MAX_RETRIES_AVI = 1  # attempts for AVI fallback
-BASE_TIMEOUT_SECS = 30  # base timeout for small files
-TIMEOUT_PER_GB = 20  # additional seconds per GB of file size
-MIN_TIMEOUT_SECS = 15  # minimum timeout regardless of file size
-MAX_TIMEOUT_SECS = 300  # maximum timeout (5 minutes) for huge files
-SILENT_TIMEOUT_SECS = 30  # kill if no output/progress for this long
+BASE_TIMEOUT_SECS = 60  # base timeout for small files (increased from 30)
+TIMEOUT_PER_GB = 120  # additional seconds per GB of file size (2 min per GB - increased from 60)
+MIN_TIMEOUT_SECS = 30  # minimum timeout regardless of file size (increased from 15)
+MAX_TIMEOUT_SECS = 900  # maximum timeout (15 minutes) for huge files (increased from 600)
+SILENT_TIMEOUT_SECS = 300  # kill if no output/progress for this long (5 minutes - CLExport doesn't output while encoding)
 KILL_AFTER_ERROR_LINES = 6  # slightly more tolerant
 SUPPRESS_CLEXPORT_OUTPUT = True  # keep console clean
 MIN_VALID_FILE_SIZE_MB = 1.0  # Minimum size for valid MP4/AVI file
@@ -480,24 +515,57 @@ def query_channel_dirs_from_db(db_path: str,
                                cameras: List[str],
                                only_value: int = 1,
                                debug: bool = False,
-                               include_all: bool = False) -> List[str]:
+                               include_all: bool = False,
+                               threshold_mb: int = 200) -> List[str]:
     """
-    Reads rows from `table` (expects normalized structure: recording_date, case_no, camera_name, value),
+    Reads rows from `table` (expects normalized structure: recording_date, case_no, camera_name, size_mb),
     returns a list of relative channel dirs like 'DATA_22-12-04\\Case1\\General_3'
-    for all cameras where value == only_value, or all cameras if include_all=True.
+    for all cameras where derived status == only_value, or all cameras if include_all=True.
+    Status is derived from size_mb: 1=>=threshold_mb, 2=<threshold_mb, 3=NULL
     """
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
 
-    # Build query for normalized structure
+    # Build query for normalized structure - derive status from size_mb
     if include_all:
-        query = f"SELECT recording_date, case_no, camera_name FROM {table}"
+        query = f"SELECT recording_date, case_no, camera_name, size_mb FROM {table}"
         rows = cur.execute(query).fetchall()
+        # Filter by derived status
+        filtered_rows = []
+        for row in rows:
+            if only_value == 3 and row[3] is None:
+                filtered_rows.append(row[:3])
+            elif only_value == 1 and row[3] is not None and row[3] >= threshold_mb:
+                filtered_rows.append(row[:3])
+            elif only_value == 2 and row[3] is not None and row[3] < threshold_mb:
+                filtered_rows.append(row[:3])
+            else:
+                # include_all is True, so add all
+                filtered_rows.append(row[:3])
+        rows = filtered_rows
     else:
-        query = f"SELECT recording_date, case_no, camera_name FROM {table} WHERE value = ?"
-        rows = cur.execute(query, (only_value,)).fetchall()
+        # Filter by derived status in SQL
+        if only_value == 3:
+            query = f"SELECT recording_date, case_no, camera_name FROM {table} WHERE size_mb IS NULL"
+        elif only_value == 1:
+            query = f"SELECT recording_date, case_no, camera_name FROM {table} WHERE size_mb >= ?"
+            rows = cur.execute(query, (threshold_mb,)).fetchall()
+            conn.close()
+            return dedupe_preserve_order(_process_rows_to_dirs(rows, cameras, debug))
+        elif only_value == 2:
+            query = f"SELECT recording_date, case_no, camera_name FROM {table} WHERE size_mb < ?"
+            rows = cur.execute(query, (threshold_mb,)).fetchall()
+            conn.close()
+            return dedupe_preserve_order(_process_rows_to_dirs(rows, cameras, debug))
+        else:
+            query = f"SELECT recording_date, case_no, camera_name FROM {table}"
+        rows = cur.execute(query).fetchall()
     conn.close()
+    return dedupe_preserve_order(_process_rows_to_dirs(rows, cameras, debug))
 
+
+def _process_rows_to_dirs(rows: List[tuple], cameras: List[str], debug: bool) -> List[str]:
+    """Helper to convert database rows to relative directory paths."""
     all_rel_dirs: List[str] = []
     for row in rows:
         recording_date, case_no, camera_name = row
@@ -520,7 +588,141 @@ def query_channel_dirs_from_db(db_path: str,
         # build relative dirs
         all_rel_dirs.append(f"{data_folder}\\{case_folder}\\{camera_name}")
 
-    return dedupe_preserve_order(all_rel_dirs)
+    return all_rel_dirs
+
+
+# =========================
+# Convenience function for single file export
+# =========================
+def export_single_seq_file(seq_file_path: str,
+                           out_root: str,
+                           simulate: bool = False,
+                           debug: bool = False,
+                           skip_existing: bool = True,
+                           clean_invalid: bool = True,
+                           fallback_avi: bool = False) -> Tuple[bool, str]:
+    r"""
+    Export a single SEQ file to MP4/AVI format.
+
+    Args:
+        seq_file_path: Path to the .seq file to export
+        out_root: Root directory for output files
+        simulate: If True, don't actually export (dry run)
+        debug: Enable debug output
+        skip_existing: Skip if valid MP4/AVI already exists
+        clean_invalid: Remove invalid/incomplete exports before starting
+        fallback_avi: Try AVI if MP4 fails
+
+    Returns:
+        Tuple of (success: bool, message: str)
+
+    Example:
+        success, msg = export_single_seq_file(
+            r"F:\Room_8_Data\Sequence_Backup\DATA_22-12-04\Case1\General_3\file.seq",
+            r"F:\Room_8_Data\Recordings"
+        )
+    """
+    try:
+        seq_path = Path(seq_file_path).resolve()
+
+        if not seq_path.exists():
+            return False, f"File not found: {seq_path}"
+
+        if seq_path.is_dir():
+            # Find first .seq in directory
+            seqs = list(seq_path.glob("*.seq"))
+            if not seqs:
+                return False, f"No .seq file found in directory: {seq_path}"
+            seq_path = seqs[0]
+
+        if seq_path.suffix.lower() != ".seq":
+            return False, f"Not a .seq file: {seq_path}"
+
+        out_root_path = Path(out_root).resolve()
+        out_root_path.mkdir(parents=True, exist_ok=True)
+
+        # Compute output directory
+        out_dir = compute_out_dir(seq_path, out_root_path)
+
+        # Get base filename
+        ch_label = resolve_channel_label(seq_path, {})
+        base_stem = ch_label
+
+        # Clean invalid files if requested
+        if clean_invalid:
+            clean_invalid_exports(out_dir, base_stem, debug)
+
+        # Check if valid export already exists
+        if skip_existing:
+            existing = find_existing_export(out_dir, base_stem)
+            if existing:
+                return True, f"Valid export already exists: {existing}"
+
+        # Calculate timeout
+        dynamic_timeout = calculate_timeout(seq_path)
+
+        # Try MP4 first
+        exported_name, mp4_path = get_next_available_filename(out_dir, base_stem, ".mp4")
+
+        if debug:
+            file_size_mb = seq_path.stat().st_size / (1024 * 1024)
+            print(f"[DEBUG] Exporting {seq_path.name} ({file_size_mb:.1f}MB, timeout: {dynamic_timeout}s)")
+
+        for attempt in range(1, MAX_RETRIES_MP4 + 1):
+            exitcode, reason = export_seq_once_streaming(
+                seq_path=seq_path,
+                out_dir=out_dir,
+                exported_name=exported_name[:-4],  # Remove .mp4 extension
+                container="mp4",
+                simulate=simulate,
+                spawn_console=False,
+                timeout_secs=dynamic_timeout,
+                kill_after_error_lines=KILL_AFTER_ERROR_LINES,
+                suppress_console_output=SUPPRESS_CLEXPORT_OUTPUT,
+                debug=debug
+            )
+
+            if exitcode == 0 and is_valid_video_file(mp4_path):
+                return True, f"Export successful: {mp4_path}"
+
+            # Remove invalid file
+            if mp4_path.exists() and not is_valid_video_file(mp4_path):
+                try:
+                    mp4_path.unlink()
+                except:
+                    pass
+
+        # Try AVI fallback if enabled
+        if fallback_avi:
+            exported_name, avi_path = get_next_available_filename(out_dir, base_stem, ".avi")
+
+            for attempt in range(1, MAX_RETRIES_AVI + 1):
+                exitcode, reason = export_seq_once_streaming(
+                    seq_path=seq_path,
+                    out_dir=out_dir,
+                    exported_name=exported_name[:-4],
+                    container="avi",
+                    simulate=simulate,
+                    spawn_console=False,
+                    timeout_secs=dynamic_timeout * 2,
+                    kill_after_error_lines=KILL_AFTER_ERROR_LINES * 2,
+                    suppress_console_output=SUPPRESS_CLEXPORT_OUTPUT,
+                    debug=debug
+                )
+
+                if exitcode == 0 and is_valid_video_file(avi_path):
+                    return True, f"Export successful (AVI): {avi_path}"
+
+                if avi_path.exists() and not is_valid_video_file(avi_path):
+                    try:
+                        avi_path.unlink()
+                    except:
+                        pass
+
+        return False, f"Export failed: {reason}"
+
+    except Exception as e:
+        return False, f"Error during export: {str(e)}"
 
 
 # =========================
@@ -538,44 +740,100 @@ def run_pipeline(db_path: str,
                  skip_existing: bool,
                  clean_invalid: bool,
                  fallback_avi: bool,
-                 include_all: bool = False) -> None:
+                 include_all: bool = False,
+                 skip_damaged: bool = False,
+                 specific_files: Optional[List[str]] = None) -> None:
+    """
+    Export SEQ files to MP4/AVI format.
+
+    Args:
+        specific_files: Optional list of specific .seq file paths to export.
+                       If provided, skips database query and only processes these files.
+                       Can be absolute paths or paths relative to seq_root.
+    """
     seq_root_path = Path(seq_root).resolve()
     out_root_path = Path(out_root).resolve()
     out_root_path.mkdir(parents=True, exist_ok=True)
+
+    # Load damaged paths if skip_damaged is enabled
+    damaged_paths: Set[str] = set()
+    if skip_damaged:
+        damaged_paths = load_damaged_paths()
+        if damaged_paths:
+            print(f"[INFO] Loaded {len(damaged_paths)} damaged paths to skip")
+        else:
+            print("[WARN] skip_damaged=True but no damaged paths loaded")
 
     # Statistics
     stats = {
         'total': 0,
         'skipped_existing': 0,
+        'skipped_damaged': 0,
         'success_mp4': 0,
         'success_avi': 0,
         'failed': 0,
         'cleaned': 0
     }
 
-    # 1) Build relative channel dirs from DB rows
-    rel_dirs = query_channel_dirs_from_db(
-        db_path=db_path,
-        table=table,
-        cameras=CAMERAS,
-        only_value=only_value,
-        debug=debug,
-        include_all=include_all
-    )
+    # Determine which files to process
+    if specific_files is not None:
+        # Process specific files provided by user
+        if debug:
+            print(f"[DEBUG] Processing {len(specific_files)} specific file(s)")
 
-    if debug:
-        print(f"[DEBUG] Relative channel dirs from DB (count={len(rel_dirs)}). Example:")
-        for p in rel_dirs[:5]:
-            print("        ", p)
+        seq_files = []
+        for file_path in specific_files:
+            path_obj = Path(file_path)
+            # If relative path, resolve against seq_root
+            if not path_obj.is_absolute():
+                path_obj = seq_root_path / path_obj
 
-    # 2) Convert to absolute channel directories in SEQ tree
-    channel_dirs = [str(seq_root_path / rd) for rd in rel_dirs]
+            path_obj = path_obj.resolve()
 
-    # 3) Expand channel dirs into actual .seq files
-    seq_files = expand_seq_paths(channel_dirs, debug=debug)
+            if path_obj.exists():
+                if path_obj.is_dir():
+                    # If directory provided, find first .seq file
+                    seqs = list(path_obj.glob("*.seq"))
+                    if seqs:
+                        seq_files.append(seqs[0])
+                    elif debug:
+                        print(f"[WARN] No .seq file in directory: {path_obj}")
+                elif path_obj.suffix.lower() == ".seq":
+                    seq_files.append(path_obj)
+                else:
+                    if debug:
+                        print(f"[WARN] Not a .seq file: {path_obj}")
+            else:
+                if debug:
+                    print(f"[WARN] File not found: {path_obj}")
 
-    if debug:
-        print(f"[DEBUG] Discovered .seq files to process: {len(seq_files)}")
+        if debug:
+            print(f"[DEBUG] Found {len(seq_files)} valid .seq file(s) to process")
+    else:
+        # Original behavior: query database for files to process
+        # 1) Build relative channel dirs from DB rows
+        rel_dirs = query_channel_dirs_from_db(
+            db_path=db_path,
+            table=table,
+            cameras=CAMERAS,
+            only_value=only_value,
+            debug=debug,
+            include_all=include_all
+        )
+
+        if debug:
+            print(f"[DEBUG] Relative channel dirs from DB (count={len(rel_dirs)}). Example:")
+            for p in rel_dirs[:5]:
+                print("        ", p)
+
+        # 2) Convert to absolute channel directories in SEQ tree
+        channel_dirs = [str(seq_root_path / rd) for rd in rel_dirs]
+
+        # 3) Expand channel dirs into actual .seq files
+        seq_files = expand_seq_paths(channel_dirs, debug=debug)
+
+        if debug:
+            print(f"[DEBUG] Discovered .seq files to process: {len(seq_files)}")
 
     # 4) Export loop with improved handling
     log_path = out_root_path / "export_log.txt"
@@ -592,6 +850,21 @@ def run_pipeline(db_path: str,
                 seq_path = seq_path.resolve()
                 if debug:
                     print(f"\n[{idx}/{total}] START {seq_path}")
+
+                # Check if this path should be skipped (damaged)
+                if skip_damaged:
+                    seq_parent = str(seq_path.parent.resolve())
+                    if seq_parent in damaged_paths:
+                        status = "SKIPPED_DAMAGED"
+                        reason = f"Path is in damaged list"
+                        stats['skipped_damaged'] += 1
+
+                        if debug:
+                            print(f"[{idx}/{total}] {status}: {reason}")
+
+                        log_file.write(f"{seq_path} -> None: {status} | {reason}\n")
+                        log_file.flush()
+                        continue
 
                 # Decide destination dir robustly (creates it if needed)
                 out_dir = compute_out_dir(seq_path, out_root_path)
@@ -754,6 +1027,8 @@ def run_pipeline(db_path: str,
     print("=" * 60)
     print(f"Total files:       {stats['total']}")
     print(f"Skipped existing:  {stats['skipped_existing']}")
+    if skip_damaged:
+        print(f"Skipped damaged:   {stats['skipped_damaged']}")
     print(f"Success (MP4):     {stats['success_mp4']}")
     print(f"Success (AVI):     {stats['success_avi']}")
     print(f"Failed:            {stats['failed']}")
@@ -771,6 +1046,74 @@ if __name__ == "__main__":
     OUT_ROOT = r"F:\Room_8_Data\Recordings"
     TABLE = "seq_status"
 
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description="Export SEQ files to MP4/AVI format",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Export all files from database (default behavior):
+  python seq_exporter.py
+
+  # Export a specific file:
+  python seq_exporter.py --file "F:\\path\\to\\file.seq"
+
+  # Export multiple specific files:
+  python seq_exporter.py --file "file1.seq" --file "file2.seq" --file "file3.seq"
+
+  # Quick single file export:
+  python seq_exporter.py --single "F:\\path\\to\\file.seq"
+        """
+    )
+
+    parser.add_argument(
+        '--file', '-f',
+        action='append',
+        dest='specific_files',
+        metavar='PATH',
+        help='Export a specific .seq file (can be used multiple times). Skips database query.'
+    )
+
+    parser.add_argument(
+        '--single', '-s',
+        metavar='PATH',
+        help='Quick single file export using export_single_seq_file() (simpler, faster)'
+    )
+
+    parser.add_argument(
+        '--debug', '-d',
+        action='store_true',
+        help='Enable debug output'
+    )
+
+    parser.add_argument(
+        '--simulate',
+        action='store_true',
+        help='Dry run - don\'t actually export files'
+    )
+
+    args = parser.parse_args()
+
+    # Handle single file quick export
+    if args.single:
+        print(f"[INFO] Quick export mode: {args.single}")
+        success, message = export_single_seq_file(
+            seq_file_path=args.single,
+            out_root=OUT_ROOT,
+            simulate=args.simulate,
+            debug=args.debug,
+            skip_existing=True,
+            clean_invalid=True,
+            fallback_avi=False
+        )
+        if success:
+            print(f"[SUCCESS] {message}")
+            sys.exit(0)
+        else:
+            print(f"[FAILED] {message}")
+            sys.exit(1)
+
+    # Handle pipeline mode (original behavior or with specific files)
     run_pipeline(
         db_path=DB_PATH,
         table=TABLE,
@@ -778,12 +1121,14 @@ if __name__ == "__main__":
         out_root=OUT_ROOT,
         channel_names={},  # add mapping if you want different names
         only_value=1,  # which DB flag to export (ignored when include_all=True)
-        simulate=False,  # True = no export, just print
-        debug=True,  # print extra info
+        simulate=args.simulate,
+        debug=args.debug,
         spawn_console=False,  # True = open a window per export
         skip_existing=True,  # skip files already exported
         clean_invalid=True,  # remove partial files first
         fallback_avi=False,  # try AVI if MP4 fails
-        include_all=True  # process all seq files in database, not just status=1
+        include_all=True if not args.specific_files else False,  # process all if no specific files
+        skip_damaged=True,  # skip paths listed in damaged_seq_path.py
+        specific_files=args.specific_files  # None = query DB, List = specific files
     )
 
