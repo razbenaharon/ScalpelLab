@@ -86,8 +86,6 @@ def ensure_table_exists(conn: sqlite3.Connection, table: str) -> None:
             recording_date TEXT NOT NULL,
             case_no INTEGER NOT NULL,
             camera_name TEXT NOT NULL,
-            value INTEGER,
-            comments TEXT,
             size_mb INTEGER,
             PRIMARY KEY (recording_date, case_no, camera_name)
         );
@@ -95,12 +93,12 @@ def ensure_table_exists(conn: sqlite3.Connection, table: str) -> None:
     conn.commit()
 
 def get_existing_data(conn: sqlite3.Connection, table: str, recording_date: str, case_no: int) -> dict:
-    """Get existing status values for a case, return dict {camera_name: (value, size_mb)}."""
+    """Get existing size_mb values for a case, return dict {camera_name: size_mb}."""
     cur = conn.cursor()
     try:
-        cur.execute(f'SELECT camera_name, value, size_mb FROM "{table}" WHERE recording_date = ? AND case_no = ?', (recording_date, case_no))
+        cur.execute(f'SELECT camera_name, size_mb FROM "{table}" WHERE recording_date = ? AND case_no = ?', (recording_date, case_no))
         rows = cur.fetchall()
-        return {row[0]: (row[1], row[2]) for row in rows}
+        return {row[0]: row[1] for row in rows}
     except sqlite3.OperationalError:
         return {}
 
@@ -159,14 +157,14 @@ def delete_small_mp4s(root: Path, threshold_mb: int) -> tuple[int, float]:
 
     return deleted_count, total_size_mb
 
-def upsert_camera_data(conn: sqlite3.Connection, table: str, recording_date: str, case_no: int, camera_name: str, value: int, size_mb: int | None) -> None:
+def upsert_camera_data(conn: sqlite3.Connection, table: str, recording_date: str, case_no: int, camera_name: str, size_mb: int | None) -> None:
     """Insert or update a single camera's data."""
     cur = conn.cursor()
     cur.execute(f'''
         INSERT OR REPLACE INTO "{table}"
-        (recording_date, case_no, camera_name, value, size_mb)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (recording_date, case_no, camera_name, value, size_mb))
+        (recording_date, case_no, camera_name, size_mb)
+        VALUES (?, ?, ?, ?)
+    ''', (recording_date, case_no, camera_name, size_mb))
 
 def main():
     ap = argparse.ArgumentParser(description="Update mp4_status (1/2/3) based on mp4 sizes per camera.")
@@ -248,9 +246,9 @@ def main():
                 if camera_name not in existing:
                     new_cameras.append((recording_date, case_no, camera_name, new_status, new_size))
                 else:
-                    old_status, old_size = existing[camera_name]
-                    if old_status != new_status or old_size != new_size:
-                        changes.append((recording_date, case_no, camera_name, old_status, old_size, new_status, new_size))
+                    old_size = existing[camera_name]
+                    if old_size != new_size:
+                        changes.append((recording_date, case_no, camera_name, new_status, old_size, new_size))
 
         # Show what will be changed
         if new_cameras:
@@ -260,10 +258,11 @@ def main():
 
         if changes:
             print(f"\n[CHANGES] {len(changes)} existing camera entries will be updated:")
-            for recording_date, case_no, camera_name, old_status, old_size, new_status, new_size in changes:
+            for recording_date, case_no, camera_name, new_status, old_size, new_size in changes:
                 old_size_str = str(old_size) if old_size is not None else "NULL"
                 new_size_str = str(new_size) if new_size is not None else "NULL"
-                print(f"  {recording_date} Case {case_no} {camera_name}: status {old_status}->{new_status}, size {old_size_str}->{new_size_str}MB")
+                status_label = {1: ">=200MB", 2: "<200MB", 3: "Missing"}.get(new_status, str(new_status))
+                print(f"  {recording_date} Case {case_no} {camera_name}: {status_label}, size {old_size_str}->{new_size_str}MB")
 
         if not new_cameras and not changes:
             print("\n[INFO] No changes detected. Database is already up to date.")
@@ -279,7 +278,7 @@ def main():
 
         # Write to DB
         for (recording_date, case_no, camera_name), (status, size_mb) in updates.items():
-            upsert_camera_data(conn, args.table, recording_date, case_no, camera_name, status, size_mb)
+            upsert_camera_data(conn, args.table, recording_date, case_no, camera_name, size_mb)
         conn.commit()
         print(f"[OK] Updated '{args.table}' with {len(new_cameras) + len(changes)} camera entries (threshold {args.threshold_mb} MB).")
     finally:

@@ -30,20 +30,28 @@ CAMERAS = [
 LABELS_MP4 = {1: ">=200MB", 2: "<200MB", 3: "Missing"}
 LABELS_SEQ = {1: ">200MB",  2: "<200MB", 3: "Missing", 4: "FORMAT PROBLEM"}
 
-def fetch_camera_stats(conn: sqlite3.Connection, table: str, cameras: list[str]) -> tuple[int, dict]:
+def fetch_camera_stats(conn: sqlite3.Connection, table: str, cameras: list[str], threshold_mb: int = 200) -> tuple[int, dict]:
+    """
+    Fetch camera statistics by deriving status from size_mb:
+    - 1 (>=200MB) if size_mb >= threshold_mb
+    - 2 (<200MB) if size_mb < threshold_mb
+    - 3 (Missing) if size_mb is NULL
+    """
     cur = conn.cursor()
     cur.execute(f"SELECT COUNT(*) FROM {table}")
     total_rows = cur.fetchone()[0]
 
     camera_stats = {cam: Counter() for cam in cameras}
-    cur.execute(f"SELECT camera_name, value FROM {table}")
-    for camera_name, value in cur.fetchall():
-        if camera_name in cameras and value is not None:
-            try:
-                camera_stats[camera_name][int(value)] += 1
-            except (TypeError, ValueError):
-                # if some stray non-integer sneaks in
-                pass
+    cur.execute(f"SELECT camera_name, size_mb FROM {table}")
+    for camera_name, size_mb in cur.fetchall():
+        if camera_name in cameras:
+            if size_mb is None:
+                status = 3  # Missing
+            elif size_mb >= threshold_mb:
+                status = 1  # >=200MB
+            else:
+                status = 2  # <200MB
+            camera_stats[camera_name][status] += 1
 
     return total_rows, camera_stats
 
