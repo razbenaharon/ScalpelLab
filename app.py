@@ -23,6 +23,7 @@ st.markdown("""
 - **✏️ Edit**: Add, modify, and manage database records through interactive forms
 - **📊 Status Summary**: View MP4/SEQ processing statistics, camera distributions, and visual charts
 - **👁️ Views**: Access and query database views for specialized data perspectives
+- **📤 Export Files**: View all SEQ files and export them to MP4 format with one-click conversion
 
 Navigate using the sidebar to access different features and tools.
 """)
