@@ -12,12 +12,11 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from utils import connect, load_table
 
-# Add scripts dir for ffmpeg_exporter
+# Add scripts dir
 scripts_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts")
 sys.path.append(scripts_dir)
 
 from ffmpeg_exporter import (
-    find_ffmpeg,
     compute_out_dir,
     resolve_channel_label,
     find_existing_export,
@@ -25,7 +24,7 @@ from ffmpeg_exporter import (
     is_valid_video_file
 )
 
-st.header("📤 Export Files (FFmpeg)")
+st.header("📤 Export CLE (CLExport)")
 
 db_path = st.session_state.get("db_path")
 if not db_path:
@@ -35,6 +34,13 @@ if not db_path:
 # Configuration
 SEQ_ROOT = r"F:\Room_8_Data\Sequence_Backup"
 OUT_ROOT = r"F:\Room_8_Data\Recordings"
+
+# CLExport possible locations
+CLEXPORT_PATHS = [
+    r"C:\Program Files\NorPix\BatchProcessor\CLExport.exe",
+    r"C:\Program Files (x86)\NorPix\BatchProcessor\CLExport.exe",
+    r"C:\NorPix\BatchProcessor\CLExport.exe",
+]
 
 DEFAULT_CAMERAS = [
     "Cart_Center_2", "Cart_LT_4", "Cart_RT_1",
@@ -49,12 +55,24 @@ with st.sidebar:
     show_all = st.checkbox("Show all files", value=False, help="Show all files, not just exportable ones")
     auto_skip_existing = st.checkbox("Skip existing MP4s", value=True, help="Don't convert if MP4 already exists")
 
+    st.markdown("### CLExport Settings")
+    output_format = st.selectbox("Output Format", ["mp4", "avi"], help="Video container format")
+    codec = st.selectbox("Codec", ["mp4", "mjpeg"], help="Video codec (mp4 for H.264, mjpeg for Motion JPEG)")
+
+
+def find_clexport() -> str:
+    """Find CLExport.exe in common locations."""
+    for path in CLEXPORT_PATHS:
+        if os.path.exists(path):
+            return path
+    return None
+
+
 # Query to get all seq files with their mp4 status
 def fetch_export_data(db_path: str, cameras: list, threshold_mb: int = 200):
     """
     Fetch all seq files and their mp4 status.
     Returns a DataFrame with columns: recording_date, case_no, camera_name, seq_status, mp4_status, seq_size_mb, mp4_size_mb
-    Status is derived from size_mb: 1=>=threshold_mb, 2=<threshold_mb, 3=NULL
     """
     with connect(db_path) as conn:
         query = """
@@ -83,20 +101,20 @@ def fetch_export_data(db_path: str, cameras: list, threshold_mb: int = 200):
         ORDER BY s.recording_date DESC, s.case_no, s.camera_name
         """.format(','.join(['?'] * len(cameras)))
 
-        # First two params are threshold_mb for both CASE statements, rest are cameras
         params = [threshold_mb, threshold_mb] + cameras
         df = pd.read_sql_query(query, conn, params=params)
     return df
 
-# Status labels
+
 SEQ_LABELS = {1: ">200MB", 2: "<200MB", 3: "Missing", 4: "FORMAT PROBLEM"}
 MP4_LABELS = {1: ">=200MB", 2: "<200MB", 3: "Missing"}
+
 
 @st.cache_data
 def load_export_data(db_path: str, cameras: list, show_all: bool):
     df = fetch_export_data(db_path, cameras)
 
-    # Filter to only exportable files (seq_status 1 or 2) unless show_all
+    # Filter to only exportable files
     if not show_all:
         df = df[df['seq_status'].isin([1, 2])]
 
@@ -109,10 +127,9 @@ def load_export_data(db_path: str, cameras: list, show_all: bool):
 
     return df
 
-# Build SEQ path from database info
+
 def build_seq_path(recording_date: str, case_no: int, camera_name: str) -> Path:
     """Build the path to the .seq file based on database info."""
-    # recording_date: 'YYYY-MM-DD' -> 'DATA_YY-MM-DD'
     yy = recording_date[2:4]
     mm = recording_date[5:7]
     dd = recording_date[8:10]
@@ -125,37 +142,44 @@ def build_seq_path(recording_date: str, case_no: int, camera_name: str) -> Path:
     seq_files = list(seq_path.glob("*.seq"))
     if seq_files:
         return seq_files[0]
-    return seq_path  # Return directory if no .seq found
+    return seq_path
 
 
-# Export with real-time output capture
-def export_with_output(seq_path: Path, out_path: Path, output_queue: queue.Queue, stop_flag: threading.Event):
+# Export with real-time output capture using CLExport
+def export_with_clexport(seq_path: Path, out_path: Path, container: str, codec: str,
+                         output_queue: queue.Queue, stop_flag: threading.Event):
     """
-    Export SEQ file to MP4 using FFmpeg with real-time output capture.
+    Export SEQ file to MP4/AVI using CLExport with real-time output capture.
     Returns (exitcode, message).
     """
     try:
-        ffmpeg_path = find_ffmpeg()
-        if not ffmpeg_path:
-            output_queue.put(("ERROR", "ffmpeg.exe not found\n"))
-            return 1, "ffmpeg.exe not found"
+        clexport_path = find_clexport()
+        if not clexport_path:
+            output_queue.put(("ERROR", "CLExport.exe not found\n"))
+            return 1, "CLExport.exe not found"
 
-        # Build FFmpeg command
+        # Adjust output path based on container
+        if container == "avi":
+            out_path = out_path.with_suffix(".avi")
+        else:
+            out_path = out_path.with_suffix(".mp4")
+
+        # Build CLExport command
+        # Note: CLExport parameters: -i input, -o output_dir, -of output_filename, -f format
+        out_dir = out_path.parent
+        out_filename = out_path.stem  # CLExport adds extension automatically
+
         cmd = [
-            ffmpeg_path,
-            "-y",  # Overwrite output file without asking
-            "-r", "30",
+            clexport_path,
             "-i", str(seq_path),
-            "-c:v", "libx264",
-            "-preset", "medium",
-            "-crf", "23",
-            "-pix_fmt", "yuv420p",
-            str(out_path)
+            "-o", str(out_dir),
+            "-of", out_filename,
+            "-f", codec  # mp4 or mjpeg
         ]
 
         output_queue.put(("INFO", f"Running: {' '.join(cmd)}\n\n"))
 
-        # Start FFmpeg process
+        # Start CLExport process
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -190,8 +214,8 @@ def export_with_output(seq_path: Path, out_path: Path, output_queue: queue.Queue
             output_queue.put(("SUCCESS", f"\n[SUCCESS] Export completed: {out_path.name}\n"))
             return 0, "Export successful"
         else:
-            output_queue.put(("ERROR", f"\n[ERROR] FFmpeg failed with exit code {return_code}\n"))
-            return return_code or 1, f"FFmpeg failed with exit code {return_code}"
+            output_queue.put(("ERROR", f"\n[ERROR] CLExport failed with exit code {return_code}\n"))
+            return return_code or 1, f"CLExport failed with exit code {return_code}"
 
     except Exception as e:
         output_queue.put(("ERROR", f"\n[EXCEPTION] {str(e)}\n"))
@@ -224,6 +248,17 @@ with col4:
 
 st.divider()
 
+# Check CLExport availability
+clexport_path = find_clexport()
+if clexport_path:
+    st.success(f"✅ CLExport found: `{clexport_path}`")
+else:
+    st.error("❌ CLExport.exe not found. Please install NorPix BatchProcessor.")
+    st.info(f"Searched in:\n" + "\n".join([f"- {p}" for p in CLEXPORT_PATHS]))
+    st.stop()
+
+st.divider()
+
 # Search/filter
 search_term = st.text_input("🔍 Search by date, case, or camera", placeholder="e.g., 2022-12-04, Case1, Monitor")
 
@@ -242,39 +277,39 @@ st.divider()
 st.markdown("### 📦 Multi-File Export")
 
 # Initialize session state for selected files
-if 'selected_files' not in st.session_state:
-    st.session_state.selected_files = set()
-if 'export_queue' not in st.session_state:
-    st.session_state.export_queue = []
-if 'is_exporting' not in st.session_state:
-    st.session_state.is_exporting = False
-if 'stop_export' not in st.session_state:
-    st.session_state.stop_export = False
-if 'current_output' not in st.session_state:
-    st.session_state.current_output = []
+if 'cle_selected_files' not in st.session_state:
+    st.session_state.cle_selected_files = set()
+if 'cle_export_queue' not in st.session_state:
+    st.session_state.cle_export_queue = []
+if 'cle_is_exporting' not in st.session_state:
+    st.session_state.cle_is_exporting = False
+if 'cle_stop_export' not in st.session_state:
+    st.session_state.cle_stop_export = False
+if 'cle_current_output' not in st.session_state:
+    st.session_state.cle_current_output = []
 
 # Selection controls
 col1, col2, col3 = st.columns([2, 1, 1])
 with col1:
     select_mode = st.radio("Selection", ["Select All Missing", "Select All", "Manual"], horizontal=True)
 with col2:
-    if st.button("Clear Selection", use_container_width=True):
-        st.session_state.selected_files = set()
+    if st.button("Clear Selection", use_container_width=True, key="cle_clear"):
+        st.session_state.cle_selected_files = set()
         st.rerun()
 with col3:
-    selected_count = len(st.session_state.selected_files)
+    selected_count = len(st.session_state.cle_selected_files)
     st.metric("Selected", selected_count)
 
 # Auto-select based on mode
 if select_mode == "Select All Missing":
     missing_files = df[~df['has_mp4']].index.tolist()
-    if st.button("Apply Selection", use_container_width=True):
-        st.session_state.selected_files = set(missing_files)
+    if st.button("Apply Selection", use_container_width=True, key="cle_apply_missing"):
+        st.session_state.cle_selected_files = set(missing_files)
         st.rerun()
 elif select_mode == "Select All":
     all_files = df.index.tolist()
-    if st.button("Apply Selection", use_container_width=True):
-        st.session_state.selected_files = set(all_files)
+    if st.button("Apply Selection", use_container_width=True, key="cle_apply_all"):
+        st.session_state.cle_selected_files = set(all_files)
         st.rerun()
 
 st.divider()
@@ -288,11 +323,11 @@ for idx, row in df.iterrows():
 
         with col1:
             # Checkbox for selection
-            is_selected = idx in st.session_state.selected_files
-            if st.checkbox("", value=is_selected, key=f"check_{idx}", label_visibility="collapsed"):
-                st.session_state.selected_files.add(idx)
+            is_selected = idx in st.session_state.cle_selected_files
+            if st.checkbox("", value=is_selected, key=f"cle_check_{idx}", label_visibility="collapsed"):
+                st.session_state.cle_selected_files.add(idx)
             else:
-                st.session_state.selected_files.discard(idx)
+                st.session_state.cle_selected_files.discard(idx)
 
         with col2:
             st.markdown(f"**{row['recording_date']}** Case {row['case_no']}")
@@ -328,45 +363,45 @@ st.markdown("### 🎬 Export Control")
 col1, col2, col3 = st.columns([2, 1, 1])
 
 with col1:
-    if not st.session_state.is_exporting:
+    if not st.session_state.cle_is_exporting:
         if st.button("🚀 Export Selected Files", type="primary", use_container_width=True,
-                     disabled=len(st.session_state.selected_files) == 0):
+                     disabled=len(st.session_state.cle_selected_files) == 0, key="cle_export"):
             # Build export queue
-            st.session_state.export_queue = []
-            for idx in st.session_state.selected_files:
+            st.session_state.cle_export_queue = []
+            for idx in st.session_state.cle_selected_files:
                 row = df.loc[idx]
-                st.session_state.export_queue.append({
+                st.session_state.cle_export_queue.append({
                     'recording_date': row['recording_date'],
                     'case_no': row['case_no'],
                     'camera_name': row['camera_name'],
                     'idx': idx
                 })
-            st.session_state.is_exporting = True
-            st.session_state.stop_export = False
-            st.session_state.current_output = []
+            st.session_state.cle_is_exporting = True
+            st.session_state.cle_stop_export = False
+            st.session_state.cle_current_output = []
             st.rerun()
     else:
-        st.info(f"⏳ Exporting... ({len(st.session_state.export_queue)} remaining)")
+        st.info(f"⏳ Exporting... ({len(st.session_state.cle_export_queue)} remaining)")
 
 with col2:
-    if st.session_state.is_exporting:
-        if st.button("⏹️ Stop Export", type="secondary", use_container_width=True):
-            st.session_state.stop_export = True
+    if st.session_state.cle_is_exporting:
+        if st.button("⏹️ Stop Export", type="secondary", use_container_width=True, key="cle_stop"):
+            st.session_state.cle_stop_export = True
             st.rerun()
 
 with col3:
-    if st.button("🔄 Refresh", use_container_width=True):
+    if st.button("🔄 Refresh", use_container_width=True, key="cle_refresh"):
         load_export_data.clear()
         st.rerun()
 
 # Export progress section
-if st.session_state.is_exporting and st.session_state.export_queue:
+if st.session_state.cle_is_exporting and st.session_state.cle_export_queue:
     st.markdown("---")
     st.markdown("### 📊 Export Progress")
 
-    current_file = st.session_state.export_queue[0]
-    total_files = len(st.session_state.selected_files)
-    completed_files = total_files - len(st.session_state.export_queue)
+    current_file = st.session_state.cle_export_queue[0]
+    total_files = len(st.session_state.cle_selected_files)
+    completed_files = total_files - len(st.session_state.cle_export_queue)
 
     # Progress bar
     progress = completed_files / total_files
@@ -374,9 +409,10 @@ if st.session_state.is_exporting and st.session_state.export_queue:
 
     # Current file info
     st.markdown(f"**Current:** {current_file['recording_date']} Case {current_file['case_no']} - {current_file['camera_name']}")
+    st.caption(f"Format: {output_format.upper()} | Codec: {codec}")
 
-    # FFmpeg output window
-    output_container = st.expander("📺 FFmpeg Output", expanded=True)
+    # CLExport output window
+    output_container = st.expander("📺 CLExport Output", expanded=True)
     output_placeholder = output_container.empty()
 
     # Export current file
@@ -384,9 +420,9 @@ if st.session_state.is_exporting and st.session_state.export_queue:
 
     if not seq_path.exists() or seq_path.is_dir():
         st.error(f"❌ File not found: {seq_path}")
-        st.session_state.export_queue.pop(0)
-        if not st.session_state.export_queue:
-            st.session_state.is_exporting = False
+        st.session_state.cle_export_queue.pop(0)
+        if not st.session_state.cle_export_queue:
+            st.session_state.cle_is_exporting = False
         st.rerun()
 
     # Compute output path
@@ -394,15 +430,18 @@ if st.session_state.is_exporting and st.session_state.export_queue:
     out_root_path = Path(OUT_ROOT).resolve()
     out_dir = compute_out_dir(seq_path, out_root_path)
     ch_label = resolve_channel_label(seq_path, {})
-    exported_name, mp4_path = get_next_available_filename(out_dir, ch_label, ".mp4")
+
+    # Get output extension based on format
+    extension = f".{output_format}"
+    exported_name, output_file = get_next_available_filename(out_dir, ch_label, extension)
 
     # Check if already exists
-    if auto_skip_existing and is_valid_video_file(mp4_path):
-        st.info(f"⏭️ Skipped (already exists): {mp4_path.name}")
-        st.session_state.export_queue.pop(0)
+    if auto_skip_existing and is_valid_video_file(output_file):
+        st.info(f"⏭️ Skipped (already exists): {output_file.name}")
+        st.session_state.cle_export_queue.pop(0)
         time.sleep(1)
-        if not st.session_state.export_queue:
-            st.session_state.is_exporting = False
+        if not st.session_state.cle_export_queue:
+            st.session_state.cle_is_exporting = False
             st.success(f"✅ All exports complete!")
         st.rerun()
 
@@ -410,18 +449,18 @@ if st.session_state.is_exporting and st.session_state.export_queue:
     output_queue = queue.Queue()
     stop_flag = threading.Event()
 
-    if st.session_state.stop_export:
+    if st.session_state.cle_stop_export:
         stop_flag.set()
 
     # Run export in thread
     export_thread = threading.Thread(
-        target=export_with_output,
-        args=(seq_path, mp4_path, output_queue, stop_flag)
+        target=export_with_clexport,
+        args=(seq_path, output_file, output_format, codec, output_queue, stop_flag)
     )
     export_thread.start()
 
     # Monitor output
-    output_lines = list(st.session_state.current_output)
+    output_lines = list(st.session_state.cle_current_output)
     max_lines = 50  # Keep last 50 lines
 
     while export_thread.is_alive() or not output_queue.empty():
@@ -437,7 +476,7 @@ if st.session_state.is_exporting and st.session_state.export_queue:
             output_text = ''.join(output_lines)
             output_placeholder.code(output_text, language=None)
 
-            st.session_state.current_output = output_lines
+            st.session_state.cle_current_output = output_lines
 
         except queue.Empty:
             time.sleep(0.1)
@@ -447,28 +486,28 @@ if st.session_state.is_exporting and st.session_state.export_queue:
     # Check result
     if stop_flag.is_set():
         # Delete partial file
-        if mp4_path.exists():
+        if output_file.exists():
             try:
-                mp4_path.unlink()
-                st.warning(f"🗑️ Deleted partial file: {mp4_path.name}")
+                output_file.unlink()
+                st.warning(f"🗑️ Deleted partial file: {output_file.name}")
             except:
-                st.error(f"⚠️ Could not delete partial file: {mp4_path.name}")
+                st.error(f"⚠️ Could not delete partial file: {output_file.name}")
 
-        st.session_state.export_queue.clear()
-        st.session_state.is_exporting = False
-        st.session_state.current_output = []
+        st.session_state.cle_export_queue.clear()
+        st.session_state.cle_is_exporting = False
+        st.session_state.cle_current_output = []
         st.error("❌ Export stopped by user")
         time.sleep(2)
         st.rerun()
     else:
         # Check if successful
-        if is_valid_video_file(mp4_path):
-            st.success(f"✅ Exported: {mp4_path.name}")
-            st.session_state.export_queue.pop(0)
-            st.session_state.current_output = []
+        if is_valid_video_file(output_file):
+            st.success(f"✅ Exported: {output_file.name}")
+            st.session_state.cle_export_queue.pop(0)
+            st.session_state.cle_current_output = []
 
-            if not st.session_state.export_queue:
-                st.session_state.is_exporting = False
+            if not st.session_state.cle_export_queue:
+                st.session_state.cle_is_exporting = False
                 st.success(f"🎉 All {completed_files + 1} files exported successfully!")
                 time.sleep(2)
                 load_export_data.clear()
@@ -476,18 +515,18 @@ if st.session_state.is_exporting and st.session_state.export_queue:
             st.rerun()
         else:
             # Failed - clean up
-            if mp4_path.exists():
+            if output_file.exists():
                 try:
-                    mp4_path.unlink()
+                    output_file.unlink()
                 except:
                     pass
 
             st.error(f"❌ Export failed: {current_file['camera_name']}")
-            st.session_state.export_queue.pop(0)
-            st.session_state.current_output = []
+            st.session_state.cle_export_queue.pop(0)
+            st.session_state.cle_current_output = []
 
-            if not st.session_state.export_queue:
-                st.session_state.is_exporting = False
+            if not st.session_state.cle_export_queue:
+                st.session_state.cle_is_exporting = False
 
             time.sleep(2)
             st.rerun()
