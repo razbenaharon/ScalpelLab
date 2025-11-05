@@ -6,8 +6,6 @@ from PIL import Image
 import io
 
 
-#streamlit run app.py
-
 # Import path manager
 sys.path.append(os.path.join(os.path.dirname(__file__)))
 
@@ -19,11 +17,9 @@ st.title("ScalpelLab – Streamlit SQLite Database Manager")
 st.markdown("""
 
 ### 🛠 **Available Pages**
-- **🔎 Browse**: Query and explore database tables with search functionality
-- **✏️ Edit**: Add, modify, and manage database records through interactive forms
+- **🗄️ Database Management**: Browse tables, insert new records, and delete existing rows with an intuitive interface
 - **📊 Status Summary**: View MP4/SEQ processing statistics, camera distributions, and visual charts
-- **👁️ Views**: Access and query database views for specialized data perspectives
-- **📤 Export Files**: View all SEQ files and export them to MP4 format with one-click conversion
+- **📑 Views**: Access and query database views for specialized data perspectives
 
 Navigate using the sidebar to access different features and tools.
 """)

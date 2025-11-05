@@ -33,8 +33,7 @@ pip install pathlib  # Usually included with Python
 ## Features
 
 ### 📊 Streamlit Web Interface
-- **Browse**: Query and explore database tables with search functionality
-- **Edit**: Add, modify, and manage database records through interactive forms
+- **Database Management**: Browse tables, insert new records, and delete existing rows with an intuitive interface
 - **Status Summary**: View MP4/SEQ files statistics per camera and distributions
 - **Views**: Access and query database views for specialized data perspectives
 
@@ -51,9 +50,10 @@ Set the database path in the sidebar to the ScalpelDatabase.sqlite file in the p
 
 ### 🗄️ Database Schema
 - **recording_details**: Core table for recording metadata
-- **anesthetic**: Anesthetic-related information
+- **anesthesiology**: Anesthesiology resident roster and career progression
 - **mp4_status**: Normalized table tracking MP4 file status per camera
 - **seq_status**: Normalized table tracking SEQ file status per camera
+- **analysis_information**: Per case labeling metadata
 
 
 ## Project Structure
@@ -61,23 +61,23 @@ Set the database path in the sidebar to the ScalpelDatabase.sqlite file in the p
 ```
 ScalpeLab/
 ├── app.py                          # Main Streamlit application
-├── main.py                         # Example usage of sql_to_path.py
+├── run_app.py                      # Quick launcher for the app
 ├── utils.py                        # Database utility functions
 ├── pages/                          # Streamlit pages
-│   ├── 1_Browse.py                # Browse database tables
-│   ├── 2_Edit.py                  # Edit database records
-│   ├── 3_Status_Summary.py        # MP4/SEQ status dashboard
-│   └── 4_Views.py                 # Database views browser
+│   ├── 1_Database.py              # Browse, insert, and delete database records
+│   ├── 2_Status_Summary.py        # MP4/SEQ status dashboard
+│   └── 3_Views.py                 # Database views browser
 ├── scripts/                        # Command-line utilities
-│   ├── mp4_status_update.py       # Update MP4 file status
-│   ├── seq_status_update.py       # Update SEQ file status
-│   ├── seq_exporter.py            # Export SEQ to MP4
+│   ├── batch_export.py            # Batch export SEQ files to MP4
+│   ├── update_status.py           # Update MP4/SEQ file status
 │   ├── sqlite_to_dbdiagram.py     # Generate DB diagram
-│   ├── status_statistics.py       # Generate status statistics and reports
-│   └── sql_to_path.py             # SQL query to file path mapping utility
-├── docs/                           # Documentation (if exists)
+│   ├── migrate_anesthetic_to_anesthesiology.py  # Database migration script
+│   └── migrate_anesthetic_start_date.py         # Database migration script
+├── docs/                           # Documentation
 │   ├── ERD.pdf                    # Entity relationship diagram
 │   └── scalpel_dbdiagram.txt      # Database schema definition
+├── run_batch_export.py            # Quick launcher for batch export
+├── BATCH_EXPORT_GUIDE.md          # Guide for batch export operations
 └── ScalpelDatabase.sqlite         # SQLite database file
 ```
 
@@ -91,22 +91,22 @@ Core table storing metadata for each surgical recording session.
 | `recording_date` | TEXT | ✓ | Date of recording (YYYY-MM-DD format)                                                     |
 | `signature_time` | TEXT | | Time when recording was signed/validated                                                  |
 | `case_no` | INTEGER | ✓ | Case number for the recording date (1, 2, 3, etc.)                                        |
-| `code` | TEXT | | Anesthetic name code                                                                      |
-| `anesthetic_key` | INTEGER | ✓| Foreign key linking to anesthetic table                                                   |
-| `months_anesthetic_recording` | INTEGER | | Months of anesthetic experience at time of recording - Auto inserted                      |
+| `code` | TEXT | | Anesthesiology resident code                                                              |
+| `anesthesiology_key` | INTEGER | ✓| Foreign key linking to anesthesiology table                                               |
+| `months_anesthetic_recording` | INTEGER | | Months of anesthesiology experience at time of recording - Auto inserted                  |
 | `anesthetic_attending` | TEXT | | Anesthetist level at time of recording ('A' = Attending, 'R' = Resident) - Auto inserted  |
 
 **Primary Key**: `(recording_date, case_no)`
 
-### anesthetic
-Table storing information about anesthetists and their career progression.
+### anesthesiology
+Table storing information about anesthesiology residents and their career progression.
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
-| `anesthetic_key` | INTEGER | | Primary key, auto-increment |
-| `name` | TEXT | ✓ | Full name of the anesthetist |
-| `code` | TEXT | | Short code/identifier for the anesthetist |
-| `anesthetic_start_date` | TEXT | | Date when anesthetic training/career started (YYYY-MM-DD) |
+| `anesthesiology_key` | INTEGER | ✓ | Primary key, auto-increment |
+| `name` | TEXT | ✓ | Full name of the anesthesiology resident |
+| `code` | TEXT | | Short code/identifier (auto-generated: FirstInitial + LastInitial + YYMM) |
+| `anesthesiology_start_date` | TEXT | | Date when anesthesiology training started (YYYY-MM-DD) |
 | `grade_a_date` | TEXT | | Date when promoted to Grade A/Attending level |
 
 ### mp4_status
@@ -162,7 +162,7 @@ Table for storing analysis and labeling information.
 
 ## Database Relationships
 
-- `recording_details.anesthetic_key` → `anesthetic.anesthetic_key` (Foreign Key)
+- `recording_details.anesthesiology_key` → `anesthesiology.anesthesiology_key` (Foreign Key)
 - `mp4_status.(recording_date, case_no)` → `recording_details.(recording_date, case_no)` (Logical relationship)
 - `seq_status.(recording_date, case_no)` → `recording_details.(recording_date, case_no)` (Logical relationship)
 - `analysis_information.(recording_date, case_no)` → `recording_details.(recording_date, case_no)` (Logical relationship)
@@ -213,32 +213,45 @@ This view helps quickly identify recordings where the original SEQ file is prese
 Checks if any SEQ file is **missing** (`status = 3`) **while the corresponding MP4 file exists** with status `1` (complete) or `2` (incomplete).
 
 ### cur_seniority
-**Purpose**: Calculates current seniority and attending status for each anesthetist based on their start date.
+**Purpose**: Calculates current seniority and attending status for each anesthesiology resident based on their start date.
 
 **Key Columns**:
-- `seniority_month_cur`: Months of experience from `anesthetic_start_date` until now
+- `seniority_month_cur`: Months of experience from `anesthesiology_start_date` until now
 - `anesthetic_attending_cur`: Current level ('A' = Attending if >60 months, 'R' = Resident if ≤60 months)
 
 **Business Logic**:
-- Anesthetists with >60 months (5 years) of experience are considered Attending level
+- Residents with >60 months (5 years) of experience are considered Attending level
 - Those with ≤60 months are considered Resident level
 - This view is used to dynamically determine current status without manual updates
 
-## Scripts
+## Batch Export
 
+### Command-Line Batch Export
+For large-scale conversions without the web interface overhead, use the batch export script:
 
-#### Update MP4 Status
-Scan the Recordings directory and update `mp4_status` table:
+```bash
+python run_batch_export.py
+```
 
+**Features**:
+- Export all or selected SEQ files to MP4 format
+- Choose between CLExport (with FFmpeg fallback) or FFmpeg only
+- Real-time conversion progress output
+- File size monitoring to detect stuck conversions
+- Automatic fallback if primary converter fails
 
-#### Update SEQ Status
-Scan the Sequence_Backup directory and update `seq_status` table:
+See `BATCH_EXPORT_GUIDE.md` for detailed usage instructions.
 
+### Database Migrations
 
-#### Export SEQ Files to MP4
-Export sequence files to MP4 format:
+Migration scripts are provided in the `scripts/` directory for database schema updates:
+- `migrate_anesthetic_to_anesthesiology.py` - Rename anesthetic table to anesthesiology
+- `migrate_anesthetic_start_date.py` - Rename anesthetic_start_date column
 
+### Utility Scripts
 
+#### Update Status (update_status.py)
+Scan directories and update both `mp4_status` and `seq_status` tables
 
-#### Query Files by SQL (sql_to_path.py)
-Execute SQL queries against the database and get corresponding file paths
+#### Generate Database Diagram (sqlite_to_dbdiagram.py)
+Generate dbdiagram.io format file from the database schema
