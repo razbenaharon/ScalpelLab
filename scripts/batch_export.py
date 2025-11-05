@@ -14,16 +14,14 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Tuple
 
-# Configuration
-DB_PATH = r"F:\Room_8_Data\Scalpel_Raz\ScalpelDatabase.sqlite"
-SEQ_ROOT = r"F:\Room_8_Data\Sequence_Backup"
-OUT_ROOT = r"F:\Room_8_Data\Recordings"
+# Add parent directory to path to import config
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import get_db_path, get_seq_root, get_mp4_root, DEFAULT_CAMERAS
 
-DEFAULT_CAMERAS = [
-    "Cart_Center_2", "Cart_LT_4", "Cart_RT_1",
-    "General_3", "Monitor", "Patient_Monitor",
-    "Ventilator_Monitor", "Injection_Port"
-]
+# Configuration (from config.py)
+DB_PATH = get_db_path()
+SEQ_ROOT = get_seq_root()
+OUT_ROOT = get_mp4_root()
 
 # FFmpeg possible locations
 FFMPEG_PATHS = [

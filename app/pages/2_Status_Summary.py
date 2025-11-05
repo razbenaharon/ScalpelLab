@@ -15,8 +15,8 @@ DEFAULT_CAMERAS = [
     "Ventilator_Monitor","Injection_Port"
 ]
 
-LABELS_MP4 = {1: ">=200MB", 2: "<200MB", 3: "Missing"}
-LABELS_SEQ  = {1: ">200MB",  2: "<200MB", 3: "Missing", 4: "FORMAT PROBLEM"}
+LABELS_MP4 = {1: "Present", 2: "Missing"}
+LABELS_SEQ = {1: "Present", 2: "Missing"}
 
 st.header("🧮 Status Summary (mp4_status & seq_status)")
 
@@ -34,9 +34,8 @@ with st.sidebar:
 def fetch_camera_stats(db_path: str, table: str, cameras: list[str], threshold_mb: int = 200) -> tuple[int, dict]:
     """
     Fetch camera statistics by deriving status from size_mb:
-    - 1 (>=200MB) if size_mb >= threshold_mb
-    - 2 (<200MB) if size_mb < threshold_mb
-    - 3 (Missing) if size_mb is NULL
+    - 1 (Present) if size_mb is NOT NULL (file exists regardless of size)
+    - 2 (Missing) if size_mb is NULL (file doesn't exist)
     """
     with connect(db_path) as conn:
         cur = conn.cursor()
@@ -49,11 +48,9 @@ def fetch_camera_stats(db_path: str, table: str, cameras: list[str], threshold_m
         cur.execute(f"SELECT camera_name, size_mb FROM {table} WHERE camera_name IN ({placeholders})", cameras)
         for camera_name, size_mb in cur.fetchall():
             if size_mb is None:
-                status = 3  # Missing
-            elif size_mb >= threshold_mb:
-                status = 1  # >=200MB
+                status = 2  # Missing
             else:
-                status = 2  # <200MB
+                status = 1  # Present (any size)
             camera_stats[camera_name][status] += 1
         return total_cases, camera_stats
 
@@ -97,6 +94,6 @@ def section(title: str, table_name: str, labels: dict, order: tuple[int, ...]):
     except Exception as e:
         st.error(f"Error: {e}")
 
-section("📁 MP4 Status Summary", mp4_table, LABELS_MP4, (1, 2, 3))
+section("📁 MP4 Status Summary", mp4_table, LABELS_MP4, (1, 2))
 st.divider()
-section("🎞️ SEQ Status Summary", seq_table, LABELS_SEQ, (1, 2, 3, 4))
+section("🎞️ SEQ Status Summary", seq_table, LABELS_SEQ, (1, 2))
