@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//f/Room_8_Data/Recordings/**)",
+      "Bash(dir \"F:\\Room_8_Data\\Scalpel_Raz\")",
+      "Bash(dir:*)",
+      "Bash(streamlit run:*)",
+      "WebFetch(domain:localhost)",
+      "Bash(timeout /t 3)",
+      "Bash(python:*)",
+      "Bash(del \"F:\\Room_8_Data\\Scalpel_Raz\\check_table.py\")",
+      "Bash(move:*)",
+      "Bash(tasklist:*)",
+      "Bash(findstr:*)",
+      "Bash(del \"pages\\5_Export_FFmpeg.py\")",
+      "Bash(del \"pages\\6_Export_CLE.py\")",
+      "Bash(del \"F:\\Room_8_Data\\Scalpel_Raz\\scripts\\check_code_pattern.py\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

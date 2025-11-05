@@ -1,4 +1,4 @@
-//// ScalpelLab Database, exported 2025-09-30
+//// ScalpelLab Database, exported 2025-11-05
 //// Paste into https://dbdiagram.io
 
 //// System table from SQLite. Usually not modeled, included here for completeness.
@@ -15,11 +15,11 @@ Table analysis_information {
   Note: 'Per case labeling metadata'
 }
 
-Table anesthetic {
-  anesthetic_key     int [pk]
+Table anesthesiology {
+  anesthesiology_key int [pk]
   name               varchar [not null]
   code               varchar
-  anesthetic_start_date varchar
+  anesthesiology_start_date varchar
   grade_a_date       varchar  // merged column
   Note: 'Resident roster'
 }
@@ -29,7 +29,7 @@ Table recording_details {
   signature_time     varchar
   case_no            int [pk]
   code               varchar
-  anesthetic_key     int
+  anesthesiology_key int
   months_anesthetic_recording int
   anesthetic_attending varchar
   Note: 'Authoritative case list, parent for case scoped tables'
@@ -39,9 +39,8 @@ Table mp4_status {
   recording_date     varchar [pk]
   case_no            int [pk]
   camera_name        varchar [pk]
-  value              int
-  comments           varchar
   size_mb            int
+  duration_seconds   decimal
   Note: 'MP4 export status per camera, 1..n semantics driven by your app'
 }
 
@@ -49,17 +48,15 @@ Table seq_status {
   recording_date     varchar [pk] // Part of FK to recording_details
   case_no            int [pk] // Part of FK to recording_details
   camera_name        varchar [pk]
-  value              int
-  comments           varchar
   size_mb            int
   Note: 'SEQ ingestion status per camera, values are non negative. 1 more than 200MB, 2 under 200MB, 3 missing, 4 format problem'
 }
 
 // Relationships detected from database:
-Ref: recording_details.anesthetic_key > anesthetic.anesthetic_key
 Ref: seq_status.recording_date > recording_details.recording_date
 Ref: seq_status.recording_date > recording_details.case_no
 Ref: mp4_status.case_no > recording_details.case_no
 Ref: mp4_status.recording_date > recording_details.recording_date
 Ref: analysis_information.case_no > recording_details.case_no
 Ref: analysis_information.recording_date > recording_details.recording_date
+Ref: recording_details.anesthesiology_key > anesthesiology.anesthesiology_key
