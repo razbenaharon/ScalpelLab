@@ -1,2 +1,2 @@
 import os
-os.system("streamlit run app.py")
+os.system("streamlit run app/app.py")

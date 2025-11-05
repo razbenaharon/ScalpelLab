@@ -1,28 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Execute a FULL SQL query against your status table and output matching MP4 file paths.
+SQL to Path - Query database and get file paths
 
-Your SQL must SELECT at least:
+Python API for querying the database and resolving file paths.
+
+Usage:
+    from scripts.sql_to_path import get_paths
+
+    sql = "SELECT * FROM mp4_status WHERE size_mb >= 200"
+    paths = get_paths(sql)
+
+    for date, case, camera, path, size_mb in paths:
+        print(f"{date} Case{case} {camera}: {path} ({size_mb}MB)")
+
+Required SQL columns:
   - recording_date
   - case_no
   - camera_name
-  - value (status)
+  - size_mb
 
-Examples (PowerShell):
-  # 1) Inline SQL
-  python sql_to_path.py --sql "SELECT recording_date, case_no, camera_name, value FROM mp4_status WHERE camera_name='Monitor' AND value=1"
-
-  # 2) SQL from file
-  python sql_to_path.py --sql-file "F:\\Room_8_Data\\Scalpel_Raz\\queries\\monitor_good.sql"
-
-  # Restrict to specific cameras and keep only the largest file
-  python sql_to_path.py --sql "SELECT recording_date, case_no, camera_name, value FROM mp4_status WHERE camera_name IN ('Monitor', 'General_3') AND value=1" ^
-                        --only-cameras Monitor,General_3 --largest-only --save-csv "F:\\good_paths.csv"
-
-Notes:
-- On PowerShell, prefer double quotes for --sql and escape inner quotes as needed.
-- The script searches files under <ROOT>\\DATA_YY-MM-DD\\CaseN\\<Camera>\\*.mp4
+Filter by size in your SQL:
+  - Large files: WHERE size_mb >= 200
+  - Small files: WHERE size_mb < 200
+  - Missing files: WHERE size_mb IS NULL
+  - Size range: WHERE size_mb BETWEEN 100 AND 500
 """
 
 import argparse
@@ -30,19 +32,18 @@ import csv
 import os
 import re
 import sqlite3
+import sys
 from pathlib import Path
 from typing import Iterable, List, Tuple, Union, Optional
 
-# ------------ Defaults (edit if needed) ------------
-DEFAULT_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ScalpelDatabase.sqlite")
-DEFAULT_ROOT    = r"F:\Room_8_Data\Recordings"
+# Add parent directory to path to import config
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import get_db_path, get_mp4_root, DEFAULT_CAMERAS
 
-# All known camera columns (the script will only use the subset actually returned by your SQL)
-CAMERAS: List[str] = [
-    "Cart_Center_2","Cart_LT_4","Cart_RT_1",
-    "General_3","Monitor","Patient_Monitor",
-    "Ventilator_Monitor","Injection_Port"
-]
+# ------------ Defaults (from config.py) ------------
+DEFAULT_DB_PATH = get_db_path()
+DEFAULT_ROOT    = get_mp4_root()
+CAMERAS: List[str] = DEFAULT_CAMERAS
 # ---------------------------------------------------
 
 
@@ -104,14 +105,21 @@ def run_sql(conn: sqlite3.Connection, sql_query: str) -> Tuple[List[str], List[t
 
 def get_paths(sql_query: str,
               db_path: str = DEFAULT_DB_PATH,
-              root_path: str = DEFAULT_ROOT,
-              status_value: int = 1,
-              largest_only: bool = False,
-              only_cameras: Optional[List[str]] = None,
-              threshold_mb: int = 200) -> List[Tuple[str, int, str, str, float]]:
+              root_path: str = DEFAULT_ROOT) -> List[Tuple[str, int, str, str, float]]:
     """
-    Run SQL query and return list of (recording_date, case_no, camera, mp4_path, size_mb).
-    Status is derived from size_mb: 1=>=threshold_mb, 2=<threshold_mb, 3=NULL
+    Run SQL query and return list of (recording_date, case_no, camera, file_path, size_mb).
+
+    Args:
+        sql_query: SQL query that must SELECT: recording_date, case_no, camera_name, size_mb
+        db_path: Path to SQLite database
+        root_path: Root directory for files (auto-detects .mp4 or .seq based on path)
+
+    Returns:
+        List of tuples: (recording_date, case_no, camera_name, file_path, size_mb)
+
+    Example:
+        sql = "SELECT * FROM mp4_status WHERE size_mb >= 200"
+        paths = get_paths(sql)
     """
     root = Path(root_path)
     conn = sqlite3.connect(db_path)
@@ -129,20 +137,6 @@ def get_paths(sql_query: str,
             camera_name = row_map["camera_name"]
             size_mb_db = row_map["size_mb"]
 
-            # Derive status from size_mb
-            if size_mb_db is None:
-                derived_status = 3  # Missing
-            elif size_mb_db >= threshold_mb:
-                derived_status = 1  # >=200MB
-            else:
-                derived_status = 2  # <200MB
-
-            if derived_status != status_value:
-                continue
-
-            if only_cameras and camera_name not in only_cameras:
-                continue
-
             # Auto-detect file extension based on root path
             file_ext = "seq" if "Sequence_Backup" in str(root) else "mp4"
 
@@ -150,9 +144,7 @@ def get_paths(sql_query: str,
             files = list_files_for_camera(root, recording_date, case_no, camera_name, file_ext)
 
             if files:
-                # Files exist - process them
-                if largest_only:
-                    files = pick_largest(files)
+                # Files exist - return all found files
                 for p in files:
                     try:
                         size_mb = round(p.stat().st_size / (1024 * 1024), 2)
@@ -171,106 +163,16 @@ def get_paths(sql_query: str,
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Run FULL SQL and output MP4 paths for matching cameras/status.")
-    ap.add_argument("--db", default=DEFAULT_DB_PATH, help="Path to SQLite DB.")
-    ap.add_argument("--root", default=DEFAULT_ROOT, help="Root Recordings directory.")
-    group = ap.add_mutually_exclusive_group(required=True)
-    group.add_argument("--sql", default="", help="Full SQL query string.")
-    group.add_argument("--sql-file", default="", help="Path to a .sql file containing the full query.")
-    ap.add_argument("--only-cameras", default="", help="Comma-separated list to restrict cameras.")
-    ap.add_argument("--status-value", type=int, default=1, help="Which status value to match (default: 1).")
-    ap.add_argument("--largest-only", action="store_true", help="Return only the largest MP4 per (recording_date,case_no,camera).")
-    ap.add_argument("--save-csv", default="", help="Optional CSV output path.")
-    args = ap.parse_args()
-
-    root = Path(args.root)
-    if not root.exists():
-        raise SystemExit(f"[ERROR] Root path not found: {root}")
-
-    sql_query = read_sql_from_args(args)
-
-    conn = sqlite3.connect(args.db)
-    try:
-        colnames, rows = run_sql(conn, sql_query)
-        if not rows:
-            print("[INFO] Query returned no rows.")
-            return
-
-        required_cols = ["recording_date", "case_no", "camera_name", "size_mb"]
-        missing_cols = [col for col in required_cols if col not in colnames]
-        if missing_cols:
-            raise SystemExit(f"[ERROR] SQL must SELECT: {', '.join(missing_cols)}")
-
-        # Camera restriction (optional)
-        restrict = [c.strip() for c in args.only_cameras.split(",") if c.strip()]
-
-        out_rows: List[Tuple[str, int, str, str, float]] = []  # (recording_date, case_no, camera, path_str, size_mb)
-
-        # Define threshold
-        threshold_mb = 200  # Same as in update scripts
-
-        # Iterate rows and emit paths for cameras whose derived status equals --status-value
-        for row in rows:
-            row_map = dict(zip(colnames, row))
-            recording_date = row_map["recording_date"]
-            case_no = row_map["case_no"]
-            camera_name = row_map["camera_name"]
-            size_mb_db = row_map["size_mb"]
-
-            # Derive status from size_mb
-            if size_mb_db is None:
-                derived_status = 3  # Missing
-            elif size_mb_db >= threshold_mb:
-                derived_status = 1  # >=200MB
-            else:
-                derived_status = 2  # <200MB
-
-            if derived_status != args.status_value:
-                continue
-
-            if restrict and camera_name not in restrict:
-                continue
-
-            # Auto-detect file extension based on root path
-            file_ext = "seq" if "Sequence_Backup" in str(root) else "mp4"
-
-            files = list_files_for_camera(root, recording_date, case_no, camera_name, file_ext)
-            if args.largest_only:
-                files = pick_largest(files)
-
-            if files:
-                for p in files:
-                    try:
-                        size_mb = round(p.stat().st_size / (1024 * 1024), 2)
-                    except OSError:
-                        size_mb = -1.0
-                    out_rows.append((recording_date, case_no, camera_name, str(p), size_mb))
-            else:
-                # Files don't exist - return expected path
-                data_dir, case_dir = data_dir_from_recording_date_and_case(recording_date, case_no)
-                expected_path = root / data_dir / case_dir / camera_name
-                expected_file_path = expected_path / f"*.{file_ext}"
-                out_rows.append((recording_date, case_no, camera_name, str(expected_file_path), 0.0))
-
-        # Print results
-        if not out_rows:
-            print("[INFO] No matching MP4 files for the given SQL and options.")
-        else:
-            for recording_date, case_no, cam, path_str, size_mb in out_rows:
-                print(f"{recording_date}\t{case_no}\t{cam}\t{size_mb} MB\t{path_str}")
-
-        # Optional CSV
-        if args.save_csv:
-            out = Path(args.save_csv)
-            out.parent.mkdir(parents=True, exist_ok=True)
-            with open(out, "w", newline="", encoding="utf-8") as f:
-                w = csv.writer(f)
-                w.writerow(["recording_date", "case_no", "camera", "mp4_path", "size_mb"])
-                w.writerows(out_rows)
-            print(f"[OK] Saved CSV with {len(out_rows)} rows -> {out}")
-
-    finally:
-        conn.close()
+    """Command-line interface (primarily for testing - use Python API for integration)"""
+    print("SQL to Path - Python API")
+    print("=" * 60)
+    print("This script is designed for Python API usage.")
+    print("\nExample:")
+    print("  from scripts.sql_to_path import get_paths")
+    print("  sql = 'SELECT * FROM mp4_status WHERE size_mb >= 200'")
+    print("  paths = get_paths(sql)")
+    print("\nFor examples, run: python main.py")
+    print("=" * 60)
 
 
 if __name__ == "__main__":
