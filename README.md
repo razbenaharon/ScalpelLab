@@ -24,10 +24,28 @@ pip install pathlib  # Usually included with Python
    ```
    *Note: If requirements.txt doesn't exist, install packages individually as shown above*
 
-4. Ensure the `ScalpelDatabase.sqlite` file is in the project root directory
-5. Run the application:
+4. **Configure paths** (IMPORTANT):
+   - Open `config.py` in a text editor
+   - Edit `SEQ_ROOT` to point to your SEQ files directory (e.g., `r"F:\Room_8_Data\Sequence_Backup"`)
+   - Edit `MP4_ROOT` to point to your MP4 files directory (e.g., `r"F:\Room_8_Data\Recordings"`)
+   - The database path is automatically set to the project directory
+   - Save the file
+
+5. Verify configuration:
    ```bash
-   streamlit run app.py
+   python config.py
+   ```
+   This will display your paths and verify they exist.
+
+6. Ensure the `ScalpelDatabase.sqlite` file is in the project root directory
+
+7. Run the application:
+   ```bash
+   # Option 1: Use the quick launcher
+   python run_app.py
+
+   # Option 2: Run Streamlit directly
+   streamlit run app/app.py
    ```
 
 ## Features
@@ -60,26 +78,65 @@ Set the database path in the sidebar to the ScalpelDatabase.sqlite file in the p
 
 ```
 ScalpeLab/
-├── app.py                          # Main Streamlit application
-├── run_app.py                      # Quick launcher for the app
-├── utils.py                        # Database utility functions
-├── pages/                          # Streamlit pages
-│   ├── 1_Database.py              # Browse, insert, and delete database records
-│   ├── 2_Status_Summary.py        # MP4/SEQ status dashboard
-│   └── 3_Views.py                 # Database views browser
+├── app/                            # Streamlit application directory
+│   ├── app.py                     # Main Streamlit application
+│   ├── utils.py                   # Database utility functions
+│   └── pages/                     # Streamlit pages
+│       ├── 1_Database.py          # Browse, insert, and delete database records
+│       ├── 2_Status_Summary.py    # MP4/SEQ status dashboard
+│       └── 3_Views.py             # Database views browser
 ├── scripts/                        # Command-line utilities
 │   ├── batch_export.py            # Batch export SEQ files to MP4
 │   ├── update_status.py           # Update MP4/SEQ file status
+│   ├── sql_to_path.py             # Query database and get file paths
 │   ├── sqlite_to_dbdiagram.py     # Generate DB diagram
 │   ├── migrate_anesthetic_to_anesthesiology.py  # Database migration script
 │   └── migrate_anesthetic_start_date.py         # Database migration script
 ├── docs/                           # Documentation
 │   ├── ERD.pdf                    # Entity relationship diagram
 │   └── scalpel_dbdiagram.txt      # Database schema definition
+├── run_app.py                      # Quick launcher for the Streamlit app
 ├── run_batch_export.py            # Quick launcher for batch export
+├── main.py                         # Example usage of sql_to_path
+├── config.py                       # Configuration file (EDIT PATHS HERE)
 ├── BATCH_EXPORT_GUIDE.md          # Guide for batch export operations
+├── README.md                       # This file
 └── ScalpelDatabase.sqlite         # SQLite database file
 ```
+
+## Configuration
+
+All file system paths are centralized in `config.py`. This makes it easy to adapt the project to different systems:
+
+### Editing Configuration
+
+Open `config.py` and modify these variables:
+
+```python
+# Root directory for SEQ files (original sequence files)
+SEQ_ROOT = r"F:\Room_8_Data\Sequence_Backup"
+
+# Root directory for MP4 files (exported video files)
+MP4_ROOT = r"F:\Room_8_Data\Recordings"
+```
+
+**Important Notes:**
+- Use raw strings (prefix with `r`) for Windows paths: `r"F:\Path\To\Directory"`
+- The database is always in the project directory (automatic)
+- SEQ_ROOT and MP4_ROOT can be on different drives or network locations
+
+### Verifying Configuration
+
+Run the configuration script to verify your paths:
+
+```bash
+python config.py
+```
+
+This will display:
+- Current configuration paths
+- Path validation (whether directories exist)
+- Warnings if any paths are invalid
 
 ## Database Tables
 
@@ -249,6 +306,41 @@ Migration scripts are provided in the `scripts/` directory for database schema u
 - `migrate_anesthetic_start_date.py` - Rename anesthetic_start_date column
 
 ### Utility Scripts
+
+#### SQL to Path (sql_to_path.py)
+Query the database and get corresponding file paths for MP4 or SEQ files.
+
+**Features**:
+- Execute SQL queries and automatically resolve file paths
+- Supports both MP4 and SEQ files
+- Filter by file size directly in SQL (e.g., `size_mb >= 200`, `size_mb IS NULL`)
+- Get largest file only or all files per recording
+- Save results to CSV
+
+**Example Usage**:
+```bash
+# Find complete Monitor recordings (>= 200MB)
+python scripts/sql_to_path.py --sql "SELECT * FROM mp4_status WHERE camera_name='Monitor' AND size_mb >= 200"
+
+# Find missing MP4s (where size_mb IS NULL)
+python scripts/sql_to_path.py --sql "SELECT * FROM mp4_status WHERE size_mb IS NULL"
+
+# Get SEQ files for export
+python scripts/sql_to_path.py --sql "SELECT * FROM seq_status WHERE size_mb >= 200" --root "F:\Room_8_Data\Sequence_Backup"
+
+# Find incomplete files (< 200MB)
+python scripts/sql_to_path.py --sql "SELECT * FROM mp4_status WHERE size_mb < 200 AND size_mb IS NOT NULL"
+```
+
+**Python API**:
+```python
+from scripts.sql_to_path import get_paths
+
+# Filter by size directly in SQL
+paths = get_paths("SELECT * FROM mp4_status WHERE size_mb >= 200")
+for date, case, camera, path, size_mb in paths:
+    print(f"{date} Case{case} {camera}: {path} ({size_mb} MB)")
+```
 
 #### Update Status (update_status.py)
 Scan directories and update both `mp4_status` and `seq_status` tables

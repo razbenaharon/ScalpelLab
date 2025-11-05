@@ -19,25 +19,26 @@ import argparse
 import os
 import re
 import sqlite3
+import sys
 import time
 import subprocess
 import json
 from pathlib import Path
 
+# Add parent directory to path to import config
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import get_db_path, get_seq_root, get_mp4_root, DEFAULT_CAMERAS
+
 # ============================================
-# Defaults
+# Defaults (from config.py)
 # ============================================
-DEFAULT_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ScalpelDatabase.sqlite")
-DEFAULT_SEQ_ROOT = r"F:\Room_8_Data\Sequence_Backup"
-DEFAULT_MP4_ROOT = r"F:\Room_8_Data\Recordings"
+DEFAULT_DB_PATH = get_db_path()
+DEFAULT_SEQ_ROOT = get_seq_root()
+DEFAULT_MP4_ROOT = get_mp4_root()
 DEFAULT_THRESHOLD_MB = 200
 DEFAULT_DELETE_SMALL_MB = 10
 
-CAMERAS = [
-    "Cart_Center_2", "Cart_LT_4", "Cart_RT_1",
-    "General_3", "Monitor", "Patient_Monitor",
-    "Ventilator_Monitor", "Injection_Port"
-]
+CAMERAS = DEFAULT_CAMERAS
 
 # ============================================
 # Common utilities
