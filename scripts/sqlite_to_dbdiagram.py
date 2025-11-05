@@ -83,7 +83,7 @@ def sqlite_to_dbdiagram(db_path: str, output_path: str):
     table_notes = {
         'sqlite_sequence': 'SQLite internal autoincrement tracking table',
         'analysis_information': 'Per case labeling metadata',
-        'anesthetic': 'Resident roster',
+        'anesthesiology': 'Resident roster',
         'recording_details': 'Authoritative case list, parent for case scoped tables',
         'mp4_status': 'MP4 export status per camera, 1..n semantics driven by your app',
         'seq_status': 'SEQ ingestion status per camera, values are non negative. 1 more than 200MB, 2 under 200MB, 3 missing, 4 format problem'
@@ -107,7 +107,7 @@ def sqlite_to_dbdiagram(db_path: str, output_path: str):
         output_lines.append("")
 
     # Generate table definitions for regular tables
-    for table in ['analysis_information', 'anesthetic', 'recording_details', 'mp4_status', 'seq_status']:
+    for table in ['analysis_information', 'anesthesiology', 'recording_details', 'mp4_status', 'seq_status']:
         if table not in table_schemas:
             continue
 
@@ -153,10 +153,10 @@ def sqlite_to_dbdiagram(db_path: str, output_path: str):
             # Add inline comments for specific fields
             if table == 'analysis_information' and col_name == 'labeled':
                 col_def += "     // 0 or 1"
-            elif table == 'anesthetic' and col_name == 'grade_a_date':
+            elif table == 'anesthesiology' and col_name == 'grade_a_date':
                 col_def += "  // merged column"
             elif table in ['mp4_status', 'seq_status'] and col_name == 'intern_key':
-                col_def += "      // FK to anesthetic.intern_key"
+                col_def += "      // FK to anesthesiology.intern_key"
             elif table == 'seq_status' and col_name in ['recording_date', 'case_no']:
                 col_def += " // Part of FK to recording_details"
 
