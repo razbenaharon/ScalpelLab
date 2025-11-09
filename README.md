@@ -48,6 +48,30 @@ pip install pathlib  # Usually included with Python
    streamlit run app/app.py
    ```
 
+## Directory Structure Expected
+
+### File Organization
+- **SEQ Files**: `/Sequence_Backup/DATA_YY-MM-DD/CaseN/[Camera]/*.seq`
+- **MP4 Files**: `/Recordings/DATA_YY-MM-DD/CaseN/[Camera]/*.mp4`
+
+### Recordings (MP4 files)
+```
+F:\Room_8_Data\Recordings\
+└── DATA_YY-MM-DD\
+    └── CaseN\
+        └── <CameraName>\
+            └── *.mp4
+```
+
+### Sequence Backups (SEQ files)
+```
+F:\Room_8_Data\Sequence_Backup\
+└── DATA_YY-MM-DD\
+    └── CaseN\
+        └── <CameraName>\
+            └── *.seq
+```
+
 ## Features
 
 ### 📊 Streamlit Web Interface
@@ -235,27 +259,6 @@ The system tracks 8 camera sources:
 - Patient_Monitor
 - Ventilator_Monitor
 - Injection_Port
-
-
-## Directory Structure Expected
-
-### Recordings (MP4 files)
-```
-F:\Room_8_Data\Recordings\
-└── DATA_YY-MM-DD\
-    └── CaseN\
-        └── <CameraName>\
-            └── *.mp4
-```
-
-### Sequence Backups (SEQ files)
-```
-F:\Room_8_Data\Sequence_Backup\
-└── DATA_YY-MM-DD\
-    └── CaseN\
-        └── <CameraName>\
-            └── *.seq
-```
 
 
 ## Database Views
