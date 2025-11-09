@@ -5,26 +5,6 @@ SQL to Path - Query database and get file paths
 
 Python API for querying the database and resolving file paths.
 
-Usage:
-    from scripts.sql_to_path import get_paths
-
-    sql = "SELECT * FROM mp4_status WHERE size_mb >= 200"
-    paths = get_paths(sql)
-
-    for date, case, camera, path, size_mb in paths:
-        print(f"{date} Case{case} {camera}: {path} ({size_mb}MB)")
-
-Required SQL columns:
-  - recording_date
-  - case_no
-  - camera_name
-  - size_mb
-
-Filter by size in your SQL:
-  - Large files: WHERE size_mb >= 200
-  - Small files: WHERE size_mb < 200
-  - Missing files: WHERE size_mb IS NULL
-  - Size range: WHERE size_mb BETWEEN 100 AND 500
 """
 
 import argparse
@@ -162,18 +142,4 @@ def get_paths(sql_query: str,
         conn.close()
 
 
-def main():
-    """Command-line interface (primarily for testing - use Python API for integration)"""
-    print("SQL to Path - Python API")
-    print("=" * 60)
-    print("This script is designed for Python API usage.")
-    print("\nExample:")
-    print("  from scripts.sql_to_path import get_paths")
-    print("  sql = 'SELECT * FROM mp4_status WHERE size_mb >= 200'")
-    print("  paths = get_paths(sql)")
-    print("\nFor examples, run: python main.py")
-    print("=" * 60)
 
-
-if __name__ == "__main__":
-    main()
