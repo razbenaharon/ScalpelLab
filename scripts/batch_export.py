@@ -1,6 +1,7 @@
 """
-Batch Export Script - No Web Interface
-Exports SEQ files to MP4 without Streamlit overhead
+Batch Export Script - FFmpeg GPU with CLExport Fallback
+Exports SEQ files to MP4 using GPU-accelerated FFmpeg
+Falls back to CLExport if GPU encoding fails
 Much more stable for large batches
 """
 
@@ -304,7 +305,7 @@ def export_file(seq_path, out_path, use_ffmpeg=True, codec="mp4"):
     Args:
         seq_path: Path to .seq file
         out_path: Path to output .mp4 file
-        use_ffmpeg: True for FFmpeg, False for CLExport
+        use_ffmpeg: True for FFmpeg (GPU), False for CLExport
         codec: Codec for CLExport (mp4 or mjpeg)
 
     Returns:
@@ -312,6 +313,7 @@ def export_file(seq_path, out_path, use_ffmpeg=True, codec="mp4"):
     """
     try:
         if use_ffmpeg:
+            # GPU encoding using NVIDIA NVENC - optimized for smaller file size
             ffmpeg_path = find_ffmpeg()
             if not ffmpeg_path:
                 return False, "ffmpeg.exe not found"
@@ -319,17 +321,23 @@ def export_file(seq_path, out_path, use_ffmpeg=True, codec="mp4"):
             cmd = [
                 ffmpeg_path,
                 "-y",
+                "-hwaccel", "cuda",
                 "-r", "30",
                 "-i", str(seq_path),
-                "-c:v", "libx264",
-                "-preset", "slow",
-                "-crf", "20",
+                "-c:v", "h264_nvenc",
+                "-preset", "p6",  # Higher preset for better compression (p1=fastest, p7=slowest/best compression)
+                "-rc", "vbr",  # Variable bitrate mode
+                "-cq", "28",  # Quality level (higher = lower quality = smaller size)
+                "-b:v", "2M",  # Target bitrate
+                "-maxrate", "3M",  # Max bitrate
+                "-bufsize", "3M",  # Buffer size
+                "-profile:v", "high",
                 "-pix_fmt", "yuv420p",
                 str(out_path)
             ]
 
             # Run FFmpeg with real-time output
-            print(f"  Running: {' '.join(cmd[:3])} ... {cmd[-1]}")
+            print(f"  Running: {' '.join(cmd[:3])} ... (GPU-accelerated)")
             print(f"  --- Output from FFmpeg ---")
 
             # Use Popen for real-time output
@@ -353,9 +361,9 @@ def export_file(seq_path, out_path, use_ffmpeg=True, codec="mp4"):
             # Check if successful
             if process.returncode == 0 and is_valid_video_file(out_path):
                 size_mb = out_path.stat().st_size / (1024 * 1024)
-                return True, f"Success ({size_mb:.1f} MB)"
+                return True, f"Success - GPU ({size_mb:.1f} MB)"
             else:
-                return False, f"Failed with code {process.returncode}"
+                return False, f"GPU encoding failed with code {process.returncode}"
 
         else:
             # CLExport with file size monitoring
@@ -434,40 +442,29 @@ def export_file(seq_path, out_path, use_ffmpeg=True, codec="mp4"):
 def main():
     """Main batch export function."""
     print("=" * 80)
-    print("BATCH EXPORT SCRIPT")
+    print("BATCH EXPORT SCRIPT - FFmpeg GPU with CLExport Fallback")
     print("=" * 80)
     print(f"Database: {DB_PATH}")
     print(f"SEQ Root: {SEQ_ROOT}")
     print(f"Output Root: {OUT_ROOT}")
     print()
 
-    # Choose export method (CLExport is default)
-    print("Choose export method:")
-    print("  1. CLExport (mp4/H.264) - Default")
-    print("  2. FFmpeg")
-    export_choice = input("Choice (1 or 2, or press Enter for CLExport): ").strip()
+    # Check FFmpeg availability
+    ffmpeg_path = find_ffmpeg()
+    if not ffmpeg_path:
+        print("❌ FFmpeg not found!")
+        print("Please install FFmpeg or add it to your PATH.")
+        return
 
-    # Default to CLExport if user just presses Enter
-    if not export_choice:
-        export_choice = '1'
+    # Check CLExport availability
+    clexport_path = find_clexport()
+    use_clexport_fallback = clexport_path is not None
 
-    use_ffmpeg = export_choice == '2'
-    codec = "mp4"  # Always use mp4 (H.264) for CLExport
-    use_fallback = True  # Enable FFmpeg fallback if CLExport fails
-
-    if not use_ffmpeg:
-        # Check if CLExport exists
-        if not find_clexport():
-            print("❌ CLExport.exe not found!")
-            print("Falling back to FFmpeg...")
-            use_ffmpeg = True
-            use_fallback = False  # Already using FFmpeg
-
-    exporter_name = "CLExport (mp4/H.264)" if not use_ffmpeg else "FFmpeg"
-    if not use_ffmpeg and use_fallback:
-        exporter_name += " with FFmpeg fallback"
-
-    print(f"\n✓ Using: {exporter_name}")
+    print(f"✓ Primary: FFmpeg with GPU acceleration: {ffmpeg_path}")
+    if use_clexport_fallback:
+        print(f"✓ Fallback: CLExport available: {clexport_path}")
+    else:
+        print("⚠️  CLExport not found - no fallback available")
     print()
 
     # Always use all cameras
@@ -569,7 +566,7 @@ def main():
     print()
 
     # Confirm
-    response = input(f"Export {len(selected_files)} files using {exporter_name}? (y/n): ").strip().lower()
+    response = input(f"Export {len(selected_files)} files using FFmpeg GPU? (y/n): ").strip().lower()
     if response != 'y':
         print("Cancelled.")
         return
@@ -586,6 +583,7 @@ def main():
     fallback_count = 0
 
     start_time = datetime.now()
+    codec = "mp4"  # Codec for CLExport
 
     for i, file_info in enumerate(selected_files, 1):
         recording_date = file_info['recording_date']
@@ -615,27 +613,27 @@ def main():
             skipped_count += 1
             continue
 
-        # Export with primary method
-        success, message = export_file(seq_path, mp4_path, use_ffmpeg=use_ffmpeg, codec=codec)
+        # Export with GPU-accelerated FFmpeg
+        success, message = export_file(seq_path, mp4_path, use_ffmpeg=True, codec=codec)
 
         if success:
             print(f"  ✅ {message}")
             success_count += 1
         else:
-            # Try fallback to FFmpeg if CLExport failed and fallback is enabled
-            if not use_ffmpeg and use_fallback:
-                print(f"  ⚠️  CLExport failed: {message}")
-                print(f"  🔄 Trying FFmpeg fallback...")
+            # Try fallback to CLExport if GPU failed and CLExport is available
+            if use_clexport_fallback:
+                print(f"  ⚠️  GPU encoding failed: {message}")
+                print(f"  🔄 Trying CLExport fallback...")
 
-                # Try with FFmpeg
-                success_fallback, message_fallback = export_file(seq_path, mp4_path, use_ffmpeg=True, codec=codec)
+                # Try with CLExport
+                success_fallback, message_fallback = export_file(seq_path, mp4_path, use_ffmpeg=False, codec=codec)
 
                 if success_fallback:
-                    print(f"  ✅ FFmpeg fallback succeeded: {message_fallback}")
+                    print(f"  ✅ CLExport fallback succeeded: {message_fallback}")
                     success_count += 1
                     fallback_count += 1
                 else:
-                    print(f"  ❌ FFmpeg fallback also failed: {message_fallback}")
+                    print(f"  ❌ CLExport fallback also failed: {message_fallback}")
                     failed_count += 1
             else:
                 print(f"  ❌ FAILED: {message}")
@@ -651,12 +649,14 @@ def main():
     print("=" * 80)
     print(f"Success:       {success_count}")
     if fallback_count > 0:
-        print(f"  (Fallback):  {fallback_count}")
+        print(f"  (CLExport):  {fallback_count}")
     print(f"Failed:        {failed_count}")
     print(f"Skipped:       {skipped_count}")
     print(f"Total:         {len(selected_files)}")
     print(f"Duration:      {duration}")
-    print(f"Primary:       {exporter_name}")
+    print(f"Primary:       FFmpeg GPU (NVENC)")
+    if use_clexport_fallback:
+        print(f"Fallback:      CLExport (mp4/H.264)")
     print("=" * 80)
 
 
