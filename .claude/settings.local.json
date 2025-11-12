@@ -15,7 +15,8 @@
       "Bash(del \"pages\\5_Export_FFmpeg.py\")",
       "Bash(del \"pages\\6_Export_CLE.py\")",
       "Bash(del \"F:\\Room_8_Data\\Scalpel_Raz\\scripts\\check_code_pattern.py\")",
-      "Bash(cmd /c:*)"
+      "Bash(cmd /c:*)",
+      "Bash(sqlite3:*)"
     ],
     "deny": [],
     "ask": []

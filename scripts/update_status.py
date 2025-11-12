@@ -79,16 +79,16 @@ def ensure_mp4_table_exists(conn: sqlite3.Connection) -> None:
             case_no INTEGER NOT NULL,
             camera_name TEXT NOT NULL,
             size_mb INTEGER,
-            duration_seconds REAL,
+            duration_minutes REAL,
             PRIMARY KEY (recording_date, case_no, camera_name)
         );
     """)
 
-    # Add duration_seconds column if it doesn't exist
+    # Add duration_minutes column if it doesn't exist
     try:
-        cur.execute('ALTER TABLE "mp4_status" ADD COLUMN duration_seconds REAL')
+        cur.execute('ALTER TABLE "mp4_status" ADD COLUMN duration_minutes REAL')
         conn.commit()
-        print("[INFO] Added duration_seconds column to mp4_status table")
+        print("[INFO] Added duration_minutes column to mp4_status table")
     except sqlite3.OperationalError:
         pass
 
@@ -220,7 +220,7 @@ def update_seq_status(db_path: str, seq_root: Path, threshold_mb: int, dry_run: 
 # MP4 status functions (with duration)
 # ============================================
 def get_video_duration(video_path: Path) -> float | None:
-    """Get video duration in seconds using ffprobe."""
+    """Get video duration in minutes using ffprobe."""
     try:
         ffprobe_paths = [
             r"C:\Program Files\ffmpeg\bin\ffprobe.exe",
@@ -261,14 +261,14 @@ def get_video_duration(video_path: Path) -> float | None:
             data = json.loads(result.stdout)
             duration_str = data.get("format", {}).get("duration")
             if duration_str:
-                return float(duration_str)
+                return float(duration_str) / 60.0  # Convert to minutes
     except Exception:
         pass
     return None
 
 
 def compute_mp4_status(camera_dir: Path, threshold_bytes: int, calculate_duration: bool = True) -> tuple[int, int | None, float | None]:
-    """Return (status, size_mb, duration_seconds) for MP4 files in camera directory."""
+    """Return (status, size_mb, duration_minutes) for MP4 files in camera directory."""
     if not camera_dir.is_dir():
         return 3, None, None
     max_size = 0
@@ -377,7 +377,7 @@ def update_mp4_status(db_path: str, mp4_root: Path, threshold_mb: int,
             ensure_mp4_table_exists(conn)
             cur = conn.cursor()
             try:
-                cur.execute('SELECT recording_date, case_no, camera_name, size_mb, duration_seconds FROM "mp4_status"')
+                cur.execute('SELECT recording_date, case_no, camera_name, size_mb, duration_minutes FROM "mp4_status"')
                 for row in cur.fetchall():
                     existing_all[(row[0], row[1], row[2])] = (row[3], row[4])
                 if existing_all:
@@ -453,7 +453,7 @@ def update_mp4_status(db_path: str, mp4_root: Path, threshold_mb: int,
             ensure_mp4_table_exists(conn)
             cur = conn.cursor()
             try:
-                cur.execute('SELECT recording_date, case_no, camera_name, size_mb, duration_seconds FROM "mp4_status"')
+                cur.execute('SELECT recording_date, case_no, camera_name, size_mb, duration_minutes FROM "mp4_status"')
                 for row in cur.fetchall():
                     existing_all[(row[0], row[1], row[2])] = (row[3], row[4])
             except sqlite3.OperationalError:
@@ -477,7 +477,7 @@ def update_mp4_status(db_path: str, mp4_root: Path, threshold_mb: int,
             for recording_date, case_no, camera_name, status, size_mb, duration in new_entries[:10]:
                 status_label = {1: ">=200MB", 2: "<200MB", 3: "Missing"}.get(status, str(status))
                 size_str = f"{size_mb}MB" if size_mb is not None else "NULL"
-                duration_str = f"{duration:.1f}s" if duration is not None else "N/A"
+                duration_str = f"{duration:.1f}min" if duration is not None else "N/A"
                 print(f"    {recording_date} Case{case_no} {camera_name}: {status_label} ({size_str}, {duration_str})")
             if len(new_entries) > 10:
                 print(f"    ... and {len(new_entries) - 10} more")
@@ -488,8 +488,8 @@ def update_mp4_status(db_path: str, mp4_root: Path, threshold_mb: int,
                 status_label = {1: ">=200MB", 2: "<200MB", 3: "Missing"}.get(status, str(status))
                 old_size_str = f"{old_size}MB" if old_size is not None else "NULL"
                 new_size_str = f"{new_size}MB" if new_size is not None else "NULL"
-                old_dur_str = f"{old_duration:.1f}s" if old_duration is not None else "N/A"
-                new_dur_str = f"{new_duration:.1f}s" if new_duration is not None else "N/A"
+                old_dur_str = f"{old_duration:.1f}min" if old_duration is not None else "N/A"
+                new_dur_str = f"{new_duration:.1f}min" if new_duration is not None else "N/A"
                 print(f"    {recording_date} Case{case_no} {camera_name}: {status_label}")
                 print(f"      Size: {old_size_str} -> {new_size_str}, Duration: {old_dur_str} -> {new_dur_str}")
             if len(changed_entries) > 10:
@@ -607,15 +607,15 @@ Examples:
 
         # Show some changes
         if seq_stats.get('new_entries'):
-            print(f"\n  Recent new SEQ entries (showing up to 5):")
-            for recording_date, case_no, camera_name, status, size_mb in seq_stats['new_entries'][:5]:
+            print(f"\n  Recent new SEQ entries:")
+            for recording_date, case_no, camera_name, status, size_mb in seq_stats['new_entries']:
                 status_label = {1: ">=200MB", 2: "<200MB", 3: "Missing"}.get(status, str(status))
                 size_str = f"{size_mb}MB" if size_mb is not None else "NULL"
                 print(f"    + {recording_date} Case{case_no} {camera_name}: {status_label} ({size_str})")
 
         if seq_stats.get('changed_entries'):
-            print(f"\n  Recent changed SEQ entries (showing up to 5):")
-            for recording_date, case_no, camera_name, status, old_size, new_size in seq_stats['changed_entries'][:5]:
+            print(f"\n  Recent changed SEQ entries: ")
+            for recording_date, case_no, camera_name, status, old_size, new_size in seq_stats['changed_entries']:
                 status_label = {1: ">=200MB", 2: "<200MB", 3: "Missing"}.get(status, str(status))
                 old_str = f"{old_size}MB" if old_size is not None else "NULL"
                 new_str = f"{new_size}MB" if new_size is not None else "NULL"
@@ -631,20 +631,20 @@ Examples:
 
         # Show some changes
         if mp4_stats.get('new_entries'):
-            print(f"\n  Recent new MP4 entries (showing up to 5):")
-            for recording_date, case_no, camera_name, status, size_mb, duration in mp4_stats['new_entries'][:5]:
+            print(f"\n  Recent new MP4 entries :")
+            for recording_date, case_no, camera_name, status, size_mb, duration in mp4_stats['new_entries']:
                 status_label = {1: ">=200MB", 2: "<200MB", 3: "Missing"}.get(status, str(status))
                 size_str = f"{size_mb}MB" if size_mb is not None else "NULL"
-                duration_str = f"{duration:.1f}s" if duration is not None else "N/A"
+                duration_str = f"{duration:.1f}min" if duration is not None else "N/A"
                 print(f"    + {recording_date} Case{case_no} {camera_name}: {status_label} ({size_str}, {duration_str})")
 
         if mp4_stats.get('changed_entries'):
-            print(f"\n  Recent changed MP4 entries (showing up to 5):")
-            for recording_date, case_no, camera_name, status, old_size, new_size, old_duration, new_duration in mp4_stats['changed_entries'][:5]:
+            print(f"\n  Recent changed MP4 entries :")
+            for recording_date, case_no, camera_name, status, old_size, new_size, old_duration, new_duration in mp4_stats['changed_entries']:
                 old_size_str = f"{old_size}MB" if old_size is not None else "NULL"
                 new_size_str = f"{new_size}MB" if new_size is not None else "NULL"
-                old_dur_str = f"{old_duration:.1f}s" if old_duration is not None else "N/A"
-                new_dur_str = f"{new_duration:.1f}s" if new_duration is not None else "N/A"
+                old_dur_str = f"{old_duration:.1f}min" if old_duration is not None else "N/A"
+                new_dur_str = f"{new_duration:.1f}min" if new_duration is not None else "N/A"
                 print(f"    ~ {recording_date} Case{case_no} {camera_name}")
                 print(f"      Size: {old_size_str} -> {new_size_str}, Duration: {old_dur_str} -> {new_dur_str}")
 
@@ -688,7 +688,7 @@ Examples:
                 for (recording_date, case_no, camera_name), (status, size_mb, duration) in mp4_stats['updates'].items():
                     cur.execute('''
                         INSERT OR REPLACE INTO "mp4_status"
-                        (recording_date, case_no, camera_name, size_mb, duration_seconds)
+                        (recording_date, case_no, camera_name, size_mb, duration_minutes)
                         VALUES (?, ?, ?, ?, ?)
                     ''', (recording_date, case_no, camera_name, size_mb, duration))
 
