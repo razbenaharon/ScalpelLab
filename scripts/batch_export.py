@@ -322,8 +322,8 @@ def export_file(seq_path, out_path, use_ffmpeg=True, codec="mp4"):
                 "-r", "30",
                 "-i", str(seq_path),
                 "-c:v", "libx264",
-                "-preset", "medium",
-                "-crf", "23",
+                "-preset", "slow",
+                "-crf", "20",
                 "-pix_fmt", "yuv420p",
                 str(out_path)
             ]
