@@ -85,37 +85,36 @@ def run_sql(conn: sqlite3.Connection, sql_query: str) -> Tuple[List[str], List[t
 
 def get_paths(sql_query: str,
               db_path: str = DEFAULT_DB_PATH,
-              root_path: str = DEFAULT_ROOT) -> List[Tuple[str, int, str, str, float]]:
+              root_path: str = DEFAULT_ROOT) -> List[str]:
     """
-    Run SQL query and return list of (recording_date, case_no, camera, file_path, size_mb).
+    Run SQL query and return list of file paths.
 
     Args:
-        sql_query: SQL query that must SELECT: recording_date, case_no, camera_name, size_mb
+        sql_query: SQL query that must SELECT: recording_date, case_no, camera_name
         db_path: Path to SQLite database
         root_path: Root directory for files (auto-detects .mp4 or .seq based on path)
 
     Returns:
-        List of tuples: (recording_date, case_no, camera_name, file_path, size_mb)
+        List of file paths (strings)
 
     Example:
-        sql = "SELECT * FROM mp4_status WHERE size_mb >= 200"
+        sql = "SELECT recording_date, case_no, camera_name FROM mp4_status WHERE size_mb >= 200"
         paths = get_paths(sql)
     """
     root = Path(root_path)
     conn = sqlite3.connect(db_path)
     try:
         colnames, rows = run_sql(conn, sql_query)
-        required_cols = ["recording_date", "case_no", "camera_name", "size_mb"]
+        required_cols = ["recording_date", "case_no", "camera_name"]
         if not rows or not all(col in colnames for col in required_cols):
             return []
 
-        out_rows = []
+        out_paths = []
         for row in rows:
             row_map = dict(zip(colnames, row))
             recording_date = row_map["recording_date"]
             case_no = row_map["case_no"]
             camera_name = row_map["camera_name"]
-            size_mb_db = row_map["size_mb"]
 
             # Auto-detect file extension based on root path
             file_ext = "seq" if "Sequence_Backup" in str(root) else "mp4"
@@ -126,18 +125,14 @@ def get_paths(sql_query: str,
             if files:
                 # Files exist - return all found files
                 for p in files:
-                    try:
-                        size_mb = round(p.stat().st_size / (1024 * 1024), 2)
-                    except OSError:
-                        size_mb = -1.0
-                    out_rows.append((recording_date, case_no, camera_name, str(p), size_mb))
+                    out_paths.append(str(p))
             else:
                 # Files don't exist - return expected path
                 data_dir, case_dir = data_dir_from_recording_date_and_case(recording_date, case_no)
                 expected_path = root / data_dir / case_dir / camera_name
                 expected_file_path = expected_path / f"*.{file_ext}"
-                out_rows.append((recording_date, case_no, camera_name, str(expected_file_path), 0.0))
-        return out_rows
+                out_paths.append(str(expected_file_path))
+        return out_paths
     finally:
         conn.close()
 

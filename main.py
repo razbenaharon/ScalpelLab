@@ -20,7 +20,7 @@ print("Example 1: MP4 files >= 200MB for Monitor cameras")
 print("="*60)
 
 sql_query = """
-    SELECT recording_date, case_no, camera_name, size_mb
+    SELECT recording_date, case_no, camera_name
     FROM mp4_status
     WHERE camera_name IN ('Monitor', 'Patient_Monitor')
     AND size_mb >= 200
@@ -31,8 +31,8 @@ sql_query = """
 paths = get_paths(sql_query)
 print(f"Found {len(paths)} matching paths:")
 
-for recording_date, case_no, camera, mp4_path, size_mb in paths[:10]:  # Show first 10
-    print(f"{recording_date}\t{case_no}\t{camera}\t{size_mb} MB\t{mp4_path}")
+for mp4_path in paths[:10]:  # Show first 10
+    print(f"  {mp4_path}")
 
 if len(paths) > 10:
     print(f"... and {len(paths) - 10} more")
@@ -47,8 +47,7 @@ sql_query2 = """
     SELECT
         m.recording_date,
         m.case_no,
-        m.camera_name,
-        m.size_mb
+        m.camera_name
     FROM mp4_status m
     INNER JOIN seq_status s
         ON m.recording_date = s.recording_date
@@ -63,8 +62,8 @@ sql_query2 = """
 paths2 = get_paths(sql_query2)
 print(f"Found {len(paths2)} missing MP4 files:")
 
-for recording_date, case_no, camera, mp4_path, size_mb in paths2[:10]:  # Show first 10
-    print(f"{recording_date}\t{case_no}\t{camera}\t{size_mb if size_mb else 'NULL'} MB\t{mp4_path}")
+for mp4_path in paths2[:10]:  # Show first 10
+    print(f"  {mp4_path}")
 
 if len(paths2) > 10:
     print(f"... and {len(paths2) - 10} more")
@@ -76,7 +75,7 @@ print("Example 3: Files < 200MB")
 print("="*60)
 
 sql_query3 = """
-    SELECT recording_date, case_no, camera_name, size_mb
+    SELECT recording_date, case_no, camera_name
     FROM mp4_status
     WHERE size_mb < 200
     AND size_mb IS NOT NULL
@@ -87,8 +86,8 @@ sql_query3 = """
 paths3 = get_paths(sql_query3)
 print(f"Found {len(paths3)} files:")
 
-for recording_date, case_no, camera, mp4_path, size_mb in paths3[:10]:
-    print(f"{recording_date}\t{case_no}\t{camera}\t{size_mb} MB\t{mp4_path}")
+for mp4_path in paths3[:10]:
+    print(f"  {mp4_path}")
 
 if len(paths3) > 10:
     print(f"... and {len(paths3) - 10} more")
@@ -100,7 +99,7 @@ print("Example 4: SEQ files from Sequence_Backup directory")
 print("="*60)
 
 sql_query4 = """
-    SELECT recording_date, case_no, camera_name, size_mb
+    SELECT recording_date, case_no, camera_name
     FROM seq_status
     WHERE camera_name = 'General_3'
     AND size_mb >= 200
@@ -115,8 +114,8 @@ paths4 = get_paths(
 )
 print(f"Found {len(paths4)} SEQ files:")
 
-for recording_date, case_no, camera, seq_path, size_mb in paths4:
-    print(f"{recording_date}\t{case_no}\t{camera}\t{size_mb} MB\t{seq_path}")
+for seq_path in paths4:
+    print(f"  {seq_path}")
 
 
 # Example 5: Filter by size range
@@ -125,7 +124,7 @@ print("Example 5: Files between 100-200 MB")
 print("="*60)
 
 sql_query5 = """
-    SELECT recording_date, case_no, camera_name, size_mb
+    SELECT recording_date, case_no, camera_name
     FROM mp4_status
     WHERE size_mb >= 100
     AND size_mb < 200
@@ -136,8 +135,8 @@ sql_query5 = """
 paths5 = get_paths(sql_query5)
 print(f"Found {len(paths5)} files in size range:")
 
-for recording_date, case_no, camera, mp4_path, size_mb in paths5:
-    print(f"{recording_date}\t{case_no}\t{camera}\t{size_mb} MB\t{mp4_path}")
+for mp4_path in paths5:
+    print(f"  {mp4_path}")
 
 
 # Example 6: Get largest files using SQL ORDER BY
@@ -146,7 +145,7 @@ print("Example 6: Largest files by size")
 print("="*60)
 
 sql_query6 = """
-    SELECT recording_date, case_no, camera_name, size_mb
+    SELECT recording_date, case_no, camera_name
     FROM mp4_status
     WHERE camera_name = 'Monitor'
     AND size_mb IS NOT NULL
@@ -157,10 +156,27 @@ sql_query6 = """
 paths6 = get_paths(sql_query6)
 print(f"Found {len(paths6)} largest files:")
 
-for recording_date, case_no, camera, mp4_path, size_mb in paths6:
-    print(f"{recording_date}\t{case_no}\t{camera}\t{size_mb} MB\t{mp4_path}")
+for mp4_path in paths6:
+    print(f"  {mp4_path}")
 
 
 print("\n" + "="*60)
 print("Examples complete!")
 print("="*60)
+
+
+
+sql_query7 = """
+    SELECT recording_date, case_no, camera_name
+    FROM mp4_status
+    WHERE camera_name = 'General_3'
+    AND recording_date = '2024-11-24'
+    AND case_no = 1
+"""
+paths7 = get_paths(sql_query7)
+print(paths7[0])
+
+print("\n" + "="*60)
+print("Examples complete!")
+print("="*60)
+
