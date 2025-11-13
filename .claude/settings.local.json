@@ -16,7 +16,8 @@
       "Bash(del \"pages\\6_Export_CLE.py\")",
       "Bash(del \"F:\\Room_8_Data\\Scalpel_Raz\\scripts\\check_code_pattern.py\")",
       "Bash(cmd /c:*)",
-      "Bash(sqlite3:*)"
+      "Bash(sqlite3:*)",
+      "WebFetch(domain:code.claude.com)"
     ],
     "deny": [],
     "ask": []
