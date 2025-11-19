@@ -17,7 +17,12 @@
       "Bash(del \"F:\\Room_8_Data\\Scalpel_Raz\\scripts\\check_code_pattern.py\")",
       "Bash(cmd /c:*)",
       "Bash(sqlite3:*)",
-      "WebFetch(domain:code.claude.com)"
+      "WebFetch(domain:code.claude.com)",
+      "Bash(git pull:*)",
+      "Bash(git push)",
+      "Bash(git ls-tree:*)",
+      "Bash(rm:*)",
+      "Bash(\"times .xlsx\")"
     ],
     "deny": [],
     "ask": []
