@@ -1,352 +1,311 @@
 # ScalpelLab Database Manager
 
-A Streamlit-based database management system for managing and monitoring surgical recording data, including MP4 video files and SEQ sequence files from multiple camera sources.
+A comprehensive database management system for surgical recording data, tracking MP4 video files and SEQ sequence files across multiple camera sources. Features include automated file scanning, batch video conversion, multi-video playback, and a web-based management interface.
 
-## Installation
+## Quick Start
 
-### Requirements
-- Python 3.7 or higher
-- Required Python packages (install via pip):
-
-```bash
-pip install streamlit
-pip install pandas
-pip install sqlite3  # Usually included with Python
-pip install pathlib  # Usually included with Python
-```
-
-### Quick Setup
-1. Clone or download the project
-2. Navigate to the project directory
-3. Install requirements:
+### Installation
+1. **Install Python 3.7+** and required packages:
    ```bash
-   pip install -r requirements.txt
+   pip install streamlit pandas PyMuPDF pillow
    ```
-   *Note: If requirements.txt doesn't exist, install packages individually as shown above*
 
-4. **Configure paths** (IMPORTANT):
-   - Open `config.py` in a text editor
-   - Edit `SEQ_ROOT` to point to your SEQ files directory (e.g., `r"F:\Room_8_Data\Sequence_Backup"`)
-   - Edit `MP4_ROOT` to point to your MP4 files directory (e.g., `r"F:\Room_8_Data\Recordings"`)
-   - The database path is automatically set to the project directory
-   - Save the file
-
-5. Verify configuration:
-   ```bash
-   python config.py
+2. **Configure paths** in `config.py`:
+   ```python
+   SEQ_ROOT = r"F:\Room_8_Data\Sequence_Backup"  # SEQ files location
+   MP4_ROOT = r"F:\Room_8_Data\Recordings"       # MP4 files location
    ```
-   This will display your paths and verify they exist.
 
-6. Ensure the `ScalpelDatabase.sqlite` file is in the project root directory
-
-7. Run the application:
+3. **Verify setup**:
    ```bash
-   # Option 1: Use the quick launcher
+   python config.py  # Validates paths and shows configuration
+   ```
+
+4. **Launch the web interface**:
+   ```bash
    python run_app.py
-
-   # Option 2: Run Streamlit directly
-   streamlit run app/app.py
+   # Opens at http://localhost:8501
    ```
 
-## Directory Structure Expected
-
-### File Organization
-- **SEQ Files**: `/Sequence_Backup/DATA_YY-MM-DD/CaseN/[Camera]/*.seq`
-- **MP4 Files**: `/Recordings/DATA_YY-MM-DD/CaseN/[Camera]/*.mp4`
-
-### Recordings (MP4 files)
+### Expected Directory Structure
 ```
-F:\Room_8_Data\Recordings\
-└── DATA_YY-MM-DD\
-    └── CaseN\
-        └── <CameraName>\
-            └── *.mp4
+Sequence_Backup/                    Recordings/
+└── DATA_YY-MM-DD/                 └── DATA_YY-MM-DD/
+    └── CaseN/                         └── CaseN/
+        └── CameraName/                    └── CameraName/
+            └── *.seq                          └── *.mp4
 ```
 
-### Sequence Backups (SEQ files)
+---
+
+## Database Schema
+
+### Core Tables
+
+#### `recording_details` - Recording Metadata
+Primary recording information with auto-calculated anesthesiology experience.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `recording_date` | TEXT | Recording date (YYYY-MM-DD) - **Primary Key** |
+| `case_no` | INTEGER | Case number (1, 2, 3...) - **Primary Key** |
+| `signature_time` | TEXT | When recording was signed/validated |
+| `anesthesiology_key` | INTEGER | Foreign key to anesthesiology table |
+| `months_anesthetic_recording` | INTEGER | Experience months at recording (auto-calculated) |
+| `anesthetic_attending` | TEXT | Level: 'A' (Attending) or 'R' (Resident) (auto-calculated) |
+
+**Triggers**: Automatically calculates experience months and attending status on insert/update.
+
+#### `anesthesiology` - Resident Information
+Tracks anesthesiology residents and career progression.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `anesthesiology_key` | INTEGER | Primary key (auto-increment) |
+| `name` | TEXT | Full name |
+| `code` | TEXT | Short identifier code |
+| `anesthesiology_start_date` | TEXT | Training start date |
+| `grade_a_date` | TEXT | Promotion to Attending date |
+
+#### `mp4_status` - MP4 File Tracking
+Tracks exported MP4 video files with size and duration.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `recording_date` | TEXT | Recording date - **Primary Key** |
+| `case_no` | INTEGER | Case number - **Primary Key** |
+| `camera_name` | TEXT | Camera identifier - **Primary Key** |
+| `size_mb` | INTEGER | Largest file size in MB |
+| `duration_minutes` | REAL | Video duration in minutes |
+
+**Status Logic**: `size_mb >= 200` = Complete, `< 200` = Incomplete, `NULL` = Missing
+
+#### `seq_status` - SEQ File Tracking
+Tracks original SEQ sequence files.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `recording_date` | TEXT | Recording date - **Primary Key** |
+| `case_no` | INTEGER | Case number - **Primary Key** |
+| `camera_name` | TEXT | Camera identifier - **Primary Key** |
+| `size_mb` | INTEGER | Largest file size in MB |
+
+**Status Logic**: `size_mb >= 200` = Complete, `< 200` = Incomplete, `NULL` = Missing
+
+#### `analysis_information` - Analysis Metadata
+Stores labeling and analysis information per case.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `recording_date` | TEXT | Recording date - **Primary Key** |
+| `case_no` | INTEGER | Case number - **Primary Key** |
+| `label_by` | TEXT | Who performed the labeling |
+
+### Database Views
+
+**`cur_mp4_missing`**: Lists cases where SEQ exists but MP4 is missing - useful for identifying videos needing export.
+
+**`cur_seq_missing`**: Lists cases where MP4 exists but SEQ is missing - indicates potential data loss.
+
+**`cur_seniority`**: Calculates current experience and status for all residents. Experience >60 months = Attending ('A'), otherwise Resident ('R').
+
+### Camera Configuration
+8 camera sources tracked: `Cart_Center_2`, `Cart_LT_4`, `Cart_RT_1`, `General_3`, `Monitor`, `Patient_Monitor`, `Ventilator_Monitor`, `Injection_Port`
+
+---
+
+## Scripts
+
+### Video Conversion
+
+**`batch_export.py`** - GPU-Accelerated Batch Video Export
+```bash
+python scripts/batch_export.py
+# or: python run_batch_export.py
 ```
-F:\Room_8_Data\Sequence_Backup\
-└── DATA_YY-MM-DD\
-    └── CaseN\
-        └── <CameraName>\
-            └── *.seq
+Exports SEQ files to MP4 using GPU (NVIDIA NVENC) with CLExport fallback. Features:
+- Interactive file selection (all, first N, or specific files)
+- Real-time progress monitoring with file size tracking
+- Automatic stuck conversion detection and kill
+- Dual-mode: FFmpeg GPU primary, CLExport fallback
+- Smart output path resolution preserving directory structure
+
+### Database Management
+
+**`update_status.py`** - File Status Scanner
+```bash
+python scripts/update_status.py                    # Full update with duration
+python scripts/update_status.py --skip-duration    # Fast update, no duration
+python scripts/update_status.py --dry-run          # Preview changes
 ```
+Scans file directories and updates database with current file status. Features:
+- Scans both SEQ and MP4 directories
+- Calculates file sizes and video durations (using ffprobe)
+- Smart mode: only recalculates duration for new/changed files
+- Auto-deletes small MP4 files (<10MB by default)
+- Shows detailed diff before applying changes
 
-## Features
+**`sql_to_path.py`** - Database Query to File Paths
+```python
+from scripts.sql_to_path import get_paths
 
-### 📊 Streamlit Web Interface
-- **Database Management**: Browse tables, insert new records, and delete existing rows with an intuitive interface
-- **Status Summary**: View MP4/SEQ files statistics per camera and distributions
-- **Views**: Access and query database views for specialized data perspectives
+# Query database and get actual file paths
+paths = get_paths("SELECT * FROM mp4_status WHERE size_mb >= 200 AND camera_name='Monitor'")
+```
+Converts database queries into actual filesystem paths. Useful for:
+- Batch operations on specific recordings
+- Exporting file lists for external tools
+- Finding specific recordings by criteria
 
+### Video Editing
 
-### Database Configuration
-Set the database path in the sidebar to the ScalpelDatabase.sqlite file in the project directory. The app will open in your browser at `http://localhost:8501`
+**`cut_video.py`** - Video Segment Extractor
+```bash
+# Interactive mode
+python scripts/cut_video.py
 
+# Command-line mode (single video)
+python scripts/cut_video.py video.mp4 10 30
 
-### 🎥 Video File Management
-- **MP4 Status Tracking**: Monitor exported MP4 files per camera
-- **SEQ Status Tracking**: Track original sequence files per camera
-- **Automatic Status Updates**: Scripts to scan directories and update database status
-- **Smart File Cleanup**: Delete small/incomplete MP4 files to free up space
+# Batch mode (multiple videos, same time range)
+python scripts/cut_video.py video1.mp4 video2.mp4 video3.mp4 00:01:00 00:02:00
+```
+Extracts video segments using FFmpeg stream copy (fast, no re-encoding). Supports:
+- Time formats: HH:MM:SS or seconds (e.g., "90" or "00:01:30")
+- Batch processing with progress tracking
+- Auto-incrementing output filenames to avoid overwrites
 
-### 🗄️ Database Schema
-- **recording_details**: Core table for recording metadata
-- **anesthesiology**: Anesthesiology resident roster and career progression
-- **mp4_status**: Normalized table tracking MP4 file status per camera
-- **seq_status**: Normalized table tracking SEQ file status per camera
-- **analysis_information**: Per case labeling metadata
+**`copy_with_structure.py`** - Structured File Copier
+```bash
+python scripts/copy_with_structure.py -d D:\backup file1.mp4 file2.mp4
+```
+Copies files while preserving directory structure from "Recordings" folder onward.
 
+### Multi-Video Playback
+
+**`multiMPV/multiMPV.py`** - Synchronized Multi-Camera Viewer
+```bash
+python multiMPV/multiMPV.py
+# or double-click multiMPV.exe (if compiled)
+```
+Displays up to 9 videos in synchronized grid layout using MPV player. Features:
+- Interactive file picker with folder memory
+- Supports .mmpv and .txt playlist files
+- Grid layouts: 1x1, 2x1, 3x1, 2x2, 3x2, 3x3
+- Synchronized playback with shared controls
+
+### Utilities
+
+**`sqlite_to_dbdiagram.py`** - Database Diagram Generator
+Exports database schema to dbdiagram.io format for visualization.
+
+**`compare_databases.py`** - Database Diff Tool
+Compares two database instances to find differences.
+
+---
+
+## Streamlit Web Interface
+
+Launch with `python run_app.py` to access the web dashboard at `http://localhost:8501`.
+
+### Pages
+
+**Database** (`1_Database.py`)
+- Browse all tables with sorting and filtering
+- Insert new records with validation
+- Delete records with confirmation
+- View record counts and statistics
+
+**Status Summary** (`2_Status_Summary.py`)
+- MP4/SEQ file statistics by camera
+- Distribution charts and visualizations
+- Missing file reports
+- File size summaries
+
+**Views** (`3_Views.py`)
+- Query predefined database views
+- Export results to CSV
+- Custom SQL query interface
+
+---
 
 ## Project Structure
 
 ```
-ScalpeLab/
-├── app/                            # Streamlit application directory
-│   ├── app.py                     # Main Streamlit application
-│   ├── utils.py                   # Database utility functions
-│   └── pages/                     # Streamlit pages
-│       ├── 1_Database.py          # Browse, insert, and delete database records
-│       ├── 2_Status_Summary.py    # MP4/SEQ status dashboard
-│       └── 3_Views.py             # Database views browser
-├── scripts/                        # Command-line utilities
-│   ├── batch_export.py            # Batch export SEQ files to MP4
-│   ├── update_status.py           # Update MP4/SEQ file status
-│   ├── sql_to_path.py             # Query database and get file paths
-│   ├── sqlite_to_dbdiagram.py     # Generate DB diagram
-│   ├── migrate_anesthetic_to_anesthesiology.py  # Database migration script
-│   └── migrate_anesthetic_start_date.py         # Database migration script
-├── docs/                           # Documentation
-│   ├── ERD.pdf                    # Entity relationship diagram
-│   └── scalpel_dbdiagram.txt      # Database schema definition
-├── run_app.py                      # Quick launcher for the Streamlit app
-├── run_batch_export.py            # Quick launcher for batch export
-├── main.py                         # Example usage of sql_to_path
-├── config.py                       # Configuration file (EDIT PATHS HERE)
-├── BATCH_EXPORT_GUIDE.md          # Guide for batch export operations
-├── README.md                       # This file
-└── ScalpelDatabase.sqlite         # SQLite database file
+ScalpelLab/
+├── app/
+│   ├── app.py                      # Main Streamlit app with ERD display
+│   ├── utils.py                    # Database utility functions
+│   └── pages/
+│       ├── 1_Database.py           # Table browser and editor
+│       ├── 2_Status_Summary.py     # Statistics dashboard
+│       └── 3_Views.py              # Database views interface
+├── scripts/
+│   ├── batch_export.py             # GPU video converter
+│   ├── update_status.py            # File status scanner
+│   ├── sql_to_path.py              # Query to file path resolver
+│   ├── cut_video.py                # Video segment extractor
+│   ├── copy_with_structure.py      # Structured file copier
+│   ├── sqlite_to_dbdiagram.py      # Schema diagram generator
+│   └── compare_databases.py        # Database diff tool
+├── multiMPV/
+│   └── multiMPV.py                 # Multi-camera video player
+├── docs/
+│   ├── ERD.pdf                     # Entity relationship diagram
+│   └── scalpel_dbdiagram.txt       # Database schema definition
+├── config.py                       # Path configuration (EDIT THIS)
+├── run_app.py                      # Streamlit launcher
+├── run_batch_export.py             # Batch export launcher
+├── main.py                         # sql_to_path usage examples
+├── BATCH_EXPORT_GUIDE.md           # Batch export documentation
+└── ScalpelDatabase.sqlite          # SQLite database file
 ```
 
-## Configuration
+---
 
-All file system paths are centralized in `config.py`. This makes it easy to adapt the project to different systems:
+## Common Workflows
 
-### Editing Configuration
+### Adding New Recordings
+1. Place SEQ files in `Sequence_Backup/DATA_YY-MM-DD/CaseN/CameraName/`
+2. Run `python scripts/update_status.py` to scan and update database
+3. Insert recording metadata via web interface or SQL
 
-Open `config.py` and modify these variables:
+### Exporting Videos
+1. Run `python run_batch_export.py`
+2. Select files to export (all, range, or specific)
+3. Monitor GPU conversion progress
+4. Run `python scripts/update_status.py` to update MP4 status
 
-```python
-# Root directory for SEQ files (original sequence files)
-SEQ_ROOT = r"F:\Room_8_Data\Sequence_Backup"
+### Reviewing Multi-Camera Recordings
+1. Query database to find recordings: `python main.py` (see examples)
+2. Copy file paths to text file or use multiMPV file picker
+3. Run `python multiMPV/multiMPV.py` and select videos
+4. Use synchronized playback to review all camera angles
 
-# Root directory for MP4 files (exported video files)
-MP4_ROOT = r"F:\Room_8_Data\Recordings"
-```
+### Extracting Video Segments
+1. Identify target recordings via database query
+2. Run `python scripts/cut_video.py` (interactive or batch mode)
+3. Specify time range (same for all videos in batch)
+4. Cut videos are saved in same directory with "_cut" suffix
 
-**Important Notes:**
-- Use raw strings (prefix with `r`) for Windows paths: `r"F:\Path\To\Directory"`
-- The database is always in the project directory (automatic)
-- SEQ_ROOT and MP4_ROOT can be on different drives or network locations
+---
 
-### Verifying Configuration
+## Requirements
 
-Run the configuration script to verify your paths:
+- **Python**: 3.7 or higher
+- **Required packages**: `streamlit`, `pandas`, `PyMuPDF`, `pillow`
+- **Optional tools**:
+  - FFmpeg with NVENC support (for GPU video export)
+  - CLExport (NorPix) (fallback converter)
+  - MPV player (for multi-camera playback)
+  - ffprobe (for video duration calculation)
 
-```bash
-python config.py
-```
+---
 
-This will display:
-- Current configuration paths
-- Path validation (whether directories exist)
-- Warnings if any paths are invalid
+## Notes
 
-## Database Tables
-
-### recording_details
-Core table storing metadata for each surgical recording session.
-
-| Column | Type | Required | Description                                                                               |
-|--------|------|----------|-------------------------------------------------------------------------------------------|
-| `recording_date` | TEXT | ✓ | Date of recording (YYYY-MM-DD format)                                                     |
-| `signature_time` | TEXT | | Time when recording was signed/validated                                                  |
-| `case_no` | INTEGER | ✓ | Case number for the recording date (1, 2, 3, etc.)                                        |
-| `code` | TEXT | | Anesthesiology resident code                                                              |
-| `anesthesiology_key` | INTEGER | ✓| Foreign key linking to anesthesiology table                                               |
-| `months_anesthetic_recording` | INTEGER | | Months of anesthesiology experience at time of recording - Auto inserted                  |
-| `anesthetic_attending` | TEXT | | Anesthetist level at time of recording ('A' = Attending, 'R' = Resident) - Auto inserted  |
-
-**Primary Key**: `(recording_date, case_no)`
-
-### anesthesiology
-Table storing information about anesthesiology residents and their career progression.
-
-| Column | Type | Required | Description |
-|--------|------|----------|-------------|
-| `anesthesiology_key` | INTEGER | ✓ | Primary key, auto-increment |
-| `name` | TEXT | ✓ | Full name of the anesthesiology resident |
-| `code` | TEXT | | Short code/identifier (auto-generated: FirstInitial + LastInitial + YYMM) |
-| `anesthesiology_start_date` | TEXT | | Date when anesthesiology training started (YYYY-MM-DD) |
-| `grade_a_date` | TEXT | | Date when promoted to Grade A/Attending level |
-
-### mp4_status
-Normalized table tracking the status of exported MP4 video files for each camera per recording.
-
-| Column | Type | Required | Description |
-|--------|------|----------|-------------|
-| `recording_date` | TEXT | ✓ | Date of recording (YYYY-MM-DD format) |
-| `case_no` | INTEGER | ✓ | Case number for the recording date |
-| `camera_name` | TEXT | ✓ | Name of the camera (see Camera Configuration) |
-| `value` | INTEGER | | Status code (1=Complete, 2=Incomplete, 3=Missing) |
-| `comments` | TEXT | | Additional notes about the MP4 status |
-| `size_mb` | INTEGER | | Total size of MP4 files in megabytes |
-
-**Primary Key**: `(recording_date, case_no, camera_name)`
-
-#### MP4 value
-- **1**: At least one MP4 file >= 200MB (complete)
-- **2**: MP4 files exist but all < 200MB (incomplete)
-- **3**: No MP4 files found (missing)
-- 
-### seq_status
-Normalized table tracking the status of original SEQ sequence files for each camera per recording.
-
-| Column | Type | Required | Description |
-|--------|------|----------|-------------|
-| `recording_date` | TEXT | ✓ | Date of recording (YYYY-MM-DD format) |
-| `case_no` | INTEGER | ✓ | Case number for the recording date |
-| `camera_name` | TEXT | ✓ | Name of the camera (see Camera Configuration) |
-| `value` | INTEGER | | Status code (1=Complete, 2=Incomplete, 3=Missing) |
-| `comments` | TEXT | | Additional notes about the SEQ status |
-| `size_mb` | INTEGER | | Total size of SEQ files in megabytes |
-
-**Primary Key**: `(recording_date, case_no, camera_name)`
-
-#### SEQ value
-- **1**: At least one SEQ file > 200MB (complete)
-- **2**: SEQ files exist but all < 200MB (incomplete)
-- **3**: No SEQ files found (missing)
-
-
-
-### analysis_information
-Table for storing analysis and labeling information.
-
-| Column | Type | Required | Description |
-|--------|------|----------|-------------|
-| `recording_date` | TEXT | | Date of recording being analyzed |
-| `case_no` | INTEGER | | Case number being analyzed |
-| `label_by` | TEXT | | Person/system who performed the labeling |
-
-**Primary Key**: `(recording_date, case_no)`
-
-## Database Relationships
-
-- `recording_details.anesthesiology_key` → `anesthesiology.anesthesiology_key` (Foreign Key)
-- `mp4_status.(recording_date, case_no)` → `recording_details.(recording_date, case_no)` (Logical relationship)
-- `seq_status.(recording_date, case_no)` → `recording_details.(recording_date, case_no)` (Logical relationship)
-- `analysis_information.(recording_date, case_no)` → `recording_details.(recording_date, case_no)` (Logical relationship)
-
-## Camera Configuration
-
-The system tracks 8 camera sources:
-- Cart_Center_2
-- Cart_LT_4
-- Cart_RT_1
-- General_3
-- Monitor
-- Patient_Monitor
-- Ventilator_Monitor
-- Injection_Port
-
-
-## Database Views
-
-The system provides predefined views to simplify complex queries and highlight important conditions.
-
-### cur_mp4_missing 
-Checks if any MP4 file is **missing** (`status = 3`) **while the corresponding SEQ file exists** with status `1` (complete) or `2` (incomplete).  
-This view helps quickly identify recordings where the original SEQ file is present but the MP4 export is missing or failed.
-
-### cur_seq_missing
-Checks if any SEQ file is **missing** (`status = 3`) **while the corresponding MP4 file exists** with status `1` (complete) or `2` (incomplete).
-
-### cur_seniority
-**Purpose**: Calculates current seniority and attending status for each anesthesiology resident based on their start date.
-
-**Key Columns**:
-- `seniority_month_cur`: Months of experience from `anesthesiology_start_date` until now
-- `anesthetic_attending_cur`: Current level ('A' = Attending if >60 months, 'R' = Resident if ≤60 months)
-
-**Business Logic**:
-- Residents with >60 months (5 years) of experience are considered Attending level
-- Those with ≤60 months are considered Resident level
-- This view is used to dynamically determine current status without manual updates
-
-## Batch Export
-
-### Command-Line Batch Export
-For large-scale conversions without the web interface overhead, use the batch export script:
-
-```bash
-python run_batch_export.py
-```
-
-**Features**:
-- Export all or selected SEQ files to MP4 format
-- Choose between CLExport (with FFmpeg fallback) or FFmpeg only
-- Real-time conversion progress output
-- File size monitoring to detect stuck conversions
-- Automatic fallback if primary converter fails
-
-See `BATCH_EXPORT_GUIDE.md` for detailed usage instructions.
-
-### Database Migrations
-
-Migration scripts are provided in the `scripts/` directory for database schema updates:
-- `migrate_anesthetic_to_anesthesiology.py` - Rename anesthetic table to anesthesiology
-- `migrate_anesthetic_start_date.py` - Rename anesthetic_start_date column
-
-### Utility Scripts
-
-#### SQL to Path (sql_to_path.py)
-Query the database and get corresponding file paths for MP4 or SEQ files.
-
-**Features**:
-- Execute SQL queries and automatically resolve file paths
-- Supports both MP4 and SEQ files
-- Filter by file size directly in SQL (e.g., `size_mb >= 200`, `size_mb IS NULL`)
-- Get largest file only or all files per recording
-- Save results to CSV
-
-**Example Usage**:
-```bash
-# Find complete Monitor recordings (>= 200MB)
-python scripts/sql_to_path.py --sql "SELECT * FROM mp4_status WHERE camera_name='Monitor' AND size_mb >= 200"
-
-# Find missing MP4s (where size_mb IS NULL)
-python scripts/sql_to_path.py --sql "SELECT * FROM mp4_status WHERE size_mb IS NULL"
-
-# Get SEQ files for export
-python scripts/sql_to_path.py --sql "SELECT * FROM seq_status WHERE size_mb >= 200" --root "F:\Room_8_Data\Sequence_Backup"
-
-# Find incomplete files (< 200MB)
-python scripts/sql_to_path.py --sql "SELECT * FROM mp4_status WHERE size_mb < 200 AND size_mb IS NOT NULL"
-```
-
-**Python API**:
-```python
-from scripts.sql_to_path import get_paths
-
-# Filter by size directly in SQL
-paths = get_paths("SELECT * FROM mp4_status WHERE size_mb >= 200")
-for date, case, camera, path, size_mb in paths:
-    print(f"{date} Case{case} {camera}: {path} ({size_mb} MB)")
-```
-
-#### Update Status (update_status.py)
-Scan directories and update both `mp4_status` and `seq_status` tables
-
-#### Generate Database Diagram (sqlite_to_dbdiagram.py)
-Generate dbdiagram.io format file from the database schema
+- Database triggers automatically calculate anesthesiology experience and attending status
+- File sizes are stored in MB (largest file per camera/case)
+- 200MB threshold distinguishes complete vs incomplete recordings
+- Smart update mode prevents redundant duration calculations
+- All paths are configurable via `config.py` for easy deployment
