@@ -11,7 +11,8 @@ Filter files directly in SQL using size_mb:
 - Size range: WHERE size_mb BETWEEN 100 AND 500
 """
 
-from scripts.sql_to_path import get_paths
+from scripts.sql_to_path import get_paths, run_sql
+import sqlite3
 from config import get_seq_root
 
 # Example 1: Get MP4 files >= 200MB for Monitor cameras
