@@ -10,7 +10,7 @@ Filter files directly in SQL using size_mb:
 - Missing files: WHERE size_mb IS NULL
 - Size range: WHERE size_mb BETWEEN 100 AND 500
 """
-from scripts.fast_redact import redact_video
+from scripts.redact_video import redact_video
 from scripts.sql_to_path import get_paths
 from config import get_seq_root
 
@@ -28,5 +28,9 @@ sql_query = """
     LIMIT 20
 """
 
+path = get_paths(sql_query)
+print(path)
+print("="*60)
 
-redact_video("C:/Users/User\Desktop\DATA_23-02-06\Case1\CART_Center_2\Cart_Center_2.mp4", "0", "66")
+
+redact_video(r"C:\Users\user\Desktop\blacken\Ventilator_Monitor.mp4", "0", "5")
