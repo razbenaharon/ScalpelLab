@@ -329,9 +329,44 @@ def process_single_video_from_row(args):
 
         # Determine output file
         if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
-            base_name = os.path.splitext(os.path.basename(input_file))[0]
-            output_file = os.path.join(output_dir, f"{base_name}_redacted.mp4")
+            # Preserve directory structure: dateX/caseY/camera_name/file.mp4
+            # E.g., input: "F:\Room_8_Data\Recordings\DATA_23-02-06\Case1\Patient_Monitor\Patient_Monitor.mp4"
+            # becomes: "D:\Recordings\DATA_23-02-06\Case1\Patient_Monitor\Patient_Monitor_redacted.mp4"
+
+            input_path = os.path.normpath(input_file)
+            path_parts = input_path.split(os.sep)
+
+            # Find the relative path from "Recordings" folder onwards
+            # Look for common parent folders like "Recordings", "DATA_", or just use last 3 parts
+            relative_parts = []
+            for i, part in enumerate(path_parts):
+                if 'Recordings' in part or part.startswith('DATA_'):
+                    # Take everything from this point onwards except the filename
+                    relative_parts = path_parts[i:]
+                    break
+
+            # If we didn't find a recognizable structure, use last 3 parts (date/case/camera)
+            if not relative_parts and len(path_parts) >= 3:
+                relative_parts = path_parts[-3:]
+            elif not relative_parts:
+                relative_parts = path_parts[-1:]
+
+            # Remove "Recordings" from the path if it's there
+            if relative_parts and 'Recordings' in relative_parts[0]:
+                relative_parts = relative_parts[1:]
+
+            # Construct output path
+            if len(relative_parts) > 1:
+                # Has directory structure
+                output_subdir = os.path.join(output_dir, *relative_parts[:-1])
+                os.makedirs(output_subdir, exist_ok=True)
+                base_name = os.path.splitext(relative_parts[-1])[0]
+                output_file = os.path.join(output_subdir, f"{base_name}_redacted.mp4")
+            else:
+                # Just a filename
+                os.makedirs(output_dir, exist_ok=True)
+                base_name = os.path.splitext(relative_parts[-1])[0]
+                output_file = os.path.join(output_dir, f"{base_name}_redacted.mp4")
         else:
             base_dir = os.path.dirname(input_file) or '.'
             base_name = os.path.splitext(os.path.basename(input_file))[0]
