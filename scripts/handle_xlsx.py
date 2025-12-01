@@ -71,55 +71,55 @@ def handle_xlsx(file_name, path_col_idx=0, time_col_idx=2):
     # Ensure path column is string
     df.iloc[:, path_col_idx] = df.iloc[:, path_col_idx].astype(str)
 
-    # # --- 3. Expand Rows (Patient & Ventilator) ---
-    # print("2. Expanding rows for Patient and Ventilator files...")
-    #
-    # # Create Patient Monitor set
-    # df_patient = df.copy()
-    # # Note: Adjust the slash '/' or '\' depending on if your Excel paths already have them
-    # df_patient.iloc[:, path_col_idx] = df_patient.iloc[:, path_col_idx].apply(
-    #     lambda x: os.path.join(x, "Patient_Monitor", "Patient_Monitor.mp4")
-    # )
-    #
-    # # Create Ventilator Monitor set
-    # df_ventilator = df.copy()
-    # df_ventilator.iloc[:, path_col_idx] = df_ventilator.iloc[:, path_col_idx].apply(
-    #     lambda x: os.path.join(x, "Ventilator_Monitor", "Ventilator_Monitor.mp4")
-    # )
-    #
-    # # Combine and Sort
-    # df_final = pd.concat([df_patient, df_ventilator])
-    # df_final = df_final.sort_values(by=df_final.columns[path_col_idx])
-    # df_final = df_final.reset_index(drop=True)
-    #
-    # print(f"   -> Data expanded to {len(df_final)} rows.")
-    #
-    # # --- 4. Replace 'end' with Actual Duration ---
-    # print("3. Checking for 'end' tags and calculating durations via FFmpeg...")
-    #
-    # # Find rows where the time column is exactly "end"
-    # mask = df_final.iloc[:, time_col_idx] == 'end'
-    # rows_to_fix = df_final[mask].index
-    # total_fix = len(rows_to_fix)
-    #
-    # for i, idx in enumerate(rows_to_fix):
-    #     current_path = df_final.iloc[idx, path_col_idx]
-    #
-    #     # Progress indicator
-    #     print(f"   [{i + 1}/{total_fix}] Processing: {current_path}")
-    #
-    #     new_time = get_duration_ffmpeg(current_path)
-    #
-    #     # Update DataFrame
-    #     df_final.iloc[idx, time_col_idx] = new_time
-    #
-    # # --- 5. Result ---
-    # print("\n✅ Process Complete!")
-    # pd.set_option('display.max_rows', None)
-    # pd.set_option('display.max_colwidth', None)
-    # print(df_final)
+    # --- 3. Expand Rows (Patient & Ventilator) ---
+    print("2. Expanding rows for Patient and Ventilator files...")
 
-    return df
+    # Create Patient Monitor set
+    df_patient = df.copy()
+    # Note: Adjust the slash '/' or '\' depending on if your Excel paths already have them
+    df_patient.iloc[:, path_col_idx] = df_patient.iloc[:, path_col_idx].apply(
+        lambda x: os.path.join(x, "Patient_Monitor", "Patient_Monitor.mp4")
+    )
+
+    # Create Ventilator Monitor set
+    df_ventilator = df.copy()
+    df_ventilator.iloc[:, path_col_idx] = df_ventilator.iloc[:, path_col_idx].apply(
+        lambda x: os.path.join(x, "Ventilator_Monitor", "Ventilator_Monitor.mp4")
+    )
+
+    # Combine and Sort
+    df_final = pd.concat([df_patient, df_ventilator])
+    df_final = df_final.sort_values(by=df_final.columns[path_col_idx])
+    df_final = df_final.reset_index(drop=True)
+
+    print(f"   -> Data expanded to {len(df_final)} rows.")
+
+    # --- 4. Replace 'end' with Actual Duration ---
+    print("3. Checking for 'end' tags and calculating durations via FFmpeg...")
+
+    # Find rows where the time column is exactly "end"
+    mask = df_final.iloc[:, time_col_idx] == 'end'
+    rows_to_fix = df_final[mask].index
+    total_fix = len(rows_to_fix)
+
+    for i, idx in enumerate(rows_to_fix):
+        current_path = df_final.iloc[idx, path_col_idx]
+
+        # Progress indicator
+        print(f"   [{i + 1}/{total_fix}] Processing: {current_path}")
+
+        new_time = get_duration_ffmpeg(current_path)
+
+        # Update DataFrame
+        df_final.iloc[idx, time_col_idx] = new_time
+
+    # --- 5. Result ---
+    print("\n✅ Process Complete!")
+    pd.set_option('display.max_rows', None)
+    pd.set_option('display.max_colwidth', None)
+    print(df_final)
+
+    return df_final
 
 
 # --- CLI Support ---
