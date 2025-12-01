@@ -2,11 +2,17 @@
 Batch Video Redaction Script
 Redacts videos based on Excel file with case time ranges.
 Uses GPU-accelerated parallel processing.
+
+Features:
+- Tracks successfully processed files to avoid re-processing
+- GPU-accelerated parallel processing
+- Comprehensive reporting
 """
 
 import sys
 import os
 import time
+import json
 from datetime import datetime, timedelta
 
 # Add parent directory to path
@@ -22,15 +28,62 @@ import pandas as pd
 # ============================================================================
 CONFIG = {
     # Input Excel file path (leave empty to prompt user)
-    'XLSX_PATH': '',  # Example: 'F:/Room_8_Data/Scalpel_Raz/times.xlsx'
+    'XLSX_PATH': 'F:/Room_8_Data/Scalpel_Raz/times.xlsx',  # Example: 'F:/Room_8_Data/Scalpel_Raz/times.xlsx'
 
     # Output directory for redacted videos (leave empty for same as input)
-    'OUTPUT_DIR': '',  # Example: 'F:/Room_8_Data/Output'
+    'OUTPUT_DIR': 'D:\Recordings',  # Example: 'F:/Room_8_Data/Output'
 
     # Number of parallel workers (recommended: 6 for RTX A2000, 2-8 for other GPUs)
-    'NUM_WORKERS': 6,
+    'NUM_WORKERS': 8,
+
+    # Tracking file to store processed files (prevents re-processing)
+    'TRACKING_FILE': 'F:/Room_8_Data/Scalpel_Raz/docs/redaction_tracking.json',
 }
 # ============================================================================
+
+
+def load_tracking_data(tracking_file):
+    """Load the tracking data from JSON file."""
+    if not tracking_file or not os.path.exists(tracking_file):
+        return {'processed_files': {}}
+
+    try:
+        with open(tracking_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Warning: Could not load tracking file: {e}")
+        return {'processed_files': {}}
+
+
+def save_tracking_data(tracking_file, data):
+    """Save the tracking data to JSON file."""
+    if not tracking_file:
+        return
+
+    try:
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(tracking_file), exist_ok=True)
+
+        with open(tracking_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"Warning: Could not save tracking file: {e}")
+
+
+def update_tracking(tracking_file, input_path, output_path, status="SUCCESS"):
+    """Update tracking file with newly processed video."""
+    tracking_data = load_tracking_data(tracking_file)
+
+    # Normalize path for consistent tracking
+    normalized_path = os.path.abspath(input_path)
+
+    tracking_data['processed_files'][normalized_path] = {
+        'output_path': output_path,
+        'status': status,
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+
+    save_tracking_data(tracking_file, tracking_data)
 
 
 def main():
@@ -88,18 +141,91 @@ def main():
     print(df)
     print("="*60)
 
+    # Load tracking data
+    tracking_file = CONFIG['TRACKING_FILE']
+    tracking_data = load_tracking_data(tracking_file)
+    processed_files = tracking_data.get('processed_files', {})
+
+    # Check which files are already processed
+    already_processed = []
+    unprocessed_files = []
+
+    for idx, row in df.iterrows():
+        normalized_path = os.path.abspath(row['path'])
+        if normalized_path in processed_files:
+            already_processed.append((idx, row))
+        else:
+            unprocessed_files.append((idx, row))
+
+    # Display tracking status
+    print()
+    print("="*60)
+    print("TRACKING STATUS")
+    print("="*60)
+    print(f"Tracking file: {tracking_file}")
+    print(f"Total files in Excel: {len(df)}")
+    print(f"Already processed: {len(already_processed)}")
+    print(f"Unprocessed: {len(unprocessed_files)}")
+    print("="*60)
+
+    # Show already processed files
+    if already_processed:
+        print()
+        print("ALREADY PROCESSED FILES:")
+        print("-" * 80)
+        for idx, row in already_processed:
+            proc_info = processed_files[os.path.abspath(row['path'])]
+            timestamp = proc_info.get('timestamp', 'Unknown')
+            print(f"  {idx+1:3d}. {row['path']}")
+            print(f"       Processed: {timestamp}")
+        print("-" * 80)
+
+    # Check if we should force reprocess
+    force_reprocess = False
+    if already_processed and unprocessed_files:
+        print()
+        choice = input("Some files are already processed. Process (U)nprocessed only or (A)ll files? [U/A]: ").strip().upper()
+        if choice == 'A':
+            force_reprocess = True
+            print("Will re-process all files")
+        else:
+            print("Will process unprocessed files only")
+    elif already_processed and not unprocessed_files:
+        print()
+        print("All files have been processed!")
+        choice = input("Do you want to re-process all files? [y/N]: ").strip().lower()
+        if choice == 'y':
+            force_reprocess = True
+            print("Will re-process all files")
+        else:
+            print("Nothing to do. Exiting.")
+            return
+
+    # Filter dataframe based on tracking
+    if force_reprocess:
+        df_to_process = df
+    else:
+        if unprocessed_files:
+            unprocessed_indices = [idx for idx, _ in unprocessed_files]
+            df_to_process = df.loc[unprocessed_indices]
+        else:
+            print("No files to process!")
+            return
+
     # Display files and let user choose how many to process
-    if len(df) == 0:
+    if len(df_to_process) == 0:
         print("No files to process!")
         return
 
-    print("\nAVAILABLE FILES:")
+    print("\nFILES TO PROCESS:")
     print("-" * 80)
-    for i, row in df.iterrows():
-        print(f"  {i+1:3d}. {row['path']}")
+    file_list = []
+    for i, (idx, row) in enumerate(df_to_process.iterrows(), 1):
+        print(f"  {i:3d}. {row['path']}")
+        file_list.append((i, idx, row))
 
     print("-" * 80)
-    print(f"\nTotal: {len(df)} files")
+    print(f"\nTotal: {len(df_to_process)} files")
     print("\nHow many files do you want to process?")
     print("  1. Process ALL files")
     print("  2. Process first N files")
@@ -111,15 +237,15 @@ def main():
 
     if selection_mode == '1':
         # Process all
-        selected_df = df
-        print(f"Selected all {len(df)} files")
+        selected_df = df_to_process
+        print(f"Selected all {len(df_to_process)} files")
 
     elif selection_mode == '2':
         # Process first N
         n_input = input("How many files (from the top)? ").strip()
         try:
             n = int(n_input)
-            selected_df = df.head(n)
+            selected_df = df_to_process.head(n)
             print(f"Selected first {len(selected_df)} files")
         except ValueError:
             print("ERROR: Invalid number")
@@ -152,11 +278,14 @@ def main():
                     # Single number
                     selected_indices.add(int(part))
 
-            # Convert to dataframe rows
+            # Convert to dataframe rows using the file_list mapping
             selected_rows = []
             for idx in sorted(selected_indices):
-                if 1 <= idx <= len(df):
-                    selected_rows.append(df.iloc[idx - 1])
+                # Find the corresponding row from file_list
+                for display_num, df_idx, row in file_list:
+                    if display_num == idx:
+                        selected_rows.append(row)
+                        break
 
             selected_df = pd.DataFrame(selected_rows)
             print(f"Selected {len(selected_df)} files")
@@ -201,6 +330,22 @@ def main():
     elapsed_seconds = end_time - start_time
     elapsed_timedelta = timedelta(seconds=int(elapsed_seconds))
 
+    # Update tracking for successfully processed files
+    print("\nUpdating tracking file...")
+    for idx, row in selected_df.iterrows():
+        status = file_statuses.get(idx, "UNKNOWN")
+        if status == "SUCCESS":
+            # Find the output file from processing_report
+            output_file = None
+            for report in processing_report:
+                if report['file'] == os.path.basename(row['path']):
+                    output_file = report.get('output_file', 'Unknown')
+                    break
+
+            update_tracking(tracking_file, row['path'], output_file or 'Unknown', status="SUCCESS")
+
+    print(f"Tracking updated: {success_count} files marked as processed")
+
     # Build summary text
     summary_lines = []
     summary_lines.append("="*80)
@@ -228,6 +373,12 @@ def main():
     summary_lines.append("")
     summary_lines.append(f"OUTPUT:")
     summary_lines.append(f"  Directory:       {output_dir or 'Same as input files'}")
+    summary_lines.append("")
+    summary_lines.append("TRACKING:")
+    summary_lines.append(f"  Tracking file:   {tracking_file}")
+    summary_lines.append(f"  Previously done: {len(already_processed)}")
+    summary_lines.append(f"  Newly processed: {success_count}")
+    summary_lines.append(f"  Total tracked:   {len(already_processed) + success_count}")
     summary_lines.append("="*80)
     summary_lines.append("")
     summary_lines.append("PROCESSED FILES:")
@@ -322,6 +473,18 @@ def main():
         print(f"\nSummary exported to: {summary_path}")
     except Exception as e:
         print(f"\nWarning: Could not export summary to file: {e}")
+
+    # Final tracking information
+    print()
+    print("="*60)
+    print("TRACKING INFO")
+    print("="*60)
+    print(f"Tracking file: {tracking_file}")
+    print(f"Total tracked files: {len(already_processed) + success_count}")
+    print()
+    print("Next run will automatically skip already processed files.")
+    print("To re-process files, choose 'All files' when prompted.")
+    print("="*60)
 
 
 if __name__ == "__main__":
