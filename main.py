@@ -10,9 +10,13 @@ Filter files directly in SQL using size_mb:
 - Missing files: WHERE size_mb IS NULL
 - Size range: WHERE size_mb BETWEEN 100 AND 500
 """
-from scripts.redact_video import redact_video
+from scripts.redact_video import redact_video, redact_videos_from_df
 from scripts.sql_to_path import get_paths
 from config import get_seq_root
+from handle_xlsx import handle_xlsx
+import pandas as pd
+
+
 
 # Example 1: Get MP4 files >= 200MB for Monitor cameras
 print("="*60)
@@ -33,4 +37,16 @@ print(path)
 print("="*60)
 
 
-redact_video(r"C:\Users\user\Desktop\blacken\Ventilator_Monitor.mp4", "0", "5")
+
+
+
+
+
+
+# Batch video redaction (RTX A2000 optimized: 6 workers)
+__import__('subprocess').run(["python", "scripts/batch_redact.py", r"C:\Users\user\Desktop\blacken\times.xlsx", r"C:\Users\user\Desktop\blacken\output", "8a"])
+
+
+
+
+

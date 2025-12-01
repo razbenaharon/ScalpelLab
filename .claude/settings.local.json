@@ -33,7 +33,9 @@
       "Bash(timeout /t 10)",
       "Bash(kill:*)",
       "Bash(xargs:*)",
-      "Bash(nul)"
+      "Bash(nul)",
+      "Bash(echo:*)",
+      "Bash(nvidia-smi:*)"
     ],
     "deny": [],
     "ask": []
