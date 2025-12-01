@@ -35,7 +35,9 @@
       "Bash(xargs:*)",
       "Bash(nul)",
       "Bash(echo:*)",
-      "Bash(nvidia-smi:*)"
+      "Bash(nvidia-smi:*)",
+      "Bash(test:*)",
+      "Bash(jobs:*)"
     ],
     "deny": [],
     "ask": []
