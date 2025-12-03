@@ -37,7 +37,11 @@
       "Bash(echo:*)",
       "Bash(nvidia-smi:*)",
       "Bash(test:*)",
-      "Bash(jobs:*)"
+      "Bash(jobs:*)",
+      "Bash(git stash pop:*)",
+      "Bash(git stash drop:*)",
+      "Bash(git reset:*)",
+      "Bash(git restore:*)"
     ],
     "deny": [],
     "ask": []

@@ -269,16 +269,16 @@ def process_single_video_from_row(args):
                 output_subdir = os.path.join(output_dir, *relative_parts[:-1])
                 os.makedirs(output_subdir, exist_ok=True)
                 base_name = os.path.splitext(relative_parts[-1])[0]
-                output_file = os.path.join(output_subdir, f"{base_name}_redacted.mp4")
+                output_file = os.path.join(output_subdir, f"{base_name}.mp4")
             else:
                 # Just a filename
                 os.makedirs(output_dir, exist_ok=True)
                 base_name = os.path.splitext(relative_parts[-1])[0]
-                output_file = os.path.join(output_dir, f"{base_name}_redacted.mp4")
+                output_file = os.path.join(output_dir, f"{base_name}.mp4")
         else:
             base_dir = os.path.dirname(input_file) or '.'
             base_name = os.path.splitext(os.path.basename(input_file))[0]
-            output_file = os.path.join(base_dir, f"{base_name}_redacted.mp4")
+            output_file = os.path.join(base_dir, f"{base_name}.mp4")
 
         print(f"\nOutput: {output_file}")
         print(f"\nProcessing with GPU acceleration...")
