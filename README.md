@@ -146,8 +146,9 @@ Scans file directories and updates database with current file status. Features:
 - Shows detailed diff before applying changes
 
 **`sql_to_path.py`** - Database Query to File Paths
+
 ```python
-from scripts.sql_to_path import get_paths
+from scripts.helpers.sql_to_path import get_paths
 
 # Query database and get actual file paths
 paths = get_paths("SELECT * FROM mp4_status WHERE size_mb >= 200 AND camera_name='Monitor'")
