@@ -68,7 +68,7 @@ Tracks anesthesiology residents and career progression.
 | `grade_a_date` | TEXT | Promotion to Attending date |
 
 #### `mp4_status` - MP4 File Tracking
-Tracks exported MP4 video files with size and duration.
+Tracks exported MP4 video files with size, duration, and black segment information.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -77,8 +77,12 @@ Tracks exported MP4 video files with size and duration.
 | `camera_name` | TEXT | Camera identifier - **Primary Key** |
 | `size_mb` | INTEGER | Largest file size in MB |
 | `duration_minutes` | REAL | Video duration in minutes |
+| `pre_black_segment` | REAL | Black time before case (minutes) |
+| `post_black_segment` | REAL | Black time after case (minutes) |
 
 **Status Logic**: `size_mb >= 200` = Complete, `< 200` = Incomplete, `NULL` = Missing
+
+**Black Segments**: Automatically calculated during batch redaction to track non-case time periods.
 
 #### `seq_status` - SEQ File Tracking
 Tracks original SEQ sequence files.
@@ -159,6 +163,28 @@ Converts database queries into actual filesystem paths. Useful for:
 - Finding specific recordings by criteria
 
 ### Video Editing
+
+**`batch_redact.py`** - GPU-Accelerated Batch Video Redaction
+```bash
+python scripts/batch_redact.py
+```
+Processes multiple videos based on Excel file with case time ranges. Features:
+- **GPU-accelerated parallel processing** (NVIDIA NVENC with CPU fallback)
+- **Smart tracking system** - Automatically skips already processed files
+- **Real-time database updates** - Updates `mp4_status` table after each video completes
+- **Interactive file selection** - Process all, first N, or specific files by range
+- **Case-based redaction**:
+  - During case times: Small corner box (1/3 width × 1/2 height, bottom-right)
+  - Between/outside cases: Full screen black
+- **Auto-trimming** - Removes footage > 1 hour after last case
+- **Black segment calculation** - Automatically calculates and stores pre/post black times:
+  - **First case pre**: Time from 00:00:00 to case start
+  - **Between cases**: Gap time split equally (e.g., 30min gap = 15min post + 15min pre)
+  - **Last case post**: Time from case end to min(video end, case end + 1 hour)
+- **Comprehensive reporting** - Detailed summary with timing, statistics, and case breakdowns
+- **Resume capability** - Interrupted batches can continue from where they left off
+
+**Excel Format**: Columns for video path, `start time - case N`, `end time - case N`
 
 **`cut_video.py`** - Video Segment Extractor
 ```bash
@@ -242,18 +268,23 @@ ScalpelLab/
 │       ├── 2_Status_Summary.py     # Statistics dashboard
 │       └── 3_Views.py              # Database views interface
 ├── scripts/
+│   ├── batch_redact.py             # GPU batch video redaction (all-in-one)
 │   ├── batch_export.py             # GPU video converter
 │   ├── update_status.py            # File status scanner
-│   ├── sql_to_path.py              # Query to file path resolver
 │   ├── cut_video.py                # Video segment extractor
 │   ├── copy_with_structure.py      # Structured file copier
 │   ├── sqlite_to_dbdiagram.py      # Schema diagram generator
-│   └── compare_databases.py        # Database diff tool
+│   ├── compare_databases.py        # Database diff tool
+│   └── helpers/
+│       ├── __init__.py             # Package initializer
+│       ├── handle_xlsx.py          # Excel file processor
+│       └── sql_to_path.py          # Query to file path resolver
 ├── multiMPV/
 │   └── multiMPV.py                 # Multi-camera video player
 ├── docs/
 │   ├── ERD.pdf                     # Entity relationship diagram
-│   └── scalpel_dbdiagram.txt       # Database schema definition
+│   ├── scalpel_dbdiagram.txt       # Database schema definition
+│   └── redaction_tracking.json     # Batch redaction tracking file
 ├── config.py                       # Path configuration (EDIT THIS)
 ├── run_app.py                      # Streamlit launcher
 ├── run_batch_export.py             # Batch export launcher
@@ -283,6 +314,16 @@ ScalpelLab/
 3. Run `python multiMPV/multiMPV.py` and select videos
 4. Use synchronized playback to review all camera angles
 
+### Batch Video Redaction
+1. Create Excel file with columns: `path`, `start time - case 1`, `end time - case 1`, etc.
+2. Configure paths in `scripts/batch_redact.py` CONFIG section (or use command-line args)
+3. Run `python scripts/batch_redact.py`
+4. Select files to process (all, first N, or specific ranges)
+5. Monitor parallel GPU processing - database updates happen after each video
+6. Review summary report with timing statistics and black segment analysis
+7. **Automatic tracking** - Next run will skip already processed videos
+8. Check `mp4_status` table for updated `pre_black_segment` and `post_black_segment` values
+
 ### Extracting Video Segments
 1. Identify target recordings via database query
 2. Run `python scripts/cut_video.py` (interactive or batch mode)
@@ -294,9 +335,12 @@ ScalpelLab/
 ## Requirements
 
 - **Python**: 3.7 or higher
-- **Required packages**: `streamlit`, `pandas`, `PyMuPDF`, `pillow`
+- **Required packages**:
+  - Core: `streamlit`, `pandas`, `PyMuPDF`, `pillow`
+  - Video processing: `openpyxl` (for Excel file handling)
+  - Install all: `pip install streamlit pandas PyMuPDF pillow openpyxl`
 - **Optional tools**:
-  - FFmpeg with NVENC support (for GPU video export)
+  - FFmpeg with NVENC support (for GPU video export and redaction)
   - CLExport (NorPix) (fallback converter)
   - MPV player (for multi-camera playback)
   - ffprobe (for video duration calculation)
@@ -310,3 +354,8 @@ ScalpelLab/
 - 200MB threshold distinguishes complete vs incomplete recordings
 - Smart update mode prevents redundant duration calculations
 - All paths are configurable via `config.py` for easy deployment
+- **Batch redaction**:
+  - Processes videos in parallel using GPU acceleration (up to 8 concurrent workers)
+  - Automatically calculates and stores black segment times in database
+  - Tracking system prevents re-processing and enables resume capability
+  - Database updates occur immediately after each video (not after entire batch)
