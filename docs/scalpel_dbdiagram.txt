@@ -1,4 +1,4 @@
-//// ScalpelLab Database, exported 2025-11-05
+//// ScalpelLab Database, exported 2025-12-03
 //// Paste into https://dbdiagram.io
 
 //// System table from SQLite. Usually not modeled, included here for completeness.
@@ -40,7 +40,9 @@ Table mp4_status {
   case_no            int [pk]
   camera_name        varchar [pk]
   size_mb            int
-  duration_seconds   decimal
+  duration_minutes   decimal
+  pre_black_segment  decimal
+  post_black_segment decimal
   Note: 'MP4 export status per camera, 1..n semantics driven by your app'
 }
 
