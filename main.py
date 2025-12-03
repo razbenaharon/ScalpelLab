@@ -10,13 +10,7 @@ Filter files directly in SQL using size_mb:
 - Missing files: WHERE size_mb IS NULL
 - Size range: WHERE size_mb BETWEEN 100 AND 500
 """
-from scripts.redact_video import redact_video, redact_videos_from_df
-from scripts.sql_to_path import get_paths
-from config import get_seq_root
-from handle_xlsx import handle_xlsx
-import pandas as pd
-
-
+from scripts.helpers.sql_to_path import get_paths
 
 # Example 1: Get MP4 files >= 200MB for Monitor cameras
 print("="*60)
