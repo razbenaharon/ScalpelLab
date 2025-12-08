@@ -41,7 +41,9 @@
       "Bash(git stash pop:*)",
       "Bash(git stash drop:*)",
       "Bash(git reset:*)",
-      "Bash(git restore:*)"
+      "Bash(git restore:*)",
+      "Bash(del \"F:\\Room_8_Data\\Scalpel_Raz\\scripts\\extract_multi_case_dates.py\")",
+      "Bash(del \"F:\\Room_8_Data\\Scalpel_Raz\\multi_case_dates_20251203_143204.csv\")"
     ],
     "deny": [],
     "ask": []
