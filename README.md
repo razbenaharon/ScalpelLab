@@ -165,7 +165,7 @@ Converts database queries into actual filesystem paths. Useful for:
 
 **`batch_redact.py`** - GPU-Accelerated Batch Video Redaction
 ```bash
-python scripts/batch_redact.py
+python scripts/batch_blacken.py
 ```
 Processes multiple videos based on Excel file with case time ranges. Features:
 - **GPU-accelerated parallel processing** (NVIDIA NVENC with CPU fallback)
