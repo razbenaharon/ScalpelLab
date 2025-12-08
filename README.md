@@ -122,10 +122,9 @@ Stores labeling and analysis information per case.
 
 ### Video Conversion
 
-**`batch_export.py`** - GPU-Accelerated Batch Video Export
+**`batch_convert.py`** - GPU-Accelerated Batch Video Conversion
 ```bash
-python scripts/batch_export.py
-# or: python run_batch_export.py
+python scripts/batch_convert.py
 ```
 Exports SEQ files to MP4 using GPU (NVIDIA NVENC) with CLExport fallback. Features:
 - Interactive file selection (all, first N, or specific files)
@@ -269,7 +268,7 @@ ScalpelLab/
 │       └── 3_Views.py              # Database views interface
 ├── scripts/
 │   ├── batch_redact.py             # GPU batch video redaction (all-in-one)
-│   ├── batch_export.py             # GPU video converter
+│   ├── batch_convert.py            # GPU video converter
 │   ├── update_status.py            # File status scanner
 │   ├── cut_video.py                # Video segment extractor
 │   ├── copy_with_structure.py      # Structured file copier
@@ -287,9 +286,7 @@ ScalpelLab/
 │   └── redaction_tracking.json     # Batch redaction tracking file
 ├── config.py                       # Path configuration (EDIT THIS)
 ├── run_app.py                      # Streamlit launcher
-├── run_batch_export.py             # Batch export launcher
 ├── main.py                         # sql_to_path usage examples
-├── BATCH_EXPORT_GUIDE.md           # Batch export documentation
 └── ScalpelDatabase.sqlite          # SQLite database file
 ```
 
@@ -303,7 +300,7 @@ ScalpelLab/
 3. Insert recording metadata via web interface or SQL
 
 ### Exporting Videos
-1. Run `python run_batch_export.py`
+1. Run `python scripts/batch_convert.py`
 2. Select files to export (all, range, or specific)
 3. Monitor GPU conversion progress
 4. Run `python scripts/update_status.py` to update MP4 status
