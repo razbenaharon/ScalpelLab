@@ -823,37 +823,18 @@ def main():
             print(f"       Processed: {timestamp}")
         print("-" * 80)
 
-    # Check if we should force reprocess
-    force_reprocess = False
-    if already_processed and unprocessed_files:
+    # Always process only unprocessed files (no prompt)
+    if not unprocessed_files:
         print()
-        choice = input("Some files are already processed. Process (U)nprocessed only or (A)ll files? [U/A]: ").strip().upper()
-        if choice == 'A':
-            force_reprocess = True
-            print("Will re-process all files")
-        else:
-            print("Will process unprocessed files only")
-    elif already_processed and not unprocessed_files:
-        print()
-        print("All files have been processed!")
-        choice = input("Do you want to re-process all files? [y/N]: ").strip().lower()
-        if choice == 'y':
-            force_reprocess = True
-            print("Will re-process all files")
-        else:
-            print("Nothing to do. Exiting.")
-            return
+        print("All files have been processed! Nothing to do.")
+        print("If you want to re-process files, manually delete entries from tracking file.")
+        return
 
-    # Filter dataframe based on tracking
-    if force_reprocess:
-        df_to_process = df
-    else:
-        if unprocessed_files:
-            unprocessed_indices = [idx for idx, _ in unprocessed_files]
-            df_to_process = df.loc[unprocessed_indices]
-        else:
-            print("No files to process!")
-            return
+    # Filter dataframe to only unprocessed files
+    print()
+    print("Processing unprocessed files only (skipping already processed files)")
+    unprocessed_indices = [idx for idx, _ in unprocessed_files]
+    df_to_process = df.loc[unprocessed_indices]
 
     # Display files and let user choose how many to process
     if len(df_to_process) == 0:
