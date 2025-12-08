@@ -68,6 +68,9 @@ def handle_xlsx(file_name, path_col_idx=0, time_col_idx=2):
     # Remove completely blank rows
     df = df.dropna(how='all')
 
+    # Remove rows where path column is NaN/empty
+    df = df[df.iloc[:, path_col_idx].notna()]
+
     # Ensure path column is string
     df.iloc[:, path_col_idx] = df.iloc[:, path_col_idx].astype(str)
 
@@ -114,7 +117,7 @@ def handle_xlsx(file_name, path_col_idx=0, time_col_idx=2):
         df_final.iloc[idx, time_col_idx] = new_time
 
     # --- 5. Result ---
-    print("\n✅ Process Complete!")
+    print("\n[OK] Process Complete!")
     pd.set_option('display.max_rows', None)
     pd.set_option('display.max_colwidth', None)
     print(df_final)

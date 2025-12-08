@@ -1,673 +1,737 @@
 """
-Batch Export Script - FFmpeg GPU with CLExport Fallback
-Exports SEQ files to MP4 using GPU-accelerated FFmpeg
-Falls back to CLExport if GPU encoding fails
-Much more stable for large batches
+Batch Export Script - Sequence Curator
+Organizes and exports SEQ files from source to destination.
+Acts as a CLI replacement for the previous GUI curator.
 """
 
-import sqlite3
-import subprocess
-import sys
 import os
+import sys
+import shutil
 import time
-import threading
+import datetime
+import json
+import logging
+import traceback
+import hashlib
+import re
+import psutil
 from pathlib import Path
-from datetime import datetime
-from typing import Dict, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Add parent directory to path to import config
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import get_db_path, get_seq_root, get_mp4_root, DEFAULT_CAMERAS
+from config import get_seq_root, DEFAULT_CAMERAS
 
-# Configuration (from config.py)
-DB_PATH = get_db_path()
-SEQ_ROOT = get_seq_root()
-OUT_ROOT = get_mp4_root()
+# Minimum file size for a valid case (in bytes)
+MIN_SEQ_SIZE = 200 * 1024 * 1024  # 200MB
 
-# FFmpeg possible locations
-FFMPEG_PATHS = [
-    r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
-    r"C:\ffmpeg\bin\ffmpeg.exe",
-    r"C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe",
-    "ffmpeg",  # Try from PATH
-]
+# File extensions to include
+COMPANION_EXTS = ['.seq', '.seq.metadata', '.seq.idx', '.xml', '.aud']
 
-MIN_VALID_FILE_SIZE_MB = 1.0  # Minimum size for valid MP4 file
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 # =========================
-# Utility Functions
+# Core Logic Functions
 # =========================
-def find_ffmpeg():
-    """Find ffmpeg executable in common locations or PATH"""
-    for path in FFMPEG_PATHS:
-        if path == "ffmpeg":
-            # Try from PATH
+
+def get_file_date(file_path):
+    """Get the date (yy-mm-dd) from file modification time only."""
+    t = os.path.getmtime(file_path)
+    date = time.strftime('%y-%m-%d', time.localtime(t))
+    return date
+
+
+def extract_date_from_filename(fname):
+    """
+    Extracts a date string in yy-mm-dd format from the filename.
+    Supports:
+    - yyyy-mm-dd_hh-mm-ss
+    - mm-dd-yy_hh-mm-ss(.sss)?
+    Returns: 'yy-mm-dd' (2-digit year, 2-digit month, 2-digit day)
+    """
+    base = fname.split('.')[0]
+    # yyyy-mm-dd_hh-mm-ss
+    m = re.match(r'(\d{4})-(\d{2})-(\d{2})_\d{2}-\d{2}-\d{2}', base)
+    if m:
+        year = int(m.group(1)) % 100  # last two digits
+        return f'{year:02d}-{m.group(2)}-{m.group(3)}'
+    # mm-dd-yy_hh-mm-ss(.sss)?
+    m = re.match(r'(\d{2})-(\d{2})-(\d{2})_\d{2}-\d{2}-\d{2}', base)
+    if m:
+        return f'{m.group(3)}-{m.group(1)}-{m.group(2)}'
+    return None
+
+
+def find_orphaned_companion_files(root_dir, log_callback=None):
+    """
+    Find companion files that don't have corresponding .seq files.
+    Returns a dict: { file_type: [Path, ...] }
+    """
+    orphaned_files = {}
+    root_path = Path(root_dir)
+    
+    msg = f"Scanning for orphaned companion files in: {root_path}"
+    if log_callback:
+        log_callback(msg)
+    logger.info(msg)
+    
+    # Find all companion files
+    for ext in COMPANION_EXTS:
+        if ext == '.seq':  # Skip .seq files themselves
+            continue
+            
+        orphaned_files[ext] = []
+        for comp_path in root_path.rglob(f"*{ext}"):
+            # Check if corresponding .seq file exists
+            base = comp_path.with_suffix('')
+            seq_path = base.with_suffix('.seq')
+            
+            if not seq_path.exists():
+                orphaned_files[ext].append(comp_path)
+    
+    return orphaned_files
+
+
+def copy_orphaned_files(orphaned_files, dest_root, source_root, progress_callback=None):
+    """
+    Copy orphaned companion files to an 'orphaned_files' folder in the destination.
+    Returns (successful_copies, failed_copies, orphaned_operations)
+    """
+    def log_with_time(msg):
+        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        if progress_callback:
+            progress_callback(0, 1, f"[{timestamp}] {msg}")
+        logger.info(msg)
+    
+    orphaned_dir = Path(dest_root) / "orphaned_files"
+    orphaned_dir.mkdir(exist_ok=True)
+    
+    # Create file operations for orphaned files
+    orphaned_operations = []
+    total_orphaned = sum(len(files) for files in orphaned_files.values())
+    
+    if total_orphaned == 0:
+        return 0, 0, []
+    
+    log_with_time(f"Preparing to copy {total_orphaned} orphaned files...")
+    
+    for file_type, files in orphaned_files.items():
+        type_dir = orphaned_dir / file_type.lstrip('.')  # Remove leading dot
+        type_dir.mkdir(exist_ok=True)
+        
+        for file_path in files:
+            # Create destination path preserving original directory structure
+            # Get relative path from the source root (where orphaned files were found)
             try:
-                result = subprocess.run(
-                    ["where" if os.name == 'nt' else "which", "ffmpeg"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
-                )
-                if result.returncode == 0:
-                    ffmpeg_path = result.stdout.strip().split('\n')[0]
-                    if os.path.exists(ffmpeg_path):
-                        return ffmpeg_path
-            except Exception:
-                pass
-        else:
-            if os.path.exists(path):
-                return path
-    return None
-
-
-def is_valid_video_file(file_path: Path, min_size_mb: float = MIN_VALID_FILE_SIZE_MB) -> bool:
-    """Check if video file exists and has reasonable size."""
-    if not file_path.exists():
-        return False
-    try:
-        size_mb = file_path.stat().st_size / (1024 * 1024)
-        return size_mb > min_size_mb
-    except:
-        return False
-
-
-def get_next_available_filename(out_dir: Path, base_stem: str, extension: str) -> Tuple[str, Path]:
-    """Get next available filename that doesn't exist."""
-    # First try without counter
-    filename = f"{base_stem}{extension}"
-    file_path = out_dir / filename
-
-    if not file_path.exists():
-        return filename, file_path
-
-    # Try with counter
-    counter = 1
-    while counter < 1000:  # Safety limit
-        filename = f"{base_stem}_{counter}{extension}"
-        file_path = out_dir / filename
-        if not file_path.exists():
-            return filename, file_path
-        counter += 1
-
-    raise ValueError(f"Could not find available filename for {base_stem} after 1000 attempts")
-
-
-def resolve_channel_label(seq_path: Path, channel_names: Dict[str, str]) -> str:
-    """
-    Choose the output base name using mapping (stem -> filename -> fullpath -> parent name),
-    falling back to parent folder name or stem.
-    """
-    stem = seq_path.stem
-    name = seq_path.name
-    full = str(seq_path.resolve())
-    parent_name = seq_path.parent.name if seq_path.parent else ""
-
-    return (
-            channel_names.get(stem)
-            or channel_names.get(name)
-            or channel_names.get(full)
-            or channel_names.get(parent_name)
-            or parent_name
-            or stem
+                rel_path = file_path.relative_to(Path(source_root))
+            except ValueError:
+                # If the file is not in the expected source structure, use just the filename
+                rel_path = Path(file_path.name)
+            
+            dest_path = orphaned_dir / rel_path
+            
+            # Ensure destination directory exists
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            operation = {
+                'source_path': str(file_path),
+                'destination_path': str(dest_path),
+                'file_size': file_path.stat().st_size,
+                'file_type': file_type,
+                'status': 'pending',
+                'error_message': None,
+                'hash_verification': None
+            }
+            
+            orphaned_operations.append(operation)
+    
+    # Copy orphaned files using the same threading approach
+    log_with_time(f"Copying orphaned files with 8 workers...")
+    successful_copies, failed_copies = copy_files_with_threads(
+        {'file_operations': orphaned_operations}, 8, progress_callback
     )
+    
+    log_with_time(f"Orphaned files copy completed: {successful_copies} successful, {failed_copies} failed")
+    
+    return successful_copies, failed_copies, orphaned_operations
 
 
-def compute_out_dir(seq_path: Path, out_root_path: Path) -> Path:
+def find_sequences_with_pathlib(root_dir, log_callback=None):
     """
-    Decide where to write the output.
-    - If the input path includes a DATA_* anchor, mirror from there.
-    - Otherwise, fall back to DATA_Unknown/CaseUnknown/<Channel>.
+    Use pathlib to recursively find all .seq files and their companions in root_dir.
+    Returns a list of dicts: { 'seq': Path, 'companions': [Path, ...], 'size': int, 'date': str, 'channel': str, 'timestamp': str }
     """
-    parts = seq_path.parts
-    anchor_idx = None
-    for i, part in enumerate(parts):
-        if part.upper().startswith("DATA_"):
-            anchor_idx = i
-            break
-
-    if anchor_idx is not None:
-        rel_from_data = Path(*parts[anchor_idx:])
-        out_dir = out_root_path / rel_from_data.parent
-    else:
-        channel = seq_path.parent.name if seq_path.parent else "ChannelUnknown"
-        case = seq_path.parent.parent.name if seq_path.parent and seq_path.parent.parent else "CaseUnknown"
-        date = seq_path.parent.parent.parent.name if seq_path.parent and seq_path.parent.parent and seq_path.parent.parent.parent else "DATA_Unknown"
-        if not str(date).upper().startswith("DATA_"):
-            date = "DATA_Unknown"
-        out_dir = out_root_path / str(date) / str(case) / str(channel)
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    return out_dir
-
-
-# =========================
-# Database Functions
-# =========================
-def connect_db(db_path):
-    """Connect to SQLite database."""
-    return sqlite3.connect(db_path)
-
-
-def get_missing_mp4_files(db_path, cameras=None, limit=None):
-    """
-    Get all SEQ files that don't have MP4s.
-
-    Args:
-        db_path: Path to database
-        cameras: List of camera names to filter (None = all)
-        limit: Maximum number of files to return (None = all)
-
-    Returns:
-        List of dicts with file info
-    """
-    if cameras is None:
-        cameras = DEFAULT_CAMERAS
-
-    conn = connect_db(db_path)
-    cursor = conn.cursor()
-
-    query = """
-    SELECT
-        s.recording_date,
-        s.case_no,
-        s.camera_name,
-        s.size_mb as seq_size_mb
-    FROM seq_status s
-    LEFT JOIN mp4_status m
-        ON s.recording_date = m.recording_date
-        AND s.case_no = m.case_no
-        AND s.camera_name = m.camera_name
-    WHERE
-        s.camera_name IN ({})
-        AND s.size_mb >= 200  -- Only valid SEQ files
-        AND (m.size_mb IS NULL OR m.size_mb < 1)  -- Missing or invalid MP4
-    ORDER BY s.recording_date DESC, s.case_no, s.camera_name
-    """.format(','.join(['?'] * len(cameras)))
-
-    if limit:
-        query += f" LIMIT {limit}"
-
-    cursor.execute(query, cameras)
-
-    files = []
-    for row in cursor.fetchall():
-        files.append({
-            'recording_date': row[0],
-            'case_no': row[1],
-            'camera_name': row[2],
-            'seq_size_mb': row[3]
-        })
-
-    conn.close()
-    return files
-
-
-def build_seq_path(recording_date, case_no, camera_name):
-    """Build the path to the .seq file."""
-    yy = recording_date[2:4]
-    mm = recording_date[5:7]
-    dd = recording_date[8:10]
-    data_folder = f"DATA_{yy}-{mm}-{dd}"
-    case_folder = f"Case{case_no}"
-
-    seq_path = Path(SEQ_ROOT) / data_folder / case_folder / camera_name
-
-    # Find the first .seq file
-    seq_files = list(seq_path.glob("*.seq"))
-    if seq_files:
-        return seq_files[0]
-    return None
-
-
-def find_clexport():
-    """Find CLExport.exe in common locations."""
-    CLEXPORT_PATHS = [
-        r"C:\Program Files\NorPix\BatchProcessor\CLExport.exe",
-        r"C:\Program Files (x86)\NorPix\BatchProcessor\CLExport.exe",
-        r"C:\NorPix\BatchProcessor\CLExport.exe",
-    ]
-    for path in CLEXPORT_PATHS:
-        if os.path.exists(path):
-            return path
-    return None
-
-
-def monitor_file_growth(out_path, process, timeout=15, check_interval=5):
-    """
-    Monitor if output file is growing. Kill process if stuck at any size for too long.
-
-    Args:
-        out_path: Path to output file
-        process: Subprocess to monitor
-        timeout: How long (seconds) to wait before killing if file size doesn't change
-        check_interval: How often (seconds) to check file size
-
-    Returns:
-        True if file completed successfully, False if stuck
-    """
-    elapsed = 0
-    last_size = 0
-    stuck_time = 0
-    file_created = False
-
-    while process.poll() is None:  # While process is running
-        time.sleep(check_interval)
-        elapsed += check_interval
-
-        # Check if file exists and get size
-        if out_path.exists():
-            current_size = out_path.stat().st_size
-            size_mb = current_size / (1024*1024)
-
-            if not file_created:
-                print(f"    [Monitor] ✓ File created: {size_mb:.2f} MB")
-                file_created = True
-                last_size = current_size
-                stuck_time = 0
-            elif current_size == last_size:
-                # File size hasn't changed
-                stuck_time += check_interval
-                print(f"    [Monitor] File size unchanged: {size_mb:.2f} MB (stuck for {stuck_time}s)")
-
-                # If stuck for too long, kill the process
-                if stuck_time >= timeout:
-                    print(f"    [Monitor] ❌ File stuck at {size_mb:.2f} MB for {timeout}s - killing process")
-                    process.kill()
-                    return False
-            else:
-                # File is growing
-                growth = (current_size - last_size) / (1024*1024)
-                print(f"    [Monitor] Progress: {size_mb:.2f} MB (+{growth:.2f} MB)")
-                last_size = current_size
-                stuck_time = 0  # Reset stuck timer
-        else:
-            # File doesn't exist yet
-            print(f"    [Monitor] Waiting for output file... ({elapsed}s)")
-            if elapsed >= timeout:
-                print(f"    [Monitor] ❌ Output file not created after {timeout}s - killing process")
-                process.kill()
-                return False
-
-    # Process finished, check final result
-    if out_path.exists() and out_path.stat().st_size > 0:
-        final_size = out_path.stat().st_size / (1024*1024)
-        print(f"    [Monitor] ✓ Conversion complete - Final size: {final_size:.2f} MB")
-        return True
-    return False
-
-
-def export_file(seq_path, out_path, use_ffmpeg=True, codec="mp4"):
-    """
-    Export a single SEQ file to MP4.
-
-    Args:
-        seq_path: Path to .seq file
-        out_path: Path to output .mp4 file
-        use_ffmpeg: True for FFmpeg (GPU), False for CLExport
-        codec: Codec for CLExport (mp4 or mjpeg)
-
-    Returns:
-        (success, message)
-    """
-    try:
-        if use_ffmpeg:
-            # GPU encoding using NVIDIA NVENC - optimized for smaller file size
-            ffmpeg_path = find_ffmpeg()
-            if not ffmpeg_path:
-                return False, "ffmpeg.exe not found"
-
-            cmd = [
-                ffmpeg_path,
-                "-y",
-                "-hwaccel", "cuda",
-                "-r", "30",
-                "-i", str(seq_path),
-                "-c:v", "h264_nvenc",
-                "-preset", "p6",  # Higher preset for better compression (p1=fastest, p7=slowest/best compression)
-                "-rc", "vbr",  # Variable bitrate mode
-                "-cq", "28",  # Quality level (higher = lower quality = smaller size)
-                "-b:v", "2M",  # Target bitrate
-                "-maxrate", "3M",  # Max bitrate
-                "-bufsize", "3M",  # Buffer size
-                "-profile:v", "high",
-                "-pix_fmt", "yuv420p",
-                str(out_path)
-            ]
-
-            # Run FFmpeg with real-time output
-            print(f"  Running: {' '.join(cmd[:3])} ... (GPU-accelerated)")
-            print(f"  --- Output from FFmpeg ---")
-
-            # Use Popen for real-time output
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True,
-                bufsize=1  # Line-buffered
-            )
-
-            # Print output in real-time
-            for line in iter(process.stdout.readline, ''):
-                if line:
-                    print(f"  {line.rstrip()}")
-
-            # Wait for process to complete
-            process.wait()
-            print(f"  --- End Output ---")
-
-            # Check if successful
-            if process.returncode == 0 and is_valid_video_file(out_path):
-                size_mb = out_path.stat().st_size / (1024 * 1024)
-                return True, f"Success - GPU ({size_mb:.1f} MB)"
-            else:
-                return False, f"GPU encoding failed with code {process.returncode}"
-
-        else:
-            # CLExport with file size monitoring
-            clexport_path = find_clexport()
-            if not clexport_path:
-                return False, "CLExport.exe not found"
-
-            out_dir = out_path.parent
-            out_filename = out_path.stem
-
-            cmd = [
-                clexport_path,
-                "-i", str(seq_path),
-                "-o", str(out_dir),
-                "-of", out_filename,
-                "-f", codec
-            ]
-
-            # Run CLExport with monitoring
-            print(f"  Running: {' '.join(cmd[:3])} ... {cmd[-1]}")
-            print(f"  --- Output from CLExport ---")
-
-            # Delete output file if it exists (to ensure clean start)
-            if out_path.exists():
-                out_path.unlink()
-
-            # Start process
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True
-            )
-
-            # Start monitoring thread
-            monitor_result = [None]  # Use list to share result between threads
-
-            def monitor_thread():
-                monitor_result[0] = monitor_file_growth(out_path, process, timeout=15, check_interval=5)
-
-            monitor = threading.Thread(target=monitor_thread, daemon=True)
-            monitor.start()
-
-            # Wait for process and collect output
-            stdout, _ = process.communicate()
-
-            # Wait for monitor thread to finish
-            monitor.join(timeout=2)
-
-            # Print the output
-            if stdout:
-                for line in stdout.splitlines():
-                    print(f"  {line}")
-            print(f"  --- End Output ---")
-
-            # Check results
-            file_was_growing = monitor_result[0]
-
-            if not file_was_growing:
-                # File stuck at 0 bytes - monitoring already killed the process
-                if out_path.exists():
-                    out_path.unlink()  # Clean up the 0-byte file
-                return False, "File stuck at 0 bytes - CLExport killed"
-
-            # Check if successful
-            if process.returncode == 0 and is_valid_video_file(out_path):
-                size_mb = out_path.stat().st_size / (1024 * 1024)
-                return True, f"Success ({size_mb:.1f} MB)"
-            else:
-                return False, f"Failed with code {process.returncode}"
-
-    except Exception as e:
-        return False, f"Error: {str(e)}"
-
-
-def main():
-    """Main batch export function."""
-    print("=" * 80)
-    print("BATCH EXPORT SCRIPT - FFmpeg GPU with CLExport Fallback")
-    print("=" * 80)
-    print(f"Database: {DB_PATH}")
-    print(f"SEQ Root: {SEQ_ROOT}")
-    print(f"Output Root: {OUT_ROOT}")
-    print()
-
-    # Check FFmpeg availability
-    ffmpeg_path = find_ffmpeg()
-    if not ffmpeg_path:
-        print("❌ FFmpeg not found!")
-        print("Please install FFmpeg or add it to your PATH.")
-        return
-
-    # Check CLExport availability
-    clexport_path = find_clexport()
-    use_clexport_fallback = clexport_path is not None
-
-    print(f"✓ Primary: FFmpeg with GPU acceleration: {ffmpeg_path}")
-    if use_clexport_fallback:
-        print(f"✓ Fallback: CLExport available: {clexport_path}")
-    else:
-        print("⚠️  CLExport not found - no fallback available")
-    print()
-
-    # Always use all cameras
-    cameras = DEFAULT_CAMERAS
-    print(f"Cameras: All ({len(cameras)} cameras)")
-    print()
-
-    print("Fetching files from database...")
-    files = get_missing_mp4_files(DB_PATH, cameras, limit=None)
-
-    if not files:
-        print("✓ No files need exporting!")
-        return
-
-    print(f"\nFound {len(files)} files with missing MP4s")
-    print("=" * 80)
-
-    # Display files and let user choose
-    print("\nAVAILABLE FILES:")
-    print("-" * 80)
-    for i, file_info in enumerate(files, 1):
-        recording_date = file_info['recording_date']
-        case_no = file_info['case_no']
-        camera_name = file_info['camera_name']
-        size_mb = file_info['seq_size_mb']
-        print(f"  {i:3d}. {recording_date} | Case{case_no:2d} | {camera_name:20s} | {size_mb:6.1f} MB")
-
-    print("-" * 80)
-    print("\nHow do you want to select files?")
-    print("  1. Export ALL files")
-    print("  2. Export first N files")
-    print("  3. Choose specific files by number")
-
-    selection_mode = input("\nChoice (1, 2, or 3): ").strip()
-
-    selected_files = []
-
-    if selection_mode == '1':
-        # Export all
-        selected_files = files
-        print(f"✓ Selected all {len(files)} files")
-
-    elif selection_mode == '2':
-        # Export first N
-        n_input = input("How many files (from the top)? ").strip()
+    results = []
+    root_path = Path(root_dir)
+    
+    msg = f"Scanning directory: {root_path}"
+    if log_callback:
+        log_callback(msg)
+    logger.info(msg)
+    
+    # Use pathlib's rglob to find all .seq files
+    for seq_path in root_path.rglob("*.seq"):
+        # No per-file logging to reduce spam
         try:
-            n = int(n_input)
-            selected_files = files[:n]
-            print(f"✓ Selected first {len(selected_files)} files")
-        except ValueError:
-            print("❌ Invalid number")
-            return
-
-    elif selection_mode == '3':
-        # Choose specific files
-        print("\nEnter file numbers (comma-separated or ranges)")
-        print("  Examples:")
-        print("    1,3,5         - Files 1, 3, and 5")
-        print("    1-10          - Files 1 through 10")
-        print("    1-5,8,10-15   - Files 1-5, 8, and 10-15")
-
-        numbers_input = input("\nFile numbers: ").strip()
-
-        try:
-            # Parse input
-            selected_indices = set()
-            parts = numbers_input.split(',')
-
-            for part in parts:
-                part = part.strip()
-                if '-' in part:
-                    # Range
-                    start, end = part.split('-')
-                    start_idx = int(start.strip())
-                    end_idx = int(end.strip())
-                    selected_indices.update(range(start_idx, end_idx + 1))
-                else:
-                    # Single number
-                    selected_indices.add(int(part))
-
-            # Convert to file list
-            for idx in sorted(selected_indices):
-                if 1 <= idx <= len(files):
-                    selected_files.append(files[idx - 1])
-
-            print(f"✓ Selected {len(selected_files)} files")
-
+            size = seq_path.stat().st_size
+            # Extract date from filename
+            date = extract_date_from_filename(seq_path.name)
+            if not date:
+                msg = f"Could not extract date from filename: {seq_path.name}"
+                logger.warning(msg)
+                continue
+                
+            channel = seq_path.parent.name
+            timestamp = seq_path.stem  # e.g., 01-07-24_07-41-09
+            
+            # Find companions using pathlib
+            companions = []
+            base = seq_path.with_suffix('')
+            for ext in COMPANION_EXTS:
+                comp = base.with_suffix(ext)
+                if comp.exists():
+                    companions.append(comp)
+                    
+            results.append({
+                'seq': seq_path,
+                'companions': companions,
+                'size': size,
+                'date': date,
+                'channel': channel,
+                'timestamp': timestamp
+            })
         except Exception as e:
-            print(f"❌ Invalid input: {e}")
+            msg = f"Error processing {seq_path}: {e}\n{traceback.format_exc()}"
+            if log_callback:
+                log_callback(msg)
+            logger.error(msg)
+            continue
+            
+    return results
+
+
+def group_by_date_and_case(sequences):
+    """
+    Group sequences by date, then by case using relative time grouping.
+    Files within 30 minutes of the first file in a case are grouped together.
+    Returns: { date: [ [seqs for case1], [seqs for case2], ... ] }
+    """
+    from collections import defaultdict
+    
+    date_dict = defaultdict(list)
+    for seq in sequences:
+        date_dict[seq['date']].append(seq)
+    
+    grouped = {}
+    for date, seqs in date_dict.items():
+        # Sort sequences by timestamp to process in chronological order
+        sorted_seqs = sorted(seqs, key=lambda x: x['timestamp'])
+        
+        cases = []
+        current_case = []
+        
+        for seq in sorted_seqs:
+            if not current_case:
+                # Start new case with first sequence
+                current_case = [seq]
+            else:
+                # Check if this sequence is within 30 minutes of the first sequence in current case
+                first_timestamp = current_case[0]['timestamp']
+                
+                # Parse timestamps for comparison (handle milliseconds)
+                def parse_timestamp_with_ms(timestamp_str):
+                    # Remove milliseconds if present
+                    if '.' in timestamp_str:
+                        timestamp_str = timestamp_str.split('.')[0]
+                    
+                    if len(timestamp_str.split('_')[0]) == 8:  # mm-dd-yy format
+                        return datetime.datetime.strptime(timestamp_str, '%m-%d-%y_%H-%M-%S')
+                    else:  # yyyy-mm-dd format
+                        return datetime.datetime.strptime(timestamp_str, '%Y-%m-%d_%H-%M-%S')
+                
+                first_dt = parse_timestamp_with_ms(first_timestamp)
+                seq_dt = parse_timestamp_with_ms(seq['timestamp'])
+                
+                time_diff = abs((seq_dt - first_dt).total_seconds() / 60)  # difference in minutes
+                
+                if time_diff <= 30:  # Within 30 minutes of case anchor
+                    current_case.append(seq)
+                else:
+                    # Start new case
+                    cases.append(current_case)
+                    current_case = [seq]
+        
+        # Don't forget the last case
+        if current_case:
+            cases.append(current_case)
+        
+        grouped[date] = cases
+    return grouped
+
+
+def create_file_operations_json(grouped_sequences, dest_root, channel_mapping):
+    """
+    Create a JSON structure containing all file operations to be performed.
+    Returns a dict with file operations and metadata.
+    """
+    operations = {
+        'metadata': {
+            'created_at': datetime.datetime.now().isoformat(),
+            'destination_root': str(dest_root),
+            'total_files': 0,
+            'total_sequences': 0,
+            'channel_mapping': channel_mapping
+        },
+        'file_operations': []
+    }
+    
+    total_files = 0
+    total_sequences = 0
+    
+    for date, cases in grouped_sequences.items():
+        data_dir = Path(dest_root) / f"DATA_{date}"
+        
+        for i, case in enumerate(cases, 1):
+            case_dir = data_dir / f"Case{i}"
+            
+            # Group seq_infos by channel
+            channel_map = {}
+            for seq_info in case:
+                channel = seq_info['channel']
+                channel_map.setdefault(channel, []).append(seq_info)
+                
+            for channel, seq_infos in channel_map.items():
+                # Only proceed if at least one .seq file is to be copied
+                seq_to_copy = [seq_info for seq_info in seq_infos if any(f.suffix == '.seq' for f in seq_info['companions'])]
+                if not seq_to_copy:
+                    continue
+                    
+                channel_dir = case_dir / channel
+                
+                for seq_info in seq_to_copy:
+                    total_sequences += 1
+                    
+                    for f in seq_info['companions']:
+                        dest = channel_dir / f.name
+                        
+                        operation = {
+                            'source_path': str(f),
+                            'destination_path': str(dest),
+                            'file_size': f.stat().st_size,
+                            'file_type': f.suffix,
+                            'sequence_info': {
+                                'date': seq_info['date'],
+                                'channel': seq_info['channel'],
+                                'timestamp': seq_info['timestamp'],
+                                'case_number': i
+                            },
+                            'status': 'pending',
+                            'error_message': None,
+                            'hash_verification': None
+                        }
+                        
+                        operations['file_operations'].append(operation)
+                        total_files += 1
+    
+    operations['metadata']['total_files'] = total_files
+    operations['metadata']['total_sequences'] = total_sequences
+    
+    return operations
+
+
+def calculate_file_hash(file_path, blocksize=65536):
+    """Calculate SHA256 hash of a file."""
+    h = hashlib.sha256()
+    with open(file_path, 'rb') as f:
+        for chunk in iter(lambda: f.read(blocksize), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def atomic_copy_file(src_path, dest_path, max_retries=3):
+    """
+    Copy a file atomically with retry logic.
+    Returns (success, error_message, hash_verification)
+    """
+    src = Path(src_path)
+    dest = Path(dest_path)
+    
+    # Create destination directory if it doesn't exist
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Generate unique destination if file exists
+    if dest.exists():
+        stem = dest.stem
+        suffix = dest.suffix
+        parent = dest.parent
+        i = 1
+        while True:
+            new_name = f"{stem}_{i}{suffix}"
+            candidate = parent / new_name
+            if not candidate.exists():
+                dest = candidate
+                break
+            i += 1
+    
+    # Calculate source hash
+    try:
+        src_hash = calculate_file_hash(src)
+    except Exception as e:
+        logger.error(f"Failed to calculate source hash for {src}: {e}\n{traceback.format_exc()}")
+        return False, f"Failed to calculate source hash: {e}", None
+    
+    # Atomic copy with retry
+    tmp_dest = dest.with_suffix(dest.suffix + '.tmp')
+    
+    for attempt in range(max_retries):
+        try:
+            with open(src, 'rb') as fsrc, open(tmp_dest, 'wb') as fdst:
+                shutil.copyfileobj(fsrc, fdst)
+            os.replace(tmp_dest, dest)
+            
+            # Verify copy with hash
+            try:
+                dest_hash = calculate_file_hash(dest)
+                hash_match = src_hash == dest_hash
+                return True, None, {
+                    'source_hash': src_hash,
+                    'destination_hash': dest_hash,
+                    'match': hash_match
+                }
+            except Exception as e:
+                logger.error(f"Failed to verify copy for {src} -> {dest}: {e}\n{traceback.format_exc()}")
+                return False, f"Failed to verify copy: {e}", None
+                
+        except Exception as e:
+            logger.error(f"Copy attempt {attempt+1} failed for {src} -> {dest}: {e}\n{traceback.format_exc()}")
+            if tmp_dest.exists():
+                try:
+                    tmp_dest.unlink()
+                except Exception as e2:
+                    logger.warning(f"Failed to remove temp file {tmp_dest}: {e2}")
+            if attempt == max_retries - 1:
+                return False, f"Copy failed after {max_retries} attempts: {e}", None
+    
+    return False, "Unknown error after retries", None
+
+
+def copy_files_with_threads(file_operations, max_workers=8, progress_callback=None):
+    """
+    Copy files using multiple threads.
+    Updates the file_operations dict with results.
+    """
+    total_files = len(file_operations['file_operations'])
+    completed_files = 0
+    successful_copies = 0
+    failed_copies = 0
+    
+    def copy_single_file(operation):
+        nonlocal completed_files, successful_copies, failed_copies
+        
+        try:
+            success, error_msg, hash_verification = atomic_copy_file(
+                operation['source_path'], 
+                operation['destination_path']
+            )
+            
+            operation['status'] = 'completed' if success else 'failed'
+            operation['error_message'] = error_msg
+            operation['hash_verification'] = hash_verification
+            
+            completed_files += 1
+            if success:
+                successful_copies += 1
+                # logger.info(f"Copied: {operation['source_path']} -> {operation['destination_path']}")
+            else:
+                failed_copies += 1
+                logger.error(f"Failed to copy: {operation['source_path']} -> {operation['destination_path']}: {error_msg}")
+            
+            if progress_callback:
+                progress_callback(completed_files, total_files, 
+                                f"Copied {completed_files}/{total_files}")
+            
+            return operation
+        except Exception as e:
+            logger.error(f"Exception in copy_single_file for {operation['source_path']} -> {operation['destination_path']}: {e}\n{traceback.format_exc()}")
+            operation['status'] = 'failed'
+            operation['error_message'] = str(e)
+            completed_files += 1
+            failed_copies += 1
+            if progress_callback:
+                progress_callback(completed_files, total_files, 
+                                f"Copied {completed_files}/{total_files}")
+            return operation
+    
+    # Use ThreadPoolExecutor for parallel copying
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all copy tasks
+        future_to_operation = {
+            executor.submit(copy_single_file, op): op 
+            for op in file_operations['file_operations']
+        }
+        
+        # Process completed tasks
+        for future in as_completed(future_to_operation):
+            try:
+                future.result()
+            except Exception as e:
+                operation = future_to_operation[future]
+                logger.error(f"Exception in thread for {operation['source_path']}: {e}")
+                operation['status'] = 'failed'
+                operation['error_message'] = str(e)
+    
+    return successful_copies, failed_copies
+
+
+def generate_output_files(file_operations, dest_root):
+    """Generate detailed output files showing what was moved and what failed."""
+    dest_path = Path(dest_root)
+    
+    # Create summary report
+    summary = {
+        'total_files': file_operations['metadata']['total_files'],
+        'successful_copies': 0,
+        'failed_copies': 0,
+        'hash_mismatches': 0,
+        'completed_at': datetime.datetime.now().isoformat()
+    }
+    
+    successful_files = []
+    failed_files = []
+    hash_mismatches = []
+    
+    for operation in file_operations['file_operations']:
+        if operation['status'] == 'completed':
+            summary['successful_copies'] += 1
+            successful_files.append(operation)
+            
+            if operation['hash_verification'] and not operation['hash_verification']['match']:
+                summary['hash_mismatches'] += 1
+                hash_mismatches.append(operation)
+        else:
+            summary['failed_copies'] += 1
+            failed_files.append(operation)
+    
+    # Write summary JSON
+    summary_file = dest_path / "copy_summary.json"
+    with open(summary_file, 'w', encoding='utf-8') as f:
+        json.dump(summary, f, indent=2, default=str)
+    
+    # Write successful copies report
+    if successful_files:
+        success_file = dest_path / "successful_copies.json"
+        with open(success_file, 'w', encoding='utf-8') as f:
+            json.dump(successful_files, f, indent=2, default=str)
+    
+    # Write failed copies report
+    if failed_files:
+        failed_file = dest_path / "failed_copies.json"
+        with open(failed_file, 'w', encoding='utf-8') as f:
+            json.dump(failed_files, f, indent=2, default=str)
+            
+    # Write detailed log file
+    log_file = dest_path / "detailed_copy_log.txt"
+    with open(log_file, 'w', encoding='utf-8') as f:
+        f.write(f"Copy Operation Log - {datetime.datetime.now()}\n")
+        f.write("=" * 80 + "\n\n")
+        f.write(f"Total files: {summary['total_files']}\n")
+        f.write(f"Successful: {summary['successful_copies']}\n")
+        f.write(f"Failed: {summary['failed_copies']}\n")
+        f.write(f"Hash mismatches: {summary['hash_mismatches']}\n\n")
+    
+    return summary_file
+
+
+def run_curation(root_dir, dest_dir, channel_mapping, simulate=False, max_workers=8):
+    """Run the full curation process."""
+    
+    def print_progress(done, total, msg):
+        percent = (done / total) * 100 if total > 0 else 0
+        sys.stdout.write(f"\r[{percent:5.1f}%] {msg}                                ")
+        sys.stdout.flush()
+
+    print(f"\nScanning {root_dir} for sequences...")
+    all_sequences = find_sequences_with_pathlib(root_dir, log_callback=None)
+    
+    if not all_sequences:
+        print("\nNo .seq files found.")
+        return
+
+    print(f"Found {len(all_sequences)} .seq files.")
+    
+    # Filter by included channels
+    included_sequences = [seq for seq in all_sequences if seq['channel'] in channel_mapping]
+    if not included_sequences:
+        print("\nNo included channels selected.")
+        return
+        
+    # Apply mapping
+    for seq in included_sequences:
+        src_channel = seq['channel']
+        mapped_channel = channel_mapping.get(src_channel, "Unknown")
+        
+        # Add JUNK suffix if file is small
+        if seq['size'] < MIN_SEQ_SIZE:
+            seq['channel'] = f"{mapped_channel}_JUNK"
+        else:
+            seq['channel'] = mapped_channel
+
+    # Group
+    grouped = group_by_date_and_case(included_sequences)
+    
+    # Plan
+    file_operations = create_file_operations_json(grouped, dest_dir, channel_mapping)
+    
+    if simulate:
+        print("\nSIMULATION MODE: Limiting to 50 files.")
+        file_operations['file_operations'] = file_operations['file_operations'][:50]
+        file_operations['metadata']['total_files'] = len(file_operations['file_operations'])
+
+    total_files = file_operations['metadata']['total_files']
+    print(f"\nPlanning to copy {total_files} files.")
+    
+    # Check orphaned
+    print("Scanning for orphaned companion files...")
+    orphaned_files = find_orphaned_companion_files(root_dir, log_callback=None)
+    total_orphaned = sum(len(files) for files in orphaned_files.values())
+    if total_orphaned > 0:
+        print(f"Found {total_orphaned} orphaned companion files.")
+    
+    # Check disk space
+    total_size = sum(op['file_size'] for op in file_operations['file_operations'])
+    try:
+        free_space = psutil.disk_usage(dest_dir).free
+        if free_space < total_size + 100*1024*1024: # 100MB buffer
+            print(f"\n[ERROR] Insufficient disk space in {dest_dir}!")
             return
-    else:
-        print("❌ Invalid choice")
-        return
-
-    if not selected_files:
-        print("No files selected!")
-        return
-
-    print()
+    except:
+        pass # Skip check if dest doesn't exist yet or error
 
     # Confirm
-    response = input(f"Export {len(selected_files)} files using FFmpeg GPU? (y/n): ").strip().lower()
-    if response != 'y':
-        print("Cancelled.")
+    print("\nReady to start copying.")
+    print(f"Source:      {root_dir}")
+    print(f"Destination: {dest_dir}")
+    print(f"Files:       {total_files}")
+    
+    if input("\nProceed? (y/n): ").lower() != 'y':
+        print("Aborted.")
         return
 
-    print()
-    print("=" * 80)
-    print("STARTING EXPORT")
-    print("=" * 80)
+    # Execute
+    print(f"\nStarting copy with {max_workers} workers...")
+    successful, failed = copy_files_with_threads(file_operations, max_workers, print_progress)
+    print("\nCopy finished.")
+    
+    # Reports
+    generate_output_files(file_operations, dest_dir)
+    
+    # Orphaned copy
+    if total_orphaned > 0:
+        print("\nCopying orphaned files...")
+        copy_orphaned_files(orphaned_files, dest_dir, root_dir, print_progress)
+        print("\nOrphaned files processed.")
 
-    # Export files
-    success_count = 0
-    failed_count = 0
-    skipped_count = 0
-    fallback_count = 0
+    print(f"\nOperation Complete.")
+    print(f"Successful: {successful}")
+    print(f"Failed:     {failed}")
+    print(f"Detailed logs in: {dest_dir}")
 
-    start_time = datetime.now()
-    codec = "mp4"  # Codec for CLExport
 
-    for i, file_info in enumerate(selected_files, 1):
-        recording_date = file_info['recording_date']
-        case_no = file_info['case_no']
-        camera_name = file_info['camera_name']
+# =========================
+# CLI Main
+# =========================
 
-        print(f"\n[{i}/{len(selected_files)}] {recording_date} Case{case_no} - {camera_name}")
-        print(f"  SEQ Size: {file_info['seq_size_mb']:.1f} MB")
+def get_unique_source_channels(root_dir):
+    unique_channels = set()
+    for dirpath, _, filenames in os.walk(root_dir):
+        for fname in filenames:
+            if fname.lower().endswith('.seq'):
+                channel_name = Path(dirpath).name
+                unique_channels.add(channel_name)
+    return list(unique_channels)
 
-        # Build paths
-        seq_path = build_seq_path(recording_date, case_no, camera_name)
-
-        if not seq_path or not seq_path.exists():
-            print(f"  ❌ SKIP: SEQ file not found")
-            skipped_count += 1
-            continue
-
-        # Compute output path
-        out_root_path = Path(OUT_ROOT).resolve()
-        out_dir = compute_out_dir(seq_path, out_root_path)
-        ch_label = resolve_channel_label(seq_path, {})
-        exported_name, mp4_path = get_next_available_filename(out_dir, ch_label, ".mp4")
-
-        # Check if already exists
-        if is_valid_video_file(mp4_path):
-            print(f"  ⏭️  SKIP: MP4 already exists ({mp4_path.name})")
-            skipped_count += 1
-            continue
-
-        # Export with GPU-accelerated FFmpeg
-        success, message = export_file(seq_path, mp4_path, use_ffmpeg=True, codec=codec)
-
-        if success:
-            print(f"  ✅ {message}")
-            success_count += 1
+def map_channels_auto(source_channels):
+    """Automatically map channels to defaults."""
+    mapping = {}
+    targets = DEFAULT_CAMERAS
+    
+    print("\nAuto-mapping channels...")
+    for src in source_channels:
+        # Try exact match case-insensitive
+        match = None
+        for t in targets:
+            if t.lower() == src.lower():
+                match = t
+                break
+        
+        if match:
+            mapping[src] = match
+            print(f"  Mapped '{src}' -> '{match}'")
         else:
-            # Try fallback to CLExport if GPU failed and CLExport is available
-            if use_clexport_fallback:
-                print(f"  ⚠️  GPU encoding failed: {message}")
-                print(f"  🔄 Trying CLExport fallback...")
+            # If no match, map to Unknown
+            mapping[src] = "Unknown"
+            print(f"  Mapped '{src}' -> 'Unknown' (No standard match found)")
+            
+    return mapping
 
-                # Try with CLExport
-                success_fallback, message_fallback = export_file(seq_path, mp4_path, use_ffmpeg=False, codec=codec)
-
-                if success_fallback:
-                    print(f"  ✅ CLExport fallback succeeded: {message_fallback}")
-                    success_count += 1
-                    fallback_count += 1
-                else:
-                    print(f"  ❌ CLExport fallback also failed: {message_fallback}")
-                    failed_count += 1
-            else:
-                print(f"  ❌ FAILED: {message}")
-                failed_count += 1
-
-    # Summary
-    end_time = datetime.now()
-    duration = end_time - start_time
-
+def main():
+    print("=" * 80)
+    print("BATCH EXPORT SCRIPT - SEQUENCE CURATOR")
+    print("=" * 80)
     print()
-    print("=" * 80)
-    print("EXPORT COMPLETE")
-    print("=" * 80)
-    print(f"Success:       {success_count}")
-    if fallback_count > 0:
-        print(f"  (CLExport):  {fallback_count}")
-    print(f"Failed:        {failed_count}")
-    print(f"Skipped:       {skipped_count}")
-    print(f"Total:         {len(selected_files)}")
-    print(f"Duration:      {duration}")
-    print(f"Primary:       FFmpeg GPU (NVENC)")
-    if use_clexport_fallback:
-        print(f"Fallback:      CLExport (mp4/H.264)")
-    print("=" * 80)
+    
+    # Get configuration from config.py
+    default_dest = get_seq_root()
+    
+    # 1. Source Directory
+    while True:
+        src_input = input("Enter Source Directory (containing raw .seq files): ").strip()
+        # Remove quotes if user pasted path with quotes
+        src_input = src_input.strip('"').strip("'")
+        if os.path.isdir(src_input):
+            source_dir = src_input
+            break
+        print("Invalid directory. Please try again.")
 
+    # 2. Destination Directory
+    dest_input = input(f"Enter Destination Directory [Default: {default_dest}]: ").strip()
+    dest_input = dest_input.strip('"').strip("'")
+    dest_dir = dest_input if dest_input else default_dest
+    
+    # 3. Workers
+    workers_input = input("Number of parallel workers [Default: 8]: ").strip()
+    try:
+        max_workers = int(workers_input) if workers_input else 8
+    except:
+        max_workers = 8
+
+    # 4. Channel Mapping
+    print("\nScanning for source channels...")
+    source_channels = get_unique_source_channels(source_dir)
+    if not source_channels:
+        print("No channels (.seq files) found in source directory.")
+        return
+        
+    print(f"Found {len(source_channels)} unique channels.")
+    
+    # Use auto mapping instead of interactive
+    channel_mapping = map_channels_auto(source_channels)
+    
+    if not channel_mapping:
+        print("No channels mapped. Exiting.")
+        return
+        
+    # 5. Run
+    run_curation(source_dir, dest_dir, channel_mapping, simulate=False, max_workers=max_workers)
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n\n⚠️  Export interrupted by user")
-        sys.exit(1)
+        print("\nOperation cancelled by user.")
     except Exception as e:
-        print(f"\n\n❌ Error: {e}")
-        import traceback
+        print(f"\nAn error occurred: {e}")
         traceback.print_exc()
-        sys.exit(1)
