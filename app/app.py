@@ -55,7 +55,7 @@ if os.path.exists(erd_pdf_path):
 
         # Convert to PIL Image and display
         image = Image.open(io.BytesIO(img_data))
-        st.image(image, caption="ScalpelLab Database Entity Relationship Diagram", width='stretch')
+        st.image(image, caption="ScalpelLab Database Entity Relationship Diagram", use_container_width=True)
 
         pdf_document.close()
 
