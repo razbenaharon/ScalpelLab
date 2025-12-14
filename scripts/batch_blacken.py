@@ -351,7 +351,8 @@ def process_single_video_from_row(args):
                 'duration': duration,
                 'case_ranges': sorted_ranges,
                 'black_periods': black_periods,
-                'output_file': output_file
+                'output_file': output_file,
+                'original_path': input_file  # ADDED: Store original path for callback
             }
 
             return (True, report_data, None)
@@ -418,22 +419,33 @@ def redact_videos_from_df(df: pd.DataFrame, output_dir: str = None, num_workers:
                     # Call the completion callback if provided
                     if on_video_complete:
                         try:
-                            video_path = df.iloc[idx]['path']
-                            on_video_complete(
-                                video_path,
-                                report_data['case_ranges'],
-                                report_data['duration'],
-                                report_data
-                            )
+                            # FIX: Use the path directly from report_data, avoiding index lookups on 'df'
+                            # 'df' might be a subset (selected_df) so 'idx' from original df might not match via .iloc
+                            video_path = report_data.get('original_path', '')
+
+                            # Fallback if original_path wasn't saved (for safety)
+                            if not video_path and idx in df.index:
+                                video_path = df.loc[idx, 'path'] # Use loc not iloc for index label lookup
+
+                            if video_path:
+                                on_video_complete(
+                                    video_path,
+                                    report_data['case_ranges'],
+                                    report_data['duration'],
+                                    report_data
+                                )
+                            else:
+                                print(f"\n[WARNING] Could not determine video path for callback. Index: {idx}")
+
                         except Exception as e:
-                            print(f"\n[WARNING] Completion callback failed for video {idx + 1}: {e}")
+                            print(f"\n[WARNING] Completion callback failed for video {idx}: {e}")
                 else:
-                    print(f"\n[FAILED] Video {idx + 1}: {error_msg}")
+                    print(f"\n[FAILED] Video {idx}: {error_msg}")
                     failed_count += 1
                     file_statuses[idx] = f"FAILED: {error_msg}"
 
             except Exception as e:
-                print(f"\n[ERROR] Video {idx + 1}: {str(e)}")
+                print(f"\n[ERROR] Video {idx}: {str(e)}")
                 failed_count += 1
                 file_statuses[idx] = f"ERROR: {str(e)}"
 

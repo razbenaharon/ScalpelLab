@@ -486,66 +486,7 @@ def copy_files_with_threads(file_operations, max_workers=8, progress_callback=No
     return successful_copies, failed_copies
 
 
-def generate_output_files(file_operations, dest_root):
-    """Generate detailed output files showing what was moved and what failed."""
-    dest_path = Path(dest_root)
-    
-    # Create summary report
-    summary = {
-        'total_files': file_operations['metadata']['total_files'],
-        'successful_copies': 0,
-        'failed_copies': 0,
-        'hash_mismatches': 0,
-        'completed_at': datetime.datetime.now().isoformat()
-    }
-    
-    successful_files = []
-    failed_files = []
-    hash_mismatches = []
-    
-    for operation in file_operations['file_operations']:
-        if operation['status'] == 'completed':
-            summary['successful_copies'] += 1
-            successful_files.append(operation)
-            
-            if operation['hash_verification'] and not operation['hash_verification']['match']:
-                summary['hash_mismatches'] += 1
-                hash_mismatches.append(operation)
-        else:
-            summary['failed_copies'] += 1
-            failed_files.append(operation)
-    
-    # Write summary JSON
-    summary_file = dest_path / "copy_summary.json"
-    with open(summary_file, 'w', encoding='utf-8') as f:
-        json.dump(summary, f, indent=2, default=str)
-    
-    # Write successful copies report
-    if successful_files:
-        success_file = dest_path / "successful_copies.json"
-        with open(success_file, 'w', encoding='utf-8') as f:
-            json.dump(successful_files, f, indent=2, default=str)
-    
-    # Write failed copies report
-    if failed_files:
-        failed_file = dest_path / "failed_copies.json"
-        with open(failed_file, 'w', encoding='utf-8') as f:
-            json.dump(failed_files, f, indent=2, default=str)
-            
-    # Write detailed log file
-    log_file = dest_path / "detailed_copy_log.txt"
-    with open(log_file, 'w', encoding='utf-8') as f:
-        f.write(f"Copy Operation Log - {datetime.datetime.now()}\n")
-        f.write("=" * 80 + "\n\n")
-        f.write(f"Total files: {summary['total_files']}\n")
-        f.write(f"Successful: {summary['successful_copies']}\n")
-        f.write(f"Failed: {summary['failed_copies']}\n")
-        f.write(f"Hash mismatches: {summary['hash_mismatches']}\n\n")
-    
-    return summary_file
-
-
-def run_curation(root_dir, dest_dir, channel_mapping, simulate=False, max_workers=8):
+    # No longer generating output files as per user request
     """Run the full curation process."""
     
     def print_progress(done, total, msg):
@@ -625,8 +566,7 @@ def run_curation(root_dir, dest_dir, channel_mapping, simulate=False, max_worker
     successful, failed = copy_files_with_threads(file_operations, max_workers, print_progress)
     print("\nCopy finished.")
     
-    # Reports
-    generate_output_files(file_operations, dest_dir)
+    # Reports (output files no longer generated as per user request)
     
     # Orphaned copy
     if total_orphaned > 0:
@@ -660,10 +600,14 @@ def map_channels_auto(source_channels):
     
     print("\nAuto-mapping channels...")
     for src in source_channels:
-        # Try exact match case-insensitive
+        # Normalize source channel name for comparison
+        src_normalized = src.lower().replace(' ', '').replace('_', '')
+        
         match = None
         for t in targets:
-            if t.lower() == src.lower():
+            # Normalize target channel name for comparison
+            t_normalized = t.lower().replace(' ', '').replace('_', '')
+            if t_normalized == src_normalized:
                 match = t
                 break
         
