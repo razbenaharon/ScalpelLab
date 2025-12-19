@@ -1,0 +1,2 @@
+[console_scripts]
+scalpel = scalpellab.cli.main:main
