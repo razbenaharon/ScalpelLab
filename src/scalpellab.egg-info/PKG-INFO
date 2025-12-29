@@ -1,9 +1,0 @@
-Metadata-Version: 2.1
-Name: scalpellab
-Version: 0.1.0
-Requires-Python: >=3.7
-Requires-Dist: streamlit
-Requires-Dist: pandas
-Requires-Dist: PyMuPDF
-Requires-Dist: pillow
-Requires-Dist: openpyxl
