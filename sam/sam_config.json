@@ -1,0 +1,51 @@
+{
+  "sam2": {
+    "root": "F:\\Projects\\sam2-main",
+    "checkpoint_dir": "F:\\Projects\\sam2-main\\checkpoints",
+    "config_dir": "F:\\Projects\\sam2-main\\sam2\\configs\\sam2.1",
+    "model": "tiny",
+    "models": {
+      "tiny": {
+        "checkpoint": "sam2.1_hiera_tiny.pt",
+        "config": "sam2.1_hiera_t.yaml",
+        "description": "Fastest (30-47 FPS), ~4GB VRAM"
+      },
+      "small": {
+        "checkpoint": "sam2.1_hiera_small.pt",
+        "config": "sam2.1_hiera_s.yaml",
+        "description": "Fast (25-35 FPS), ~6GB VRAM"
+      },
+      "base_plus": {
+        "checkpoint": "sam2.1_hiera_base_plus.pt",
+        "config": "sam2.1_hiera_b+.yaml",
+        "description": "Balanced (20-30 FPS), ~8GB VRAM"
+      },
+      "large": {
+        "checkpoint": "sam2.1_hiera_large.pt",
+        "config": "sam2.1_hiera_l.yaml",
+        "description": "Best quality (15-25 FPS), ~12GB VRAM"
+      }
+    }
+  },
+  "video": {
+    "input_path": "F:\\Projects\\Scalpel_Raz\\general3sample2.mp4",
+    "output_path": "F:\\Projects\\Scalpel_Raz\\general3sample2_mask.mp4",
+    "default_input_dir": "F:\\Room_8_Data\\Recordings",
+    "max_resolution": {
+      "width": 1024,
+      "height": 768
+    },
+    "auto_resize": true
+  },
+  "encoding": {
+    "h264_preset": "slow",
+    "h264_crf": 18,
+    "resize_preset": "fast"
+  },
+  "device": {
+    "use_cuda": true,
+    "enable_torch_compile": false,
+    "enable_bfloat16": true,
+    "enable_tf32": true
+  }
+}

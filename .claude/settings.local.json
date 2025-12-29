@@ -43,7 +43,12 @@
       "Bash(git reset:*)",
       "Bash(git restore:*)",
       "Bash(del \"F:\\Room_8_Data\\Scalpel_Raz\\scripts\\extract_multi_case_dates.py\")",
-      "Bash(del \"F:\\Room_8_Data\\Scalpel_Raz\\multi_case_dates_20251203_143204.csv\")"
+      "Bash(del \"F:\\Room_8_Data\\Scalpel_Raz\\multi_case_dates_20251203_143204.csv\")",
+      "WebSearch",
+      "Bash(timeout 60 python:*)",
+      "Bash(timeout 120 python:*)",
+      "Bash(ls:*)",
+      "Bash(del \"F:\\\\Projects\\\\Scalpel_Raz\\\\sam\\\\segment_anesthesiologist.py\" \"F:\\\\Projects\\\\Scalpel_Raz\\\\sam\\\\segment_anesthesiologist_fast.py\")"
     ],
     "deny": [],
     "ask": []
