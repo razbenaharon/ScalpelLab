@@ -1,33 +1,48 @@
-"""
-Streamlit Utilities - Wrapper for ScalpelLab Core
-This file maintains the legacy API for the Streamlit app while using the new Core library.
-"""
-
+import sqlite3
 import pandas as pd
-from scalpellab.db.repository import Repository
-from scalpellab.core.config import settings
+from contextlib import contextmanager
 
-# Initialize global repository
-repo = Repository()
+@contextmanager
+def connect(db_path: str):
+    """Context manager to connect to SQLite DB safely."""
+    conn = sqlite3.connect(db_path)
+    try:
+        yield conn
+    finally:
+        conn.commit()
+        conn.close()
 
-def list_tables(db_path=None):
-    if db_path:
-        return Repository(db_path).list_tables()
-    return repo.list_tables()
+def list_tables(db_path: str):
+    """Return all non-system table names in the database."""
+    with connect(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name NOT LIKE 'sqlite_%'
+            ORDER BY name;
+        """)
+        return [r[0] for r in cur.fetchall()]
 
-def list_views(db_path=None):
-    if db_path:
-        return Repository(db_path).list_views()
-    return repo.list_views()
+def list_views(db_path: str):
+    """Return all view names in the database."""
+    with connect(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT name FROM sqlite_master
+            WHERE type='view'
+            ORDER BY name;
+        """)
+        return [r[0] for r in cur.fetchall()]
 
-def get_table_schema(db_path, table):
-    return Repository(db_path).get_table_schema(table)
+def get_table_schema(db_path: str, table: str):
+    """Return PRAGMA schema info for a table (columns, types, etc)."""
+    with connect(db_path) as conn:
+        return pd.read_sql_query(f"PRAGMA table_info({table});", conn)
 
-def load_table(db_path, table):
-    return Repository(db_path).load_table(table)
-
-from scalpellab.db.repository import Repository as connect_wrapper
-
-# For backward compatibility with the 'with connect(db_path) as conn' pattern
-def connect(db_path):
-    return Repository(db_path)._connect()
+def load_table(db_path: str, table: str):
+    """Load a whole table into a pandas DataFrame (safe)."""
+    with connect(db_path) as conn:
+        try:
+            return pd.read_sql_query(f"SELECT * FROM {table}", conn)
+        except Exception:
+            return pd.DataFrame()
