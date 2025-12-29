@@ -4,12 +4,44 @@ import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from utils import list_tables, get_table_schema, load_table, connect
-from scalpellab.db.repository import Repository
-from scalpellab.core.utils import generate_anesthesiology_code
 
 def get_next_anesthesiology_key(db_path):
     """Get the next available anesthesiology_key"""
-    return Repository(db_path).get_next_pk("anesthesiology", "anesthesiology_key")
+    try:
+        with connect(db_path) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT MAX(anesthesiology_key) FROM anesthesiology")
+            result = cur.fetchone()[0]
+            return (result + 1) if result else 1
+    except Exception:
+        return 1
+
+def generate_anesthesiology_code(name, start_date):
+    """
+    Generate anesthesiology code from name and start date.
+    Format: FirstInitial + LastInitial + YYMM
+    Example: Maria Kobzeva, 2015-10-01 -> MK1510
+    """
+    if not name or not start_date:
+        return ""
+
+    # Parse name - take first and last word
+    parts = name.strip().split()
+    if len(parts) < 2:
+        return ""
+
+    first_initial = parts[0][0].upper()
+    last_initial = parts[-1][0].upper()
+
+    # Parse date - extract YY and MM
+    # Date format: YYYY-MM-DD
+    date_str = str(start_date)
+    if len(date_str) >= 10:
+        year = date_str[2:4]  # YY
+        month = date_str[5:7]  # MM
+        return f"{first_initial}{last_initial}{year}{month}"
+
+    return ""
 
 st.header("🗄️ Database Management")
 
