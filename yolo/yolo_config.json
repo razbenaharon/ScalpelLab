@@ -1,0 +1,35 @@
+{
+  "yolo": {
+    "model": "yolov8l-seg.pt",
+    "model_dir": "F:\\YOLO_Models",
+    "confidence_threshold": 0.15,
+    "iou_threshold": 0.7,
+    "brightness_boost": 1.5
+  },
+  "video": {
+    "input_path": "",
+    "output_path": "",
+    "default_input_dir": "F:\\Room_8_Data\\Recordings",
+    "max_resolution": {
+      "width": 1920,
+      "height": 1080
+    },
+    "auto_resize": false,
+    "auto_repair": true
+  },
+  "encoding": {
+    "h264_preset": "slow",
+    "h264_crf": 18,
+    "resize_preset": "fast"
+  },
+  "device": {
+    "use_cuda": true
+  },
+  "tracking": {
+    "tracker": "botsort.yaml",
+    "persist": true,
+    "verbose": false,
+    "enable_fallback": true,
+    "fallback_max_distance": 400
+  }
+}
