@@ -18,9 +18,6 @@ Requirements:
 import sys
 import os
 
-# Set environment variables for optimal performance
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-
 from pathlib import Path
 import tempfile
 import time
@@ -163,77 +160,160 @@ SKELETON_CONNECTIONS = [
 
 
 # =============================================================================
-# GLOBAL VARIABLES FOR MOUSE CALLBACK
+# USER SELECTION
 # =============================================================================
-click_point = None
-window_name = "Select Anesthesiologist - Click once"
+def create_person_collage(unique_persons):
+    """
+    Create a collage image of all detected unique persons.
+    unique_persons: dict of {track_id: {'image': crop, 'conf': score, ...}}
+    """
+    if not unique_persons:
+        return None
 
+    # Sort by track ID
+    sorted_ids = sorted(unique_persons.keys())
+    
+    # Determine grid size
+    n_persons = len(sorted_ids)
+    cols = min(n_persons, 5) # Max 5 columns
+    rows = (n_persons + cols - 1) // cols
+    
+    # Card size
+    card_w, card_h = 200, 300
+    
+    collage_w = cols * card_w
+    collage_h = rows * card_h
+    
+    collage = np.zeros((collage_h, collage_w, 3), dtype=np.uint8)
+    
+    for i, track_id in enumerate(sorted_ids):
+        person = unique_persons[track_id]
+        img = person['image']
+        
+        # Resize crop to fit in card (maintain aspect ratio)
+        h, w = img.shape[:2]
+        scale = min((card_w - 10) / w, (card_h - 40) / h)
+        new_w, new_h = int(w * scale), int(h * scale)
+        resized = cv2.resize(img, (new_w, new_h))
+        
+        # Grid position
+        r, c = i // cols, i % cols
+        x_start = c * card_w
+        y_start = r * card_h
+        
+        # Center image in card
+        x_offset = (card_w - new_w) // 2
+        y_offset = 30 + (card_h - 40 - new_h) // 2
+        
+        collage[y_start+y_offset:y_start+y_offset+new_h, x_start+x_offset:x_start+x_offset+new_w] = resized
+        
+        # Add label
+        label = f"ID: {track_id}"
+        cv2.putText(collage, label, (x_start + 10, y_start + 25), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        
+        # Draw border
+        cv2.rectangle(collage, (x_start, y_start), (x_start + card_w, y_start + card_h), (50, 50, 50), 1)
 
-def mouse_callback(event, x, y, flags, param):
-    """Mouse callback function to capture user click."""
-    global click_point
+    return collage
 
-    if event == cv2.EVENT_LBUTTONDOWN:
-        click_point = (x, y)
-        print(f"Point selected at: ({x}, {y})")
-
-        # Draw a circle at the clicked point for visual feedback
-        frame = param
-        cv2.circle(frame, (x, y), 5, (0, 255, 0), -1)
-        cv2.imshow(window_name, frame)
-
-
-def get_user_click(frame, results=None):
-    """Display first frame and get user click for anesthesiologist location."""
-    global click_point, window_name
-
-    click_point = None
-
-    # Create a copy for display
-    display_frame = frame.copy()
-
-    # Draw detected persons
-    if results is not None and results[0].boxes is not None and len(results[0].boxes) > 0:
-        person_count = 0
-
-        for idx, cls in enumerate(results[0].boxes.cls):
-            cls_id = int(cls)
-            if cls_id == 0:  # Person class only
-                person_count += 1
-                box = results[0].boxes.xyxy[idx].cpu().numpy().astype(int)
-                conf = results[0].boxes.conf[idx].cpu().numpy()
-
-                # Draw bounding box in green
-                cv2.rectangle(display_frame, (box[0], box[1]), (box[2], box[3]), (0, 255, 0), 3)
-
-                # Draw confidence label
-                label = f"Person {person_count}: {conf:.2f}"
-                cv2.putText(display_frame, label, (box[0], max(box[1] - 10, 20)),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-
-    # Create window and set mouse callback
+def scan_video_for_persons(cap, model, frames_to_scan=100):
+    """
+    Run YOLO tracking on first N frames to identify unique people.
+    Returns the selected track_id.
+    """
+    print(f"\nScanning first {frames_to_scan} frames for people...")
+    
+    unique_persons = {} # {track_id: {'image': crop, 'conf': max_conf, 'area': max_area}}
+    
+    # Save original position
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    
+    pbar = tqdm(total=frames_to_scan, desc="Scanning", unit="frame")
+    
+    for _ in range(frames_to_scan):
+        ret, frame = cap.read()
+        if not ret:
+            break
+            
+        # Run tracking
+        results = model.track(frame,
+                             conf=CONFIG['yolo']['confidence_threshold'],
+                             iou=CONFIG['yolo']['iou_threshold'],
+                             imgsz=CONFIG['yolo'].get('imgsz', 640),
+                             half=CONFIG['yolo'].get('use_half_precision', True) and DEVICE == "cuda",
+                             tracker=CONFIG['tracking']['tracker'],
+                             persist=True,
+                             verbose=False)
+                             
+        if results[0].boxes is not None and results[0].boxes.id is not None:
+            boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
+            ids = results[0].boxes.id.cpu().numpy().astype(int)
+            confs = results[0].boxes.conf.cpu().numpy()
+            clss = results[0].boxes.cls.cpu().numpy().astype(int)
+            
+            for i, track_id in enumerate(ids):
+                if clss[i] == 0: # Person
+                    box = boxes[i]
+                    conf = confs[i]
+                    
+                    x1, y1, x2, y2 = box
+                    # Ensure within bounds
+                    x1, y1 = max(0, x1), max(0, y1)
+                    x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
+                    
+                    if x2 > x1 and y2 > y1:
+                        area = (x2 - x1) * (y2 - y1)
+                        
+                        # Store/Update if new or better view (larger area or much higher confidence)
+                        if track_id not in unique_persons or area > unique_persons[track_id]['area']:
+                            crop = frame[y1:y2, x1:x2].copy()
+                            unique_persons[track_id] = {
+                                'image': crop,
+                                'conf': conf,
+                                'area': area
+                            }
+        pbar.update(1)
+        
+    pbar.close()
+    
+    if not unique_persons:
+        raise ValueError("No people detected in the first 100 frames!")
+        
+    # Generate Collage
+    print(f"Found {len(unique_persons)} unique people.")
+    collage = create_person_collage(unique_persons)
+    
+    # Show Collage
+    window_name = "Detected Persons - Select ID in Console"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(window_name, 1280, 720)
-    cv2.setMouseCallback(window_name, mouse_callback, display_frame)
-
+    cv2.imshow(window_name, collage)
+    cv2.waitKey(100)
+    
     print("\n" + "=" * 70)
-    print("USER INTERACTION REQUIRED")
+    print("USER SELECTION REQUIRED")
     print("=" * 70)
-    print("Please click ONCE on the anesthesiologist.")
-    print("(Green boxes show detected persons)")
-    print("Press any key after clicking to continue...")
-    print("=" * 70)
-
-    cv2.imshow(window_name, display_frame)
-    cv2.waitKey(0)
+    print("Please check the popup window showing detected people.")
+    
+    valid_ids = list(unique_persons.keys())
+    valid_ids_str = ", ".join(map(str, valid_ids))
+    print(f"Available Track IDs: {valid_ids_str}")
+    
+    selected_id = None
+    while selected_id is None:
+        try:
+            user_input = input(f"Enter the Track ID of the Anesthesiologist: ").strip()
+            val = int(user_input)
+            if val in unique_persons:
+                selected_id = val
+                print(f"Selected Track ID: {selected_id}")
+            else:
+                print(f"Invalid ID. Please enter one of: {valid_ids_str}")
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+            
     cv2.destroyAllWindows()
-
-    if click_point is None:
-        raise ValueError("No point was selected. Please run the script again and click on the anesthesiologist.")
-
-    return click_point
-
-
+    return selected_id
 def setup_device():
     """Setup device and display GPU info."""
     print("\n" + "=" * 70)
@@ -260,54 +340,6 @@ def setup_device():
     print("=" * 70)
 
     return device
-
-
-def point_in_box(point, box):
-    """Check if point (x, y) is inside box [x1, y1, x2, y2]."""
-    x, y = point
-    x1, y1, x2, y2 = box
-    return x1 <= x <= x2 and y1 <= y <= y2
-
-
-def find_target_person(results, click_point):
-    """
-    Find the person detection that contains the clicked point.
-    Returns the track ID of the target person, or None if not found.
-    """
-    if results[0].boxes is None or len(results[0].boxes) == 0:
-        return None
-
-    # Filter for person class (class 0 in COCO)
-    person_data = []
-    for idx, cls in enumerate(results[0].boxes.cls):
-        if int(cls) == 0:  # Person class
-            box = results[0].boxes.xyxy[idx].cpu().numpy()
-            # Get track ID if available
-            track_id = None
-            if hasattr(results[0].boxes, 'id') and results[0].boxes.id is not None:
-                track_id = int(results[0].boxes.id[idx].cpu().numpy())
-            person_data.append((idx, box, track_id))
-
-    if not person_data:
-        return None
-
-    # Find person whose box contains the click point
-    for idx, box, track_id in person_data:
-        if point_in_box(click_point, box):
-            return track_id if track_id is not None else idx
-
-    # If no box contains the point, find closest person
-    min_dist = float('inf')
-    closest_track_id = None
-
-    for idx, box, track_id in person_data:
-        centroid = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
-        dist = np.sqrt((centroid[0] - click_point[0])**2 + (centroid[1] - click_point[1])**2)
-        if dist < min_dist:
-            min_dist = dist
-            closest_track_id = track_id if track_id is not None else idx
-
-    return closest_track_id
 
 
 def repair_video(video_path):
@@ -439,54 +471,8 @@ def pose_anesthesiologist_yolo(video_path, output_path=None):
     print(f"Duration: {frame_count/fps:.1f} seconds")
     print("=" * 70)
 
-    # Read first frame
-    ret, first_frame = cap.read()
-    if not ret:
-        raise ValueError("Could not read first frame")
-
-    # Check if frame is valid
-    if first_frame is None or first_frame.size == 0:
-        raise ValueError("First frame is empty or invalid")
-
-    # Run tracking on first frame to initialize tracker
-    print("\n" + "=" * 70)
-    print("DETECTING PERSONS IN FIRST FRAME")
-    print("=" * 70)
-    print(f"Running YOLO with {CONFIG['tracking']['tracker']} tracker...")
-
-    results = model.track(first_frame,
-                         conf=CONFIG['yolo']['confidence_threshold'],
-                         iou=CONFIG['yolo']['iou_threshold'],
-                         imgsz=CONFIG['yolo'].get('imgsz', 640),
-                         half=CONFIG['yolo'].get('use_half_precision', True) and DEVICE == "cuda",
-                         tracker=CONFIG['tracking']['tracker'],
-                         persist=CONFIG['tracking']['persist'],
-                         verbose=CONFIG['tracking']['verbose'])
-
-    # Check detection results
-    if results[0].boxes is not None and len(results[0].boxes) > 0:
-        person_count = sum(1 for cls in results[0].boxes.cls if int(cls) == 0)
-        print(f"Detected {person_count} person(s)")
-    else:
-        print("WARNING: No persons detected!")
-        print("Try adjusting brightness_boost or confidence_threshold in yolo_config.json")
-
-    # Get user click on first frame with detections shown
-    click_x, click_y = get_user_click(first_frame, results)
-
-    # Find target person
-    print("\n" + "=" * 70)
-    print("IDENTIFYING TARGET PERSON")
-    print("=" * 70)
-    print(f"Click point: ({click_x}, {click_y})")
-
-    target_track_id = find_target_person(results, (click_x, click_y))
-
-    if target_track_id is None:
-        print("ERROR: No person found at clicked location!")
-        print("Try clicking directly on a person in the frame.")
-        cap.release()
-        sys.exit(1)
+    # Scan video to identify person IDs
+    target_track_id = scan_video_for_persons(cap, model, frames_to_scan=100)
 
     print(f"Target person locked!")
     print(f"  Track ID: {target_track_id}")
