@@ -1,4 +1,4 @@
-//// ScalpelLab Database, exported 2025-12-03
+//// ScalpelLab Database, exported 2026-01-01
 //// Paste into https://dbdiagram.io
 
 //// System table from SQLite. Usually not modeled, included here for completeness.
@@ -26,8 +26,8 @@ Table anesthesiology {
 
 Table recording_details {
   recording_date     varchar [pk]
-  signature_time     varchar
   case_no            int [pk]
+  signature_time     varchar
   code               varchar
   anesthesiology_key int
   months_anesthetic_recording int
@@ -43,6 +43,7 @@ Table mp4_status {
   duration_minutes   decimal
   pre_black_segment  decimal
   post_black_segment decimal
+  path               varchar
   Note: 'MP4 export status per camera, 1..n semantics driven by your app'
 }
 
@@ -55,10 +56,11 @@ Table seq_status {
 }
 
 // Relationships detected from database:
-Ref: seq_status.recording_date > recording_details.recording_date
-Ref: seq_status.recording_date > recording_details.case_no
-Ref: mp4_status.case_no > recording_details.case_no
-Ref: mp4_status.recording_date > recording_details.recording_date
-Ref: analysis_information.case_no > recording_details.case_no
+Ref: recording_details_old.anesthesiology_key > anesthesiology.anesthesiology_key
 Ref: analysis_information.recording_date > recording_details.recording_date
-Ref: recording_details.anesthesiology_key > anesthesiology.anesthesiology_key
+Ref: analysis_information.case_no > recording_details.case_no
+Ref: anesthesiology.anesthesiology_key > recording_details.anesthesiology_key
+Ref: recording_details.recording_date > mp4_status.recording_date
+Ref: recording_details.case_no > mp4_status.case_no
+Ref: recording_details.recording_date > seq_status.recording_date
+Ref: recording_details.case_no > seq_status.case_no
