@@ -85,11 +85,11 @@ def section(title: str, table_name: str, labels: dict, order: tuple[int, ...]):
 
         pivot = df.pivot_table(index="camera", columns="status_label", values="count",
                                aggfunc="sum", fill_value=0)
-        st.dataframe(pivot, use_container_width=True)
+        st.dataframe(pivot, width='stretch')
 
         totals = df.groupby("status_label")["count"].sum().reset_index()
         st.markdown("**Totals across all cameras:**")
-        st.dataframe(totals, use_container_width=True, hide_index=True)
+        st.dataframe(totals, width='stretch', hide_index=True)
 
     except Exception as e:
         st.error(f"Error: {e}")
