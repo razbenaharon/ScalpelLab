@@ -50,7 +50,9 @@
       "Bash(ls:*)",
       "Bash(del \"F:\\\\Projects\\\\Scalpel_Raz\\\\sam\\\\segment_anesthesiologist.py\" \"F:\\\\Projects\\\\Scalpel_Raz\\\\sam\\\\segment_anesthesiologist_fast.py\")",
       "Bash(C:ProgramDataanaconda3python.exe -m pip list)",
-      "Bash(conda install:*)"
+      "Bash(conda install:*)",
+      "Bash(pip install:*)",
+      "Bash(dot:*)"
     ],
     "deny": [],
     "ask": []
