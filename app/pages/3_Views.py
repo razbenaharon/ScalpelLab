@@ -25,7 +25,7 @@ else:
             try:
                 df = load_table(db_path, view_choice)
                 if not df.empty:
-                    st.dataframe(df, use_container_width=True, hide_index=True)
+                    st.dataframe(df, width='stretch', hide_index=True)
                     st.caption(f"Showing {len(df)} rows")
                 else:
                     st.info("View is empty or could not be loaded.")
