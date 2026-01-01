@@ -48,7 +48,9 @@
       "Bash(timeout 60 python:*)",
       "Bash(timeout 120 python:*)",
       "Bash(ls:*)",
-      "Bash(del \"F:\\\\Projects\\\\Scalpel_Raz\\\\sam\\\\segment_anesthesiologist.py\" \"F:\\\\Projects\\\\Scalpel_Raz\\\\sam\\\\segment_anesthesiologist_fast.py\")"
+      "Bash(del \"F:\\\\Projects\\\\Scalpel_Raz\\\\sam\\\\segment_anesthesiologist.py\" \"F:\\\\Projects\\\\Scalpel_Raz\\\\sam\\\\segment_anesthesiologist_fast.py\")",
+      "Bash(C:ProgramDataanaconda3python.exe -m pip list)",
+      "Bash(conda install:*)"
     ],
     "deny": [],
     "ask": []
