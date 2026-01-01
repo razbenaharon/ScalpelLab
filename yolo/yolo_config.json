@@ -1,14 +1,16 @@
 {
   "yolo": {
-    "model": "yolov8l-seg.pt",
+    "model": "yolov8l-pose.pt",
     "model_dir": "F:\\YOLO_Models",
     "confidence_threshold": 0.15,
     "iou_threshold": 0.7,
-    "brightness_boost": 1.5
+    "brightness_boost": 1.0,
+    "use_half_precision": true,
+    "imgsz": 640
   },
   "video": {
-    "input_path": "",
-    "output_path": "",
+    "input_path": "F:\\Room_8_Data\\samples\\general3sample.mp4",
+    "output_path": "F:\\Room_8_Data\\samples\\general3sample_new.mp4",
     "default_input_dir": "F:\\Room_8_Data\\Recordings",
     "max_resolution": {
       "width": 1920,

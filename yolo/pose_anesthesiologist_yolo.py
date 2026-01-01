@@ -1,13 +1,13 @@
 """
-Anesthesiologist Segmentation using YOLOv8 Segmentation with BoT-SORT Tracking
+Anesthesiologist Pose Detection and Masking using YOLOv8 Pose with BoT-SORT Tracking
 
-This version uses YOLOv8-seg for real-time person detection and segmentation,
-combined with BoT-SORT for robust multi-object tracking.
+This version uses YOLOv8-pose for real-time person pose detection and tracking,
+combined with BoT-SORT for robust multi-object tracking. Generates body masks from pose keypoints.
 
-Advantages over SAM:
-- No GPU memory issues (much lower VRAM usage)
-- Faster inference (60+ FPS on RTX A2000)
-- No need for frame extraction
+Advantages over Segmentation:
+- More accurate person tracking via skeletal keypoints
+- Better handling of occlusions and partial visibility
+- Faster inference than segmentation models
 - Robust tracking with BoT-SORT (handles occlusions, re-identification)
 - Persistent track IDs across the entire video
 
@@ -34,6 +34,7 @@ import cv2
 import numpy as np
 import torch
 from tqdm import tqdm
+import csv
 
 # Import YOLO from ultralytics
 try:
@@ -65,10 +66,12 @@ def load_config():
         print("Creating default configuration file...")
         default_config = {
             "yolo": {
-                "model": "yolov8m-seg.pt",  # Options: yolov8n-seg, yolov8s-seg, yolov8m-seg, yolov8l-seg, yolov8x-seg
+                "model": "yolov8m-pose.pt",  # Options: yolov8n-pose, yolov8s-pose, yolov8m-pose, yolov8l-pose, yolov8x-pose
                 "confidence_threshold": 0.15,  # Lower for dark/difficult videos
                 "iou_threshold": 0.7,
-                "brightness_boost": 1.5  # Multiply brightness to help detection
+                "brightness_boost": 1.0,  # Disabled for performance (1.0 = no boost)
+                "use_half_precision": True,  # Use FP16 for 2x faster inference
+                "imgsz": 640  # Inference image size (640, 1280, etc.)
             },
             "video": {
                 "input_path": "",
@@ -105,15 +108,21 @@ def load_config():
     # Add YOLO config if not present
     if "yolo" not in config:
         config["yolo"] = {
-            "model": "yolov8m-seg.pt",
+            "model": "yolov8m-pose.pt",
             "confidence_threshold": 0.15,
             "iou_threshold": 0.7,
-            "brightness_boost": 1.5
+            "brightness_boost": 1.0,
+            "use_half_precision": True,
+            "imgsz": 640
         }
 
-    # Add brightness_boost if missing
+    # Add performance settings if missing
     if "brightness_boost" not in config.get("yolo", {}):
-        config["yolo"]["brightness_boost"] = 1.5
+        config["yolo"]["brightness_boost"] = 1.0
+    if "use_half_precision" not in config.get("yolo", {}):
+        config["yolo"]["use_half_precision"] = True
+    if "imgsz" not in config.get("yolo", {}):
+        config["yolo"]["imgsz"] = 640
 
     if "tracking" not in config:
         config["tracking"] = {
@@ -130,6 +139,27 @@ CONFIG = load_config()
 
 # Device
 DEVICE = "cuda" if CONFIG["device"]["use_cuda"] and torch.cuda.is_available() else "cpu"
+
+# COCO 17 keypoint names (in order)
+KEYPOINT_NAMES = [
+    "Nose", "Left_Eye", "Right_Eye", "Left_Ear", "Right_Ear",
+    "Left_Shoulder", "Right_Shoulder", "Left_Elbow", "Right_Elbow",
+    "Left_Wrist", "Right_Wrist", "Left_Hip", "Right_Hip",
+    "Left_Knee", "Right_Knee", "Left_Ankle", "Right_Ankle"
+]
+
+# Skeleton connections between keypoints (pairs of indices)
+# Note: Nose-to-shoulder connections (0,5) and (0,6) are handled separately via mid-shoulder
+SKELETON_CONNECTIONS = [
+    (0, 1), (0, 2), (1, 3), (2, 4),  # Head: nose to eyes, eyes to ears
+    (5, 6),  # Shoulders connected
+    (5, 7), (7, 9),  # Left arm: shoulder -> elbow -> wrist
+    (6, 8), (8, 10),  # Right arm: shoulder -> elbow -> wrist
+    (5, 11), (6, 12),  # Shoulders to hips
+    (11, 12),  # Hips connected
+    (11, 13), (13, 15),  # Left leg: hip -> knee -> ankle
+    (12, 14), (14, 16)  # Right leg: hip -> knee -> ankle
+]
 
 
 # =============================================================================
@@ -336,9 +366,10 @@ def repair_video(video_path):
     return repaired_path, repaired_path
 
 
-def segment_anesthesiologist_yolo(video_path, output_path=None):
+def pose_anesthesiologist_yolo(video_path, output_path=None):
     """
-    Segment anesthesiologist from video using YOLOv8 segmentation.
+    Detect and mask anesthesiologist from video using YOLOv8 pose detection.
+    Creates masks from detected pose keypoints using convex hull.
     """
     # Setup device
     device = setup_device()
@@ -372,7 +403,15 @@ def segment_anesthesiologist_yolo(video_path, output_path=None):
     try:
         model = YOLO(model_path)
         model.to(DEVICE)
+
         print("Model loaded successfully!")
+
+        # FP16 will be enabled via half=True parameter in track() calls
+        if CONFIG['yolo'].get('use_half_precision', True) and DEVICE == "cuda":
+            print("FP16 half precision will be used for inference (enabled via track parameter)")
+
+        print(f"Half Precision: {CONFIG['yolo'].get('use_half_precision', True) and DEVICE == 'cuda'}")
+        print(f"Inference Size: {CONFIG['yolo'].get('imgsz', 640)}")
     except Exception as e:
         print(f"ERROR: Failed to load YOLO model: {e}")
         sys.exit(1)
@@ -409,22 +448,17 @@ def segment_anesthesiologist_yolo(video_path, output_path=None):
     if first_frame is None or first_frame.size == 0:
         raise ValueError("First frame is empty or invalid")
 
-    # Apply brightness boost for dark videos
-    brightness_boost = CONFIG["yolo"].get("brightness_boost", 1.0)
-    if brightness_boost != 1.0:
-        frame_for_detection = np.clip(first_frame.astype(np.float32) * brightness_boost, 0, 255).astype(np.uint8)
-    else:
-        frame_for_detection = first_frame
-
     # Run tracking on first frame to initialize tracker
     print("\n" + "=" * 70)
     print("DETECTING PERSONS IN FIRST FRAME")
     print("=" * 70)
     print(f"Running YOLO with {CONFIG['tracking']['tracker']} tracker...")
 
-    results = model.track(frame_for_detection,
+    results = model.track(first_frame,
                          conf=CONFIG['yolo']['confidence_threshold'],
                          iou=CONFIG['yolo']['iou_threshold'],
+                         imgsz=CONFIG['yolo'].get('imgsz', 640),
+                         half=CONFIG['yolo'].get('use_half_precision', True) and DEVICE == "cuda",
                          tracker=CONFIG['tracking']['tracker'],
                          persist=CONFIG['tracking']['persist'],
                          verbose=CONFIG['tracking']['verbose'])
@@ -469,199 +503,283 @@ def segment_anesthesiologist_yolo(video_path, output_path=None):
     # Create output directory if needed
     os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else ".", exist_ok=True)
 
-    # Process video
-    print("\n" + "=" * 70)
-    print("PROCESSING VIDEO WITH BOT-SORT TRACKING")
-    print("=" * 70)
-    print(f"Tracker: {CONFIG['tracking']['tracker']}")
-    print()
+    # Create CSV file for keypoints export
+    csv_path = output_path.replace('.mp4', '_keypoints.csv')
+    csv_file = None
 
-    # Create temporary directory for mask frames
-    mask_temp_dir = tempfile.mkdtemp(prefix="yolo_masks_")
+    try:
+        csv_file = open(csv_path, 'w', newline='')
+        csv_writer = csv.writer(csv_file)
 
-    # Reset video to beginning
-    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        # Write CSV header
+        csv_header = ['Frame_ID', 'Timestamp']
+        for keypoint_name in KEYPOINT_NAMES:
+            csv_header.extend([f'{keypoint_name}_x', f'{keypoint_name}_y', f'{keypoint_name}_conf'])
+        csv_writer.writerow(csv_header)
 
-    frames_tracked = 0
-    frames_lost = 0
-    frames_fallback = 0
-    last_known_box = None
-    consecutive_lost = 0
+        print(f"CSV Output: {csv_path}")
 
-    start_time = time.time()
-
-    with tqdm(total=frame_count, desc="Processing", unit="frame") as pbar:
-        frame_idx = 0
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            # Apply brightness boost if configured
-            brightness_boost = CONFIG["yolo"].get("brightness_boost", 1.0)
-            if brightness_boost != 1.0:
-                frame_boosted = np.clip(frame.astype(np.float32) * brightness_boost, 0, 255).astype(np.uint8)
-            else:
-                frame_boosted = frame
-
-            # Run YOLO tracking
-            results = model.track(frame_boosted,
-                                conf=CONFIG['yolo']['confidence_threshold'],
-                                iou=CONFIG['yolo']['iou_threshold'],
-                                tracker=CONFIG['tracking']['tracker'],
-                                persist=CONFIG['tracking']['persist'],
-                                verbose=CONFIG['tracking']['verbose'])
-
-            # Find the target track ID in current frame
-            current_mask_idx = None
-            fallback_idx = None
-
-            if results[0].boxes is not None and hasattr(results[0].boxes, 'id') and results[0].boxes.id is not None:
-                # Try to find exact track ID match
-                for idx, track_id in enumerate(results[0].boxes.id):
-                    if int(track_id.cpu().numpy()) == target_track_id:
-                        # Check if it's a person (class 0)
-                        if int(results[0].boxes.cls[idx]) == 0:
-                            current_mask_idx = idx
-                            break
-
-                # If track ID not found, use fallback: find closest person to last known position
-                if current_mask_idx is None and last_known_box is not None:
-                    if CONFIG['tracking'].get('enable_fallback', True):
-                        max_dist = CONFIG['tracking'].get('fallback_max_distance', 400)
-                        last_center = ((last_known_box[0] + last_known_box[2]) / 2,
-                                      (last_known_box[1] + last_known_box[3]) / 2)
-                        min_dist = float('inf')
-
-                        for idx, cls in enumerate(results[0].boxes.cls):
-                            if int(cls) == 0:  # Person class
-                                box = results[0].boxes.xyxy[idx].cpu().numpy()
-                                center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
-                                dist = np.sqrt((center[0] - last_center[0])**2 + (center[1] - last_center[1])**2)
-
-                                # Only use fallback if person is within configured distance
-                                if dist < min_dist and dist < max_dist:
-                                    min_dist = dist
-                                    fallback_idx = idx
-
-                        if fallback_idx is not None:
-                            current_mask_idx = fallback_idx
-                            frames_fallback += 1
-
-            # Create mask
-            if current_mask_idx is not None and results[0].masks is not None:
-                # Get segmentation mask
-                mask = results[0].masks.data[current_mask_idx].cpu().numpy()
-
-                # Resize mask to frame size if needed
-                if mask.shape != (height, width):
-                    mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
-
-                # Convert to binary (0-255)
-                binary_mask = (mask * 255).astype(np.uint8)
-                frames_tracked += 1
-                consecutive_lost = 0
-
-                # Update last known position
-                last_known_box = results[0].boxes.xyxy[current_mask_idx].cpu().numpy()
-            else:
-                # No detection/tracking - create empty mask
-                binary_mask = np.zeros((height, width), dtype=np.uint8)
-                frames_lost += 1
-                consecutive_lost += 1
-
-            # Write mask frame
-            mask_path = os.path.join(mask_temp_dir, f"{frame_idx:05d}.png")
-            cv2.imwrite(mask_path, binary_mask)
-
-            frame_idx += 1
-            pbar.update(1)
-
-    cap.release()
-
-    processing_time = time.time() - start_time
-    processing_fps = frame_count / processing_time
-
-    print(f"\nProcessing complete!")
-    print(f"  Time: {processing_time:.1f} seconds")
-    print(f"  Speed: {processing_fps:.1f} FPS")
-    print(f"  Frames tracked: {frames_tracked}/{frame_count} ({frames_tracked/frame_count*100:.1f}%)")
-    print(f"    - Direct tracking: {frames_tracked - frames_fallback}/{frame_count} ({(frames_tracked-frames_fallback)/frame_count*100:.1f}%)")
-    print(f"    - Fallback tracking: {frames_fallback}/{frame_count} ({frames_fallback/frame_count*100:.1f}%)")
-    print(f"  Frames lost: {frames_lost}/{frame_count} ({frames_lost/frame_count*100:.1f}%)")
-
-    if frames_lost > frame_count * 0.1:
-        print(f"\n  WARNING: More than 10% of frames were lost!")
-        print(f"  Consider:")
-        print(f"    - Lowering confidence_threshold")
-        print(f"    - Increasing fallback_max_distance")
-        print(f"    - Using a different video with better visibility")
-
-    # Encode with FFmpeg
-    print("\n" + "=" * 70)
-    print("ENCODING VIDEO")
-    print("=" * 70)
-    print("Encoding with H.264...")
-
-    ffmpeg_cmd = [
-        "ffmpeg", "-y", "-loglevel", "error",
-        "-framerate", str(fps),
-        "-i", os.path.join(mask_temp_dir, "%05d.png"),
-        "-c:v", "libx264",
-        "-preset", CONFIG["encoding"]["h264_preset"],
-        "-crf", str(CONFIG["encoding"]["h264_crf"]),
-        "-pix_fmt", "yuv420p",
-        output_path
-    ]
-
-    result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True,
-                          creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
-
-    if result.returncode != 0:
-        print(f"FFmpeg encoding failed: {result.stderr}")
-        raise RuntimeError("Failed to encode video with FFmpeg")
-
-    # Verify output
-    if os.path.exists(output_path):
-        output_size = os.path.getsize(output_path) / (1024 * 1024)
-
+        # Process video
         print("\n" + "=" * 70)
-        print("SEGMENTATION COMPLETE")
+        print("PROCESSING VIDEO WITH POSE DETECTION + BOT-SORT TRACKING")
         print("=" * 70)
-        print(f"Output File: {output_path}")
-        print(f"File Size: {output_size:.1f} MB")
-        print(f"Frames Processed: {frame_count}")
-        print(f"Processing Speed: {processing_fps:.1f} FPS")
-        print(f"Tracking Success Rate: {frames_tracked/frame_count*100:.1f}%")
+        print(f"Model: {CONFIG['yolo']['model']}")
+        print(f"Tracker: {CONFIG['tracking']['tracker']}")
+        print()
 
-        if frames_fallback > 0:
-            print(f"Fallback Tracking Used: {frames_fallback} frames ({frames_fallback/frame_count*100:.1f}%)")
+        # Create temporary directory for mask frames
+        mask_temp_dir = tempfile.mkdtemp(prefix="yolo_pose_masks_")
 
+        # Reset video to beginning
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+        frames_tracked = 0
+        frames_lost = 0
+        frames_fallback = 0
+        last_known_box = None
+        consecutive_lost = 0
+
+        # CSV batch writing buffer for better performance
+        csv_batch_buffer = []
+        csv_batch_size = 30  # Write every 30 frames (1 second at 30fps)
+
+        start_time = time.time()
+
+        with tqdm(total=frame_count, desc="Processing", unit="frame") as pbar:
+            frame_idx = 0
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                # Run YOLO tracking with optimizations (FP16, imgsz)
+                results = model.track(frame,
+                                    conf=CONFIG['yolo']['confidence_threshold'],
+                                    iou=CONFIG['yolo']['iou_threshold'],
+                                    imgsz=CONFIG['yolo'].get('imgsz', 640),
+                                    half=CONFIG['yolo'].get('use_half_precision', True) and DEVICE == "cuda",
+                                    tracker=CONFIG['tracking']['tracker'],
+                                    persist=CONFIG['tracking']['persist'],
+                                    verbose=CONFIG['tracking']['verbose'])
+
+                # Find the target track ID in current frame
+                current_mask_idx = None
+                fallback_idx = None
+
+                if results[0].boxes is not None and hasattr(results[0].boxes, 'id') and results[0].boxes.id is not None:
+                    # Try to find exact track ID match
+                    for idx, track_id in enumerate(results[0].boxes.id):
+                        if int(track_id.cpu().numpy()) == target_track_id:
+                            # Check if it's a person (class 0)
+                            if int(results[0].boxes.cls[idx]) == 0:
+                                current_mask_idx = idx
+                                break
+
+                    # If track ID not found, use fallback: find closest person to last known position
+                    if current_mask_idx is None and last_known_box is not None:
+                        if CONFIG['tracking'].get('enable_fallback', True):
+                            max_dist = CONFIG['tracking'].get('fallback_max_distance', 400)
+                            last_center = ((last_known_box[0] + last_known_box[2]) / 2,
+                                          (last_known_box[1] + last_known_box[3]) / 2)
+                            min_dist = float('inf')
+
+                            for idx, cls in enumerate(results[0].boxes.cls):
+                                if int(cls) == 0:  # Person class
+                                    box = results[0].boxes.xyxy[idx].cpu().numpy()
+                                    center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+                                    dist = np.sqrt((center[0] - last_center[0])**2 + (center[1] - last_center[1])**2)
+
+                                    # Only use fallback if person is within configured distance
+                                    if dist < min_dist and dist < max_dist:
+                                        min_dist = dist
+                                        fallback_idx = idx
+
+                            if fallback_idx is not None:
+                                current_mask_idx = fallback_idx
+                                frames_fallback += 1
+
+                # Create skeleton visualization from pose keypoints and write to CSV
+                if current_mask_idx is not None and results[0].keypoints is not None:
+                    # Get pose keypoints (xy coordinates and confidence)
+                    keypoints_xy = results[0].keypoints.xy[current_mask_idx].cpu().numpy()
+                    keypoints_conf = results[0].keypoints.conf[current_mask_idx].cpu().numpy()
+
+                    # Create black background for skeleton
+                    binary_mask = np.zeros((height, width), dtype=np.uint8)
+
+                    # Draw skeleton connections (bones)
+                    for start_idx, end_idx in SKELETON_CONNECTIONS:
+                        if start_idx < len(keypoints_xy) and end_idx < len(keypoints_xy):
+                            pt1 = keypoints_xy[start_idx]
+                            pt2 = keypoints_xy[end_idx]
+
+                            # Check if both keypoints are valid
+                            if pt1[0] > 0 and pt1[1] > 0 and pt2[0] > 0 and pt2[1] > 0:
+                                x1, y1 = int(pt1[0]), int(pt1[1])
+                                x2, y2 = int(pt2[0]), int(pt2[1])
+                                # Draw bone with thickness
+                                cv2.line(binary_mask, (x1, y1), (x2, y2), 255, thickness=3)
+
+                    # Draw neck connection (nose to mid-shoulder)
+                    nose_idx, left_sh_idx, right_sh_idx = 0, 5, 6
+                    if (len(keypoints_conf) > max(nose_idx, left_sh_idx, right_sh_idx) and
+                        keypoints_conf[nose_idx] > 0.3 and
+                        keypoints_conf[left_sh_idx] > 0.3 and
+                        keypoints_conf[right_sh_idx] > 0.3):
+
+                        # Nose coordinates
+                        nose_pos = (int(keypoints_xy[nose_idx][0]), int(keypoints_xy[nose_idx][1]))
+
+                        # Calculate midpoint between shoulders (Mid-Shoulder)
+                        mid_shoulder_x = int((keypoints_xy[left_sh_idx][0] + keypoints_xy[right_sh_idx][0]) / 2)
+                        mid_shoulder_y = int((keypoints_xy[left_sh_idx][1] + keypoints_xy[right_sh_idx][1]) / 2)
+                        mid_shoulder_pos = (mid_shoulder_x, mid_shoulder_y)
+
+                        # Draw neck
+                        cv2.line(binary_mask, nose_pos, mid_shoulder_pos, 255, thickness=3)
+
+                    # Draw keypoints as circles
+                    for kp in keypoints_xy:
+                        x, y = int(kp[0]), int(kp[1])
+                        if x > 0 and y > 0:  # Valid keypoint
+                            cv2.circle(binary_mask, (x, y), radius=5, color=255, thickness=-1)
+
+                    # Add to CSV batch buffer - frame with detected person
+                    csv_row = [frame_idx, frame_idx / fps]  # Frame ID and timestamp
+                    for i in range(17):
+                        if i < len(keypoints_xy):
+                            csv_row.extend([keypoints_xy[i][0], keypoints_xy[i][1], keypoints_conf[i]])
+                        else:
+                            csv_row.extend([np.nan, np.nan, 0.0])
+                    csv_batch_buffer.append(csv_row)
+
+                    frames_tracked += 1
+                    consecutive_lost = 0
+
+                    # Update last known position
+                    last_known_box = results[0].boxes.xyxy[current_mask_idx].cpu().numpy()
+                else:
+                    # No detection/tracking - create empty mask and add to CSV buffer
+                    binary_mask = np.zeros((height, width), dtype=np.uint8)
+
+                    # Add to CSV batch buffer - frame with no detection
+                    csv_row = [frame_idx, frame_idx / fps]  # Frame ID and timestamp
+                    for i in range(17):
+                        csv_row.extend([np.nan, np.nan, 0.0])
+                    csv_batch_buffer.append(csv_row)
+
+                    frames_lost += 1
+                    consecutive_lost += 1
+
+                # Flush CSV buffer periodically for better performance
+                if len(csv_batch_buffer) >= csv_batch_size:
+                    csv_writer.writerows(csv_batch_buffer)
+                    csv_batch_buffer.clear()
+
+                # Write mask frame as JPG for faster I/O
+                mask_path = os.path.join(mask_temp_dir, f"{frame_idx:05d}.jpg")
+                cv2.imwrite(mask_path, binary_mask, [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+                frame_idx += 1
+                pbar.update(1)
+
+        cap.release()
+
+        # Flush any remaining CSV rows in buffer
+        if csv_batch_buffer:
+            csv_writer.writerows(csv_batch_buffer)
+            csv_batch_buffer.clear()
+
+        processing_time = time.time() - start_time
+        processing_fps = frame_count / processing_time
+
+        print(f"\nProcessing complete!")
+        print(f"  Time: {processing_time:.1f} seconds")
+        print(f"  Speed: {processing_fps:.1f} FPS")
+        print(f"  Frames tracked: {frames_tracked}/{frame_count} ({frames_tracked/frame_count*100:.1f}%)")
+        print(f"    - Direct tracking: {frames_tracked - frames_fallback}/{frame_count} ({(frames_tracked-frames_fallback)/frame_count*100:.1f}%)")
+        print(f"    - Fallback tracking: {frames_fallback}/{frame_count} ({frames_fallback/frame_count*100:.1f}%)")
+        print(f"  Frames lost: {frames_lost}/{frame_count} ({frames_lost/frame_count*100:.1f}%)")
+
+        if frames_lost > frame_count * 0.1:
+            print(f"\n  WARNING: More than 10% of frames were lost!")
+            print(f"  Consider:")
+            print(f"    - Lowering confidence_threshold")
+            print(f"    - Increasing fallback_max_distance")
+            print(f"    - Using a different video with better visibility")
+
+        # Encode with FFmpeg
+        print("\n" + "=" * 70)
+        print("ENCODING VIDEO")
         print("=" * 70)
-    else:
-        print("\nERROR: Output file was not created!")
-        success = False
+        print("Encoding with H.264...")
 
-    # Cleanup temporary files
-    import shutil
-    print("\nCleaning up temporary files...")
-    shutil.rmtree(mask_temp_dir, ignore_errors=True)
+        ffmpeg_cmd = [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-framerate", str(fps),
+            "-i", os.path.join(mask_temp_dir, "%05d.jpg"),
+            "-c:v", "libx264",
+            "-preset", CONFIG["encoding"]["h264_preset"],
+            "-crf", str(CONFIG["encoding"]["h264_crf"]),
+            "-pix_fmt", "yuv420p",
+            output_path
+        ]
 
-    # Remove repaired video if it was created
-    if repaired_temp_file and os.path.exists(repaired_temp_file):
-        os.remove(repaired_temp_file)
-        print(f"  Removed temporary repaired video")
+        result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True,
+                              creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
 
-    if not os.path.exists(output_path):
-        sys.exit(1)
+        if result.returncode != 0:
+            print(f"FFmpeg encoding failed: {result.stderr}")
+            raise RuntimeError("Failed to encode video with FFmpeg")
 
-    return output_path
+        # Verify output
+        if os.path.exists(output_path):
+            output_size = os.path.getsize(output_path) / (1024 * 1024)
+
+            print("\n" + "=" * 70)
+            print("POSE DETECTION & MASKING COMPLETE")
+            print("=" * 70)
+            print(f"Output File: {output_path}")
+            print(f"File Size: {output_size:.1f} MB")
+            print(f"CSV Keypoints: {csv_path}")
+            print(f"Frames Processed: {frame_count}")
+            print(f"Processing Speed: {processing_fps:.1f} FPS")
+            print(f"Tracking Success Rate: {frames_tracked/frame_count*100:.1f}%")
+
+            if frames_fallback > 0:
+                print(f"Fallback Tracking Used: {frames_fallback} frames ({frames_fallback/frame_count*100:.1f}%)")
+
+            print("=" * 70)
+        else:
+            print("\nERROR: Output file was not created!")
+            success = False
+
+        # Cleanup temporary files
+        import shutil
+        print("\nCleaning up temporary files...")
+        shutil.rmtree(mask_temp_dir, ignore_errors=True)
+
+        # Remove repaired video if it was created
+        if repaired_temp_file and os.path.exists(repaired_temp_file):
+            os.remove(repaired_temp_file)
+            print(f"  Removed temporary repaired video")
+
+        if not os.path.exists(output_path):
+            sys.exit(1)
+
+        return output_path
+
+    finally:
+        # Always close CSV file
+        if csv_file is not None:
+            csv_file.close()
+            print(f"CSV file saved: {csv_path}")
 
 
 def main():
     """Main entry point for the script."""
     print("\n" + "=" * 70)
-    print("ANESTHESIOLOGIST SEGMENTATION - YOLOv8 + BoT-SORT")
+    print("ANESTHESIOLOGIST POSE DETECTION - YOLOv8-Pose + BoT-SORT")
     print("=" * 70)
     print(f"Model: {CONFIG['yolo']['model']}")
     print(f"Tracker: {CONFIG['tracking']['tracker']}")
@@ -701,14 +819,14 @@ def main():
     if not output_path:
         output_path = None
 
-    # Run segmentation
+    # Run pose detection
     try:
-        result_path = segment_anesthesiologist_yolo(video_path, output_path)
+        result_path = pose_anesthesiologist_yolo(video_path, output_path)
         print("\nSUCCESS!")
         print(f"\nMask video saved to: {result_path}")
 
     except KeyboardInterrupt:
-        print("\n\nSegmentation interrupted by user")
+        print("\n\nPose detection interrupted by user")
         sys.exit(1)
     except Exception as e:
         print(f"\n\nERROR: {e}")
