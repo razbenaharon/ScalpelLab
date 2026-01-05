@@ -1,0 +1,14 @@
+# custom_bytetrack.yaml
+tracker_type: bytetrack
+track_high_thresh: 0.5
+track_low_thresh: 0.1
+new_track_thresh: 0.6
+track_buffer: 120
+match_thresh: 0.8
+
+# --- REQUIRED PARAMETERS TO PREVENT CRASH ---
+fuse_score: True      # This was missing and caused the "no attribute 'fuse_score'" error
+gmc_method: sparseOptFlow # Required for global motion compensation
+proximity_thresh: 0.5
+appearance_thresh: 0.25
+with_reid: False      # ByteTrack usually doesn't use ReID
