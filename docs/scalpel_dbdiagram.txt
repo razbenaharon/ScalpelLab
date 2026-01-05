@@ -1,4 +1,4 @@
-//// ScalpelLab Database, exported 2026-01-01
+//// ScalpelLab Database, exported 2026-01-05
 //// Paste into https://dbdiagram.io
 
 //// System table from SQLite. Usually not modeled, included here for completeness.
@@ -64,3 +64,5 @@ Ref: recording_details.recording_date > mp4_status.recording_date
 Ref: recording_details.case_no > mp4_status.case_no
 Ref: recording_details.recording_date > seq_status.recording_date
 Ref: recording_details.case_no > seq_status.case_no
+Ref: recording_details.recording_date > mp4_times.recording_date
+Ref: recording_details.recording_date > mp4_times.case_no
