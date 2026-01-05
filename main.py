@@ -38,7 +38,7 @@ print("="*60)
 
 
 # Batch video redaction (RTX A2000 optimized: 6 workers)
-__import__('subprocess').run(["python", "scripts/batch_blacken.py", r"C:\Users\user\Desktop\blacken\times.xlsx", r"C:\Users\user\Desktop\blacken\output", "8a"])
+__import__('subprocess').run(["python", "scripts/5_batch_blacken.py", r"C:\Users\user\Desktop\blacken\times.xlsx", r"C:\Users\user\Desktop\blacken\output", "8a"])
 
 
 
