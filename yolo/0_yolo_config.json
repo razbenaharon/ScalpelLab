@@ -1,16 +1,16 @@
 {
   "yolo": {
-    "model": "yolov8l-pose.pt",
+    "model": "yolov8m-pose.pt",
     "model_dir": "F:\\YOLO_Models",
-    "confidence_threshold": 0.15,
+    "confidence_threshold": 0.3,
     "iou_threshold": 0.7,
     "brightness_boost": 1.0,
     "use_half_precision": true,
     "imgsz": 640
   },
   "video": {
-    "input_path": "F:\\Room_8_Data\\samples\\general3sample.mp4",
-    "output_path": "F:\\Room_8_Data\\samples\\general3sample_new.mp4",
+    "input_path": "F:\\Room_8_Data\\samples\\a.mp4",
+    "output_path": "F:\\Room_8_Data\\samples\\1.parquet",
     "default_input_dir": "F:\\Room_8_Data\\Recordings",
     "max_resolution": {
       "width": 1920,
@@ -28,10 +28,18 @@
     "use_cuda": true
   },
   "tracking": {
-    "tracker": "botsort.yaml",
+    "tracker": "custom_bytetrack.yaml",
     "persist": true,
     "verbose": false,
     "enable_fallback": true,
     "fallback_max_distance": 400
+  },
+  "scripts": {
+    "pose_estimation": "1_pose_anesthesiologist.py",
+    "inspect_parquet": "2_inspect_parquet.py",
+    "process_tracks": "3_process_tracks.py"
+  },
+  "output": {
+    "parquet_path": "F:\\Room_8_Data\\samples\\Ventilator_Monitor_cut - Copy (16) - Copy_mask_keypoints.parquet"
   }
 }

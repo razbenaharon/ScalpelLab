@@ -124,7 +124,7 @@ Stores labeling and analysis information per case.
 
 **`batch_convert.py`** - GPU-Accelerated Batch Video Conversion
 ```bash
-python scripts/seq_to_mp4_convert.py
+python scripts/3_seq_to_mp4_convert.py
 ```
 Exports SEQ files to MP4 using GPU (NVIDIA NVENC) with CLExport fallback. Features:
 - Interactive file selection (all, first N, or specific files)
@@ -137,9 +137,9 @@ Exports SEQ files to MP4 using GPU (NVIDIA NVENC) with CLExport fallback. Featur
 
 **`update_status.py`** - File Status Scanner
 ```bash
-python scripts/update_db.py                    # Full update with duration
-python scripts/update_db.py --skip-duration    # Fast update, no duration
-python scripts/update_db.py --dry-run          # Preview changes
+python scripts/2_4_update_db.py                    # Full update with duration
+python scripts/2_4_update_db.py --skip-duration    # Fast update, no duration
+python scripts/2_4_update_db.py --dry-run          # Preview changes
 ```
 Scans file directories and updates database with current file status. Features:
 - Scans both SEQ and MP4 directories
@@ -165,7 +165,7 @@ Converts database queries into actual filesystem paths. Useful for:
 
 **`batch_redact.py`** - GPU-Accelerated Batch Video Redaction
 ```bash
-python scripts/batch_blacken.py
+python scripts/5_batch_blacken.py
 ```
 Processes multiple videos based on Excel file with case time ranges. Features:
 - **GPU-accelerated parallel processing** (NVIDIA NVENC with CPU fallback)

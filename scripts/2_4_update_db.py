@@ -521,17 +521,17 @@ def main():
         epilog="""
 Examples:
   # Update both SEQ and MP4 status (with duration)
-  python update_db.py
+  python 2_4_update_db.py
 
   # Skip duration calculation (faster)
-  python update_db.py --skip-duration
+  python 2_4_update_db.py --skip-duration
 
   # Dry run to see what would change
-  python update_db.py --dry-run
+  python 2_4_update_db.py --dry-run
 
   # Skip SEQ or MP4 update
-  python update_db.py --skip-seq
-  python update_db.py --skip-mp4
+  python 2_4_update_db.py --skip-seq
+  python 2_4_update_db.py --skip-mp4
         """
     )
 
