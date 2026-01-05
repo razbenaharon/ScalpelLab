@@ -225,7 +225,7 @@ def pose_anesthesiologist_yolo(video_path, output_path=None):
     data_rows = []
 
     # TARGET FPS: Sample at 5 FPS (or whatever is set)
-    TARGET_FPS = 5
+    TARGET_FPS = 30
 
     # Calculate frame skip interval for SAVING (not processing)
     frame_interval = max(1, int(fps / TARGET_FPS))
