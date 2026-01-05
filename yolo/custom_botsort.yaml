@@ -1,0 +1,16 @@
+# custom_botsort.yaml
+tracker_type: botsort
+track_high_thresh: 0.25
+track_low_thresh: 0.1
+new_track_thresh: 0.25
+track_buffer: 120        # 4 seconds memory
+match_thresh: 0.7
+gmc_method: sparseOptFlow
+proximity_thresh: 0.5
+appearance_thresh: 0.25
+with_reid: True
+
+# PREVENT CRASH: Explicitly define the re-identification model
+# This satisfies the "cfg.model" check in the source code
+model: "osnet_x0_25_msmt17.pt"  
+reid_model: "osnet_x0_25_msmt17.pt"
