@@ -1,9 +1,10 @@
 """
 Batch Video Redaction Script
-Redacts videos based on Excel file with case time ranges.
+Redacts videos based on database (mp4_times table) with case time ranges.
 Uses GPU-accelerated parallel processing.
 
 Features:
+- Loads data from ScalpelDatabase.sqlite (mp4_times + mp4_status tables)
 - Tracks successfully processed files to avoid re-processing
 - GPU-accelerated parallel processing
 - Comprehensive reporting
@@ -23,19 +24,102 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from scripts.helpers.handle_xlsx import handle_xlsx
 from config import get_db_path
 import pandas as pd
 import numpy as np
 
 
 # ============================================================================
+# DATABASE LOADING FUNCTION
+# ============================================================================
+
+def load_data_from_database(db_path=None):
+    """
+    Load video paths and case times from database.
+
+    Queries mp4_times table joined with mp4_status to get paths,
+    and reshapes data to match the format expected by the redaction script.
+
+    Args:
+        db_path: Path to database (uses default if None)
+
+    Returns:
+        DataFrame with columns: 'path', 'start time - case 1', 'end time - case 1', etc.
+    """
+    if db_path is None:
+        db_path = get_db_path()
+
+    print(f"Loading data from database: {db_path}")
+
+    try:
+        conn = sqlite3.connect(db_path)
+
+        # Query to get all relevant data
+        # We join mp4_times with mp4_status to get the video paths
+        query = """
+        SELECT
+            ms.path,
+            ms.recording_date,
+            ms.case_no,
+            ms.camera_name,
+            mt.start_1, mt.end_1,
+            mt.start_2, mt.end_2,
+            mt.start_3, mt.end_3
+        FROM mp4_status ms
+        INNER JOIN mp4_times mt
+            ON ms.recording_date = mt.recording_date
+            AND ms.case_no = mt.case_no
+        WHERE ms.path IS NOT NULL
+        ORDER BY ms.recording_date, ms.case_no, ms.camera_name
+        """
+
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+
+        if df.empty:
+            print("Warning: No data found in database")
+            return pd.DataFrame()
+
+        print(f"Loaded {len(df)} rows from database")
+
+        # Reshape the data to match expected format
+        # Current: start_1, end_1, start_2, end_2, start_3, end_3
+        # Expected: 'start time - case 1', 'end time - case 1', etc.
+
+        # Create the output dataframe
+        result_df = pd.DataFrame()
+        result_df['path'] = df['path']
+
+        # Map the case times
+        for case_num in range(1, 4):  # Handle up to 3 cases
+            start_col = f'start_{case_num}'
+            end_col = f'end_{case_num}'
+
+            if start_col in df.columns and end_col in df.columns:
+                result_df[f'start time - case {case_num}'] = df[start_col]
+                result_df[f'end time - case {case_num}'] = df[end_col]
+
+        # Remove rows where all case times are null/empty
+        case_columns = [col for col in result_df.columns if col.startswith('start time') or col.startswith('end time')]
+        result_df = result_df.dropna(how='all', subset=case_columns)
+
+        print(f"Processed into {len(result_df)} video entries")
+        print("\nSample of loaded data:")
+        print(result_df.head())
+
+        return result_df
+
+    except Exception as e:
+        print(f"Error loading data from database: {e}")
+        import traceback
+        traceback.print_exc()
+        return pd.DataFrame()
+
+
+# ============================================================================
 # CONFIGURATION
 # ============================================================================
 CONFIG = {
-    # Input Excel file path (leave empty to prompt user)
-    'XLSX_PATH': 'F:/Room_8_Data/Scalpel_Raz/times.xlsx',  # Example: 'F:/Room_8_Data/Scalpel_Raz/times.xlsx'
-
     # Output directory for redacted videos (leave empty for same as input)
     'OUTPUT_DIR': 'D:\Recordings',  # Example: 'F:/Room_8_Data/Output'
 
@@ -742,57 +826,39 @@ def update_tracking(tracking_file, input_path, output_path, status="SUCCESS"):
 
 
 def main():
-    # Get xlsx path from config or command line or prompt
-    xlsx_path = None
+    # Get configuration from command line or config
     output_dir = None
     num_workers = CONFIG['NUM_WORKERS']
 
-    # Check command line arguments first
+    # Check command line arguments for output_dir and num_workers
     if len(sys.argv) >= 2:
-        xlsx_path = sys.argv[1]
-        output_dir = sys.argv[2] if len(sys.argv) > 2 else CONFIG['OUTPUT_DIR']
-        num_workers = int(sys.argv[3]) if len(sys.argv) > 3 else num_workers
-    # Then check config
-    elif CONFIG['XLSX_PATH']:
-        xlsx_path = CONFIG['XLSX_PATH']
-        output_dir = CONFIG['OUTPUT_DIR']
-    # Finally, prompt user
+        output_dir = sys.argv[1] if sys.argv[1] else CONFIG['OUTPUT_DIR']
+        num_workers = int(sys.argv[2]) if len(sys.argv) > 2 else num_workers
+    # Use config defaults
     else:
-        print("="*60)
-        print("BATCH VIDEO REDACTION")
-        print("="*60)
-        print()
-        xlsx_path = input("Enter path to Excel file (.xlsx): ").strip()
-
-        if not xlsx_path:
-            print("ERROR: No file path provided")
-            sys.exit(1)
-
-        output_input = input("Enter output directory (leave empty for same as input): ").strip()
-        output_dir = output_input if output_input else CONFIG['OUTPUT_DIR']
-
-        workers_input = input(f"Number of parallel workers (default: {num_workers}): ").strip()
-        if workers_input:
-            try:
-                num_workers = int(workers_input)
-            except ValueError:
-                print(f"Invalid number, using default: {num_workers}")
+        output_dir = CONFIG['OUTPUT_DIR']
 
     # Ensure output_dir is None if empty string
     if not output_dir:
         output_dir = None
 
-    # Load and process xlsx
+    # Load data from database
     print("="*60)
     print("BATCH VIDEO REDACTION")
     print("="*60)
-    print(f"XLSX file: {xlsx_path}")
+    print(f"Data source: ScalpelDatabase.sqlite (mp4_times table)")
     print(f"Output dir: {output_dir or 'Same as input'}")
     print(f"Workers: {num_workers}")
     print("="*60)
     print()
 
-    df = handle_xlsx(xlsx_path)
+    df = load_data_from_database()
+
+    if df.empty:
+        print("ERROR: No data loaded from database")
+        sys.exit(1)
+
+    print("\n")
     print(df)
     print("="*60)
 
@@ -818,7 +884,7 @@ def main():
     print("TRACKING STATUS")
     print("="*60)
     print(f"Tracking file: {tracking_file}")
-    print(f"Total files in Excel: {len(df)}")
+    print(f"Total files in database: {len(df)}")
     print(f"Already processed: {len(already_processed)}")
     print(f"Unprocessed: {len(unprocessed_files)}")
     print("="*60)
@@ -1013,7 +1079,7 @@ def main():
     summary_lines.append("BATCH REDACTION SUMMARY")
     summary_lines.append("="*80)
     summary_lines.append(f"Generated:         {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
-    summary_lines.append(f"Input XLSX:        {xlsx_path}")
+    summary_lines.append(f"Data Source:       ScalpelDatabase.sqlite (mp4_times + mp4_status)")
     summary_lines.append("")
     summary_lines.append("TIMING:")
     summary_lines.append(f"  Start Time:      {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
