@@ -1,6 +1,7 @@
-# ScalpelLab Database Manager
+# ScalpelLab
 
-A comprehensive database management system for surgical recording data, tracking MP4 video files and SEQ sequence files across multiple camera sources. Features include automated file scanning, batch video conversion, multi-video playback, and a web-based management interface.
+> **Medical Video Analysis System**
+> A comprehensive Python-based platform for surgical video recording management, privacy-compliant redaction, computer vision analysis, and multi-camera synchronized playback.
 
 ## Quick Start
 
