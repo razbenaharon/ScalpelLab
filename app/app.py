@@ -401,7 +401,7 @@ if st.session_state.schema_diagram:
 
         # Convert to PIL Image and display
         image = Image.open(io.BytesIO(png_bytes))
-        st.image(image, use_column_width=True)
+        st.image(image, use_container_width=True)
 
         # Action buttons and download options
         col_a, col_b, col_c = st.columns([2, 2, 6])
