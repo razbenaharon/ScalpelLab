@@ -1,17 +1,32 @@
-"""
-Configuration File - ScalpelLab Database Manager
+"""Configuration module for ScalpelLab Database Manager.
 
-This file centralizes all path configurations for the project.
-Edit the paths below to match your system's directory structure.
+This module centralizes all path configurations for the project, including:
+- Database location (SQLite)
+- Source directories for SEQ and MP4 files
+- Default camera configuration
+- Path validation utilities
+
+The configuration is designed to be easily customizable for different deployment
+environments by editing the SEQ_ROOT and MP4_ROOT paths.
 
 IMPORTANT:
-- The database (ScalpelDatabase.sqlite) must always be in the project directory
-- SEQ_ROOT and MP4_ROOT can be on different drives or locations
-- Use raw strings (r"...") for Windows paths to avoid backslash issues
+    - The database (ScalpelDatabase.sqlite) must always be in the project directory
+    - SEQ_ROOT and MP4_ROOT can be on different drives or locations
+    - Use raw strings (r"...") for Windows paths to avoid backslash issues
+
+Example:
+    To validate paths and view current configuration::
+
+        python config.py
+
+Note:
+    All paths are configurable via module-level constants. Helper functions
+    provide both string and Path object access to configured locations.
 """
 
 import os
 from pathlib import Path
+from typing import List, Dict, Any
 
 # =============================================================================
 # Database Configuration
@@ -37,7 +52,9 @@ MP4_ROOT = r"F:\Room_8_Data\Recordings"
 # =============================================================================
 # Camera Configuration
 # =============================================================================
-DEFAULT_CAMERAS = [
+# List of default camera names used in the surgical recording system.
+# These represent the 8 standard camera sources for multi-angle recording.
+DEFAULT_CAMERAS: List[str] = [
     "Cart_Center_2",
     "Cart_LT_4",
     "Cart_RT_1",
@@ -52,23 +69,62 @@ DEFAULT_CAMERAS = [
 # Helper Functions
 # =============================================================================
 def get_db_path() -> str:
-    """Get the database path as a string."""
-    return str(DB_PATH)
-
-def get_seq_root() -> str:
-    """Get the SEQ root directory as a string."""
-    return SEQ_ROOT
-
-def get_mp4_root() -> str:
-    """Get the MP4 root directory as a string."""
-    return MP4_ROOT
-
-def validate_paths() -> dict:
-    """
-    Validate that configured paths exist.
+    """Get the database path as a string.
 
     Returns:
-        dict with validation results
+        str: Absolute path to the ScalpelDatabase.sqlite file.
+
+    Example:
+        >>> db_path = get_db_path()
+        >>> print(db_path)
+        'C:/Users/User/Desktop/Python/ScalpelLab/ScalpelDatabase.sqlite'
+    """
+    return str(DB_PATH)
+
+
+def get_seq_root() -> str:
+    """Get the SEQ root directory as a string.
+
+    Returns:
+        str: Path to the root directory containing SEQ sequence files.
+
+    Note:
+        Expected directory structure: SEQ_ROOT/DATA_YY-MM-DD/CaseN/CameraName/*.seq
+    """
+    return SEQ_ROOT
+
+
+def get_mp4_root() -> str:
+    """Get the MP4 root directory as a string.
+
+    Returns:
+        str: Path to the root directory containing exported MP4 video files.
+
+    Note:
+        Expected directory structure: MP4_ROOT/DATA_YY-MM-DD/CaseN/CameraName/*.mp4
+    """
+    return MP4_ROOT
+
+
+def validate_paths() -> Dict[str, Dict[str, Any]]:
+    """Validate that configured paths exist on the filesystem.
+
+    Checks whether the database file and both root directories (SEQ and MP4)
+    exist at their configured locations. This is useful for debugging
+    configuration issues and verifying setup after deployment.
+
+    Returns:
+        Dict[str, Dict[str, Any]]: Nested dictionary with validation results.
+            Each key ('db_path', 'seq_root', 'mp4_root') maps to a dictionary
+            containing:
+                - 'path' (str): The configured path
+                - 'exists' (bool): Whether the path exists
+                - 'type' (str): Either 'file' or 'directory'
+
+    Example:
+        >>> results = validate_paths()
+        >>> if not results['db_path']['exists']:
+        ...     print("Database not found!")
     """
     results = {
         'db_path': {
@@ -89,8 +145,27 @@ def validate_paths() -> dict:
     }
     return results
 
-def print_config():
-    """Print current configuration."""
+
+def print_config() -> None:
+    """Print current configuration and validate all paths.
+
+    Displays a formatted table showing:
+    - Project root directory
+    - Database location
+    - SEQ files root directory
+    - MP4 files root directory
+    - Validation status for each path (EXISTS or NOT FOUND)
+
+    The output is printed to stdout and includes warning messages if any
+    paths are not found.
+
+    Example:
+        >>> print_config()
+        ======================================================================
+        SCALPELLAB DATABASE MANAGER - CONFIGURATION
+        ======================================================================
+        ...
+    """
     print("=" * 70)
     print("SCALPELLAB DATABASE MANAGER - CONFIGURATION")
     print("=" * 70)

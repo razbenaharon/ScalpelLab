@@ -52,7 +52,9 @@
       "Bash(C:ProgramDataanaconda3python.exe -m pip list)",
       "Bash(conda install:*)",
       "Bash(pip install:*)",
-      "Bash(dot:*)"
+      "Bash(dot:*)",
+      "Bash(pip uninstall:*)",
+      "Bash(pip cache:*)"
     ],
     "deny": [],
     "ask": []
