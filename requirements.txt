@@ -1,18 +1,68 @@
 # ScalpelLab Project Dependencies
 # Install with: pip install -r requirements.txt
+# For full functionality, install with: pip install -r requirements.txt
 
-# Core web framework
+# ============================================================================
+# CORE WEB FRAMEWORK
+# ============================================================================
 streamlit>=1.49.0
 
-# Data manipulation and analysis
+# ============================================================================
+# DATA MANIPULATION AND ANALYSIS
+# ============================================================================
 pandas>=2.0.0
+numpy>=1.24.0
 
-# Data visualization
+# ============================================================================
+# DATA VISUALIZATION
+# ============================================================================
 plotly>=5.0.0
+graphviz>=0.20.0              # For database ERD diagram generation
 
-# PDF processing and image handling
-PyMuPDF>=1.26.0
-Pillow>=11.0.0
+# ============================================================================
+# PDF AND IMAGE PROCESSING
+# ============================================================================
+PyMuPDF>=1.26.0               # PDF rendering in Streamlit app
+Pillow>=11.0.0                # Image processing
 
-# Note: sqlite3 is included with Python standard library
-# Note: Other dependencies (os, sys, datetime, subprocess, etc.) are Python built-ins
+# ============================================================================
+# VIDEO PROCESSING (required for scripts/ and yolo/)
+# ============================================================================
+opencv-python>=4.8.0          # Video I/O, image processing, calibration
+tqdm>=4.65.0                  # Progress bars for video processing
+
+# ============================================================================
+# EXCEL FILE HANDLING (required for batch_blacken.py)
+# ============================================================================
+openpyxl>=3.1.0               # Excel file reading/writing
+
+# ============================================================================
+# PARQUET FILE SUPPORT (required for YOLO keypoint data)
+# ============================================================================
+pyarrow>=12.0.0               # Fast parquet serialization for pose tracking data
+
+# ============================================================================
+# MACHINE LEARNING / COMPUTER VISION (required for yolo/ directory)
+# ============================================================================
+torch>=2.0.0                  # PyTorch for deep learning
+ultralytics>=8.0.0            # YOLOv8 pose estimation and tracking
+
+# ============================================================================
+# SCIENTIFIC COMPUTING (required for track processing)
+# ============================================================================
+scipy>=1.10.0                 # Spatial distance calculations
+
+# ============================================================================
+# SYSTEM UTILITIES (required for file monitoring)
+# ============================================================================
+psutil>=5.9.0                 # Process and system monitoring
+
+# ============================================================================
+# NOTES
+# ============================================================================
+# - sqlite3 is included with Python standard library (no installation needed)
+# - Other standard library modules (os, sys, datetime, subprocess, etc.) are built-in
+# - FFmpeg is required for video conversion but must be installed separately:
+#   https://ffmpeg.org/download.html
+# - MPV player is required for multiMPV functionality:
+#   https://mpv.io/installation/

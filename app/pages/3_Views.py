@@ -1,3 +1,29 @@
+"""Database Views Page - Predefined Query Interface.
+
+This Streamlit page provides access to database views, which are predefined
+SQL queries stored in the database for common reporting needs.
+
+Features:
+    - **View Selector**: Browse and select from available database views
+    - **Live Data Display**: Real-time data from selected view
+    - **CSV Export**: Download query results for offline analysis
+    - **Row Count**: Shows number of records returned
+
+Common Views:
+    - cur_mp4_missing: Cases where SEQ exists but MP4 is missing
+    - cur_seq_missing: Cases where MP4 exists but SEQ is missing
+    - cur_seniority: Current experience levels for all residents
+
+Use Cases:
+    - Identify videos that need conversion
+    - Find missing source files
+    - Generate seniority reports
+    - Export data for external analysis
+
+Navigation:
+    Access via sidebar: Pages → 3_Views
+"""
+
 import streamlit as st
 import sys, os
 # This line adds the project root to the path to fix the import error
