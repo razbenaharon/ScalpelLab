@@ -1,3 +1,23 @@
+"""Database Management Page - Table Browser and Editor.
+
+This Streamlit page provides a comprehensive interface for managing database tables:
+
+Features:
+    - **Table Browser**: View all tables with sortable, filterable data grids
+    - **Record Insertion**: Add new records with auto-generated keys and validation
+    - **Record Deletion**: Delete records with confirmation prompts
+    - **Schema Inspection**: View table structure and constraints
+    - **Smart Defaults**: Auto-populates anesthesiology_key and generates codes
+
+Special Functions:
+    - Auto-increment for anesthesiology_key
+    - Code generation for anesthesiology table (FirstInitial + LastInitial + YYMM)
+    - Validation for required fields
+
+Navigation:
+    Access via sidebar: Pages → 1_Database
+"""
+
 import streamlit as st
 import sys, os
 # This line adds the project root to the path to fix the import error

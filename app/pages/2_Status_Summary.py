@@ -1,3 +1,25 @@
+"""Status Summary Page - MP4 and SEQ File Statistics Dashboard.
+
+This Streamlit page provides comprehensive statistics and visualizations for
+video file processing status across all camera sources.
+
+Features:
+    - **File Status Distribution**: Shows Present vs Missing files for MP4 and SEQ
+    - **Camera-wise Breakdown**: Statistics grouped by camera source
+    - **Size Analysis**: File size distributions and summaries
+    - **Interactive Charts**: Plotly-based visualizations (bar charts, pie charts)
+    - **Missing File Reports**: Identifies recordings that need conversion or backup
+
+Metrics:
+    - Total recordings per camera
+    - Present/Missing file counts
+    - File size statistics (min, max, average)
+    - Completion percentages
+
+Navigation:
+    Access via sidebar: Pages → 2_Status Summary
+"""
+
 import streamlit as st
 import pandas as pd
 from collections import Counter
