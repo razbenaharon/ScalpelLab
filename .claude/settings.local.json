@@ -54,7 +54,8 @@
       "Bash(pip install:*)",
       "Bash(dot:*)",
       "Bash(pip uninstall:*)",
-      "Bash(pip cache:*)"
+      "Bash(pip cache:*)",
+      "Bash(del:*)"
     ],
     "deny": [],
     "ask": []
