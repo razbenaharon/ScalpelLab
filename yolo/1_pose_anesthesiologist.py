@@ -86,8 +86,40 @@ def load_config():
     return config
 
 
+def generate_botsort_yaml(config):
+    """Generate custom_botsort.yaml from config if botsort section exists."""
+    if "botsort" not in config:
+        return  # Use existing YAML file if no botsort config in JSON
+
+    botsort_config = config["botsort"]
+    yaml_path = os.path.join(os.path.dirname(__file__), "custom_botsort.yaml")
+
+    # Generate YAML content
+    yaml_content = "# custom_botsort.yaml (auto-generated from 0_yolo_config.json)\n"
+    yaml_content += f"tracker_type: {botsort_config.get('tracker_type', 'botsort')}\n"
+    yaml_content += f"track_high_thresh: {botsort_config.get('track_high_thresh', 0.25)}\n"
+    yaml_content += f"track_low_thresh: {botsort_config.get('track_low_thresh', 0.1)}\n"
+    yaml_content += f"new_track_thresh: {botsort_config.get('new_track_thresh', 0.25)}\n"
+    yaml_content += f"track_buffer: {botsort_config.get('track_buffer', 120)}\n"
+    yaml_content += f"match_thresh: {botsort_config.get('match_thresh', 0.7)}\n"
+    yaml_content += f"fuse_score: {str(botsort_config.get('fuse_score', True))}\n"
+    yaml_content += f"gmc_method: {botsort_config.get('gmc_method', 'sparseOptFlow')}\n"
+    yaml_content += f"proximity_thresh: {botsort_config.get('proximity_thresh', 0.5)}\n"
+    yaml_content += f"appearance_thresh: {botsort_config.get('appearance_thresh', 0.25)}\n"
+    yaml_content += f"with_reid: {str(botsort_config.get('with_reid', True))}\n"
+    yaml_content += f"\n# ReID model\n"
+    yaml_content += f"model: {botsort_config.get('model', 'auto')}\n"
+
+    # Write to file
+    with open(yaml_path, 'w') as f:
+        f.write(yaml_content)
+
+
 # Load configuration
 CONFIG = load_config()
+
+# Generate botsort YAML from config (auto-generated, don't edit manually)
+generate_botsort_yaml(CONFIG)
 
 # Device
 DEVICE = "cuda" if CONFIG["device"]["use_cuda"] and torch.cuda.is_available() else "cpu"

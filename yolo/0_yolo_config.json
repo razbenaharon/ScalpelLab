@@ -2,7 +2,7 @@
   "yolo": {
     "model": "yolov8x-pose.pt",
     "model_dir": "F:\\YOLO_Models",
-    "confidence_threshold": 0.25,
+    "confidence_threshold": 0.6,
     "iou_threshold": 0.7,
     "brightness_boost": 1.0,
     "use_half_precision": true,
@@ -39,7 +39,153 @@
     "inspect_parquet": "2_inspect_parquet.py",
     "process_tracks": "3_process_tracks.py"
   },
-  "output": {
-    "parquet_path": "F:\\Room_8_Data\\samples\\Ventilator_Monitor_cut - Copy (16) - Copy_mask_keypoints.parquet"
+  "boxmot": {
+    "reid_model": "osnet_ain_x1_0_msmt17.pt",
+    "reid_model_dir": ".",
+    "track_high_thresh": 0.6,
+    "track_low_thresh": 0.1,
+    "new_track_thresh": 0.7,
+    "track_buffer": 300,
+    "match_thresh": 0.5,
+    "proximity_thresh": 0.5,
+    "appearance_thresh": 0.15,
+    "cmc_method": "sof"
+  },
+  "strongsort": {
+    "reid_model": "osnet_ain_x1_0_msmt17.pt",
+    "reid_model_dir": ".",
+    "min_conf": 0.1,
+    "max_cos_dist": 0.2,
+    "max_iou_dist": 0.7,
+    "max_age": 90,
+    "n_init": 3,
+    "nn_budget": 100,
+    "mc_lambda": 0.98,
+    "ema_alpha": 0.9
+  },
+  "botsort": {
+    "tracker_type": "botsort",
+    "track_high_thresh": 0.25,
+    "track_low_thresh": 0.1,
+    "new_track_thresh": 0.25,
+    "track_buffer": 120,
+    "match_thresh": 0.7,
+    "fuse_score": true,
+    "gmc_method": "sparseOptFlow",
+    "proximity_thresh": 0.5,
+    "appearance_thresh": 0.25,
+    "with_reid": true,
+    "model": "F:\\YOLO_Models\\yolov8x-pose.pt"
+  },
+  "_help": {
+    "_note": "This section contains documentation for all parameters. Scripts ignore this section.",
+    "yolo": {
+      "model": "YOLO model filename (e.g., yolov8x-pose.pt for extra-large, yolov8m-pose.pt for medium)",
+      "model_dir": "Directory where YOLO models are stored",
+      "confidence_threshold": "Minimum confidence score (0-1) for detections. Higher = fewer but more confident detections",
+      "iou_threshold": "IoU threshold (0-1) for NMS. Higher = fewer duplicate boxes, more lenient overlap",
+      "brightness_boost": "Multiplier for image brightness. 1.0 = no change, >1.0 = brighter",
+      "use_half_precision": "Use FP16 for faster inference on GPU. Requires CUDA-capable GPU",
+      "imgsz": "Input image size for YOLO. Larger = more accurate but slower (640, 1280, etc.)"
+    },
+    "video": {
+      "input_path": "Default video file path for processing",
+      "output_path": "Default output path for results (parquet file)",
+      "default_input_dir": "Default directory to look for videos",
+      "max_resolution": "Maximum resolution for video processing (width x height)",
+      "auto_resize": "Automatically resize videos exceeding max_resolution",
+      "auto_repair": "Automatically repair corrupted videos using ffmpeg before processing"
+    },
+    "encoding": {
+      "h264_preset": "H264 encoding preset (ultrafast, fast, medium, slow, veryslow). Slower = better quality",
+      "h264_crf": "Constant Rate Factor (0-51). Lower = better quality, 18 is visually lossless",
+      "resize_preset": "Resize algorithm speed (fast, medium, slow). Fast uses bilinear, slow uses lanczos"
+    },
+    "device": {
+      "use_cuda": "Enable GPU acceleration. Requires CUDA-capable NVIDIA GPU"
+    },
+    "tracking": {
+      "tracker": "Tracker config file for Ultralytics (auto-generated from botsort section)",
+      "persist": "Keep track IDs across video. Essential for consistent tracking",
+      "verbose": "Print detailed tracking information during processing",
+      "enable_fallback": "Enable fallback tracking when primary tracker fails",
+      "fallback_max_distance": "Maximum pixel distance for fallback track matching"
+    },
+    "scripts": {
+      "pose_estimation": "Main pose estimation script filename",
+      "inspect_parquet": "Script for inspecting parquet output files",
+      "process_tracks": "Script for post-processing track data"
+    },
+    "boxmot": {
+      "_description": "Configuration for BoxMOT BotSort tracker (used by 1_pose_anesthesiologist_boxmot.py)",
+      "reid_model": "ReID model filename (e.g., osnet_ain_x1_0_msmt17.pt for OSNet)",
+      "reid_model_dir": "Directory containing ReID model (. = current directory)",
+      "track_high_thresh": "High confidence threshold for track confirmation. Higher = stricter",
+      "track_low_thresh": "Low confidence threshold for track detection. Lower = more permissive",
+      "new_track_thresh": "Threshold for creating new tracks. Higher = fewer new tracks",
+      "track_buffer": "Number of frames to keep lost tracks alive before deletion",
+      "match_thresh": "Matching threshold for associating detections to tracks. Higher = stricter",
+      "proximity_thresh": "IoU threshold for spatial proximity matching. Higher = closer proximity required",
+      "appearance_thresh": "Cosine distance threshold for appearance matching. Lower = stricter appearance similarity",
+      "cmc_method": "Camera Motion Compensation method (sof, orb, ecc, sift). sof = Sparse Optical Flow"
+    },
+    "strongsort": {
+      "_description": "Configuration for BoxMOT StrongSort tracker (used by 1_pose_anesthesiologist_boxmot_v2.py)",
+      "reid_model": "ReID model filename (same as boxmot)",
+      "reid_model_dir": "Directory containing ReID model",
+      "min_conf": "Minimum detection confidence to start a track. Lower = more tracks",
+      "max_cos_dist": "Maximum cosine distance for appearance matching. Lower = stricter",
+      "max_iou_dist": "Maximum IoU distance for motion matching. Higher = more lenient",
+      "max_age": "Maximum frames to keep lost tracks alive (similar to track_buffer)",
+      "n_init": "Number of consecutive detections needed to confirm a track",
+      "nn_budget": "Nearest neighbor budget for ReID feature matching",
+      "mc_lambda": "Motion compensation lambda for EMA. Higher = more weight on history",
+      "ema_alpha": "Exponential moving average alpha for smoothing. Higher = more smoothing"
+    },
+    "botsort": {
+      "_description": "Configuration for Ultralytics BoT-SORT tracker (used by 1_pose_anesthesiologist.py)",
+      "tracker_type": "Type of tracker (botsort). Auto-generated into YAML file",
+      "track_high_thresh": "High confidence threshold for track confirmation",
+      "track_low_thresh": "Low confidence threshold for track detection",
+      "new_track_thresh": "Threshold for creating new tracks",
+      "track_buffer": "Number of frames to keep lost tracks alive",
+      "match_thresh": "Matching threshold for track-detection association",
+      "fuse_score": "Fuse detection score with IoU for matching. Improves accuracy",
+      "gmc_method": "Global Motion Compensation method (sparseOptFlow, orb, etc.)",
+      "proximity_thresh": "IoU threshold for spatial proximity matching",
+      "appearance_thresh": "Threshold for appearance-based matching using ReID",
+      "with_reid": "Enable ReID feature extraction for appearance matching",
+      "model": "YOLO model path for ReID feature extraction (auto mode uses native features)"
+    },
+    "_detailed_explanations": {
+      "YOLO_Models": {
+        "yolov8n-pose.pt": "Nano model - Fastest, least accurate (~8 MB)",
+        "yolov8s-pose.pt": "Small model - Fast, good accuracy (~23 MB)",
+        "yolov8m-pose.pt": "Medium model - Balanced speed/accuracy (~52 MB)",
+        "yolov8l-pose.pt": "Large model - Slower, better accuracy (~87 MB)",
+        "yolov8x-pose.pt": "Extra-large model - Slowest, best accuracy (~131 MB)"
+      },
+      "Tracking_Algorithms": {
+        "BotSort_Ultralytics": "Native Ultralytics implementation. Fast, integrated with YOLO. Uses YOLO features for ReID.",
+        "BotSort_BoxMOT": "BoxMOT implementation with external ReID (OSNet). Better re-identification after occlusions.",
+        "StrongSort_BoxMOT": "More robust long-term tracking. Better for crowded scenes and long occlusions."
+      },
+      "ReID_Models": {
+        "osnet_ain_x1_0_msmt17.pt": "OSNet model trained on MSMT17 dataset. Best for person re-identification across cameras/occlusions."
+      },
+      "Tuning_Tips": {
+        "For_fewer_ID_switches": "Increase track_buffer, decrease new_track_thresh, increase appearance_thresh weight",
+        "For_better_new_person_detection": "Decrease new_track_thresh, decrease track_high_thresh",
+        "For_crowded_scenes": "Use StrongSort, increase appearance_thresh weight, decrease proximity_thresh",
+        "For_simple_scenes": "Use Ultralytics BotSort (fastest), can use lower track_buffer",
+        "GPU_acceleration": "Set use_half_precision=true and use_cuda=true for 2-3x speedup on NVIDIA GPUs"
+      },
+      "Common_Issues": {
+        "Too_many_unique_IDs": "Track buffer too low, new_track_thresh too low, or poor ReID. Increase track_buffer and new_track_thresh.",
+        "Missing_detections": "Confidence_threshold too high or wrong model size. Lower threshold or use larger model.",
+        "Slow_processing": "Image size too large or model too big. Reduce imgsz or use smaller model (yolov8m instead of yolov8x).",
+        "Poor_tracking": "Wrong tracker for scene type. Use StrongSort for crowded scenes, BotSort for simple tracking."
+      }
+    }
   }
 }
