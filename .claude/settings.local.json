@@ -59,7 +59,9 @@
       "Bash(C:\\\\ProgramData\\\\anaconda3\\\\python.exe:*)",
       "WebFetch(domain:github.com)",
       "Bash(gdown:*)",
-      "WebFetch(domain:y-t-g.github.io)"
+      "WebFetch(domain:y-t-g.github.io)",
+      "Bash(copy:*)",
+      "Bash(git checkout:*)"
     ],
     "deny": [],
     "ask": []
