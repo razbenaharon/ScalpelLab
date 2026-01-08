@@ -1,12 +1,12 @@
 {
   "yolo": {
-    "model": "yolov8x-pose.pt",
+    "model": "yolov8m-pose.pt",
     "model_dir": "F:\\YOLO_Models",
-    "confidence_threshold": 0.6,
-    "iou_threshold": 0.7,
+    "confidence_threshold": 0.3,
+    "iou_threshold": 0.45,
     "brightness_boost": 1.0,
     "use_half_precision": true,
-    "imgsz": 1280
+    "imgsz": 1920
   },
   "video": {
     "input_path": "F:\\Room_8_Data\\samples\\b.mp4",
@@ -54,17 +54,29 @@
   "strongsort": {
     "reid_model": "osnet_ain_x1_0_msmt17.pt",
     "reid_model_dir": ".",
-    "min_conf": 0.1,
-    "max_cos_dist": 0.2,
+    "min_conf": 0.55,
+    "max_cos_dist": 0.35,
+    "max_iou_dist": 0.9,
+    "max_age": 600,
+    "n_init": 15,
+    "nn_budget": 3000,
+    "mc_lambda": 0.98,
+    "ema_alpha": 0.995
+  },
+      "strongsort_head": {
+    "reid_model": "osnet_ain_x1_0_msmt17.pt",
+    "reid_model_dir": ".",
+    "min_conf": 0.4,
+    "max_cos_dist": 0.15,
     "max_iou_dist": 0.7,
-    "max_age": 90,
+    "max_age": 600,
     "n_init": 3,
     "nn_budget": 100,
-    "mc_lambda": 0.98,
+    "mc_lambda": 0.99,
     "ema_alpha": 0.9
   },
   "botsort": {
-    "tracker_type": "botsort",
+    "tracker_type": "osnet_ain_x1_0_msmt17.pt",
     "track_high_thresh": 0.25,
     "track_low_thresh": 0.1,
     "new_track_thresh": 0.25,
