@@ -5,9 +5,25 @@ Combined status updater - Updates both seq_status and mp4_status tables in one r
 
 This script:
   - Updates seq_status: Scans SEQ files in Sequence_Backup
-  - Updates mp4_status: Scans MP4 files in Recordings (with optional duration)
+  - Updates mp4_status: Scans MP4 files in Recordings (with duration and path)
   - Shows combined statistics and changes
   - Requires single confirmation for both updates
+  - FUTURE-PROOF: Only updates managed columns, preserves all other columns
+
+Managed Columns (mp4_status):
+  This script ONLY manages these columns:
+  - size_mb: Size of largest MP4 file (updated)
+  - duration_minutes: Duration from ffprobe (updated)
+  - path: Full path to the MP4 file (updated)
+
+  ALL OTHER COLUMNS are preserved (including future columns you add):
+  - Uses INSERT ... ON CONFLICT DO UPDATE to only touch managed columns
+  - Any new columns added to the table will be automatically preserved
+  - No need to update this script when adding new columns!
+
+SEQ Status Columns:
+  This script manages:
+  - size_mb: Size of largest SEQ file
 
 Performance:
   - First run with duration: ~5-10 minutes (ffprobe for all MP4s)
@@ -56,41 +72,60 @@ def parse_recording_date_and_case(data_dir_name: str, case_dir_name: str) -> tup
 
 
 def ensure_seq_table_exists(conn: sqlite3.Connection) -> None:
-    """Ensure seq_status table exists."""
+    """Ensure seq_status table exists. Only manages: size_mb."""
     cur = conn.cursor()
+
+    # Create table with minimal required columns
     cur.execute("""
         CREATE TABLE IF NOT EXISTS "seq_status" (
             recording_date TEXT NOT NULL,
             case_no INTEGER NOT NULL,
             camera_name TEXT NOT NULL,
-            size_mb INTEGER,
             PRIMARY KEY (recording_date, case_no, camera_name)
         );
     """)
+
+    # Only add the column this script manages
+    try:
+        cur.execute('ALTER TABLE "seq_status" ADD COLUMN size_mb INTEGER')
+        conn.commit()
+        print("[INFO] Added size_mb column to seq_status table")
+    except sqlite3.OperationalError:
+        # Column already exists
+        pass
+
     conn.commit()
 
 
 def ensure_mp4_table_exists(conn: sqlite3.Connection) -> None:
-    """Ensure mp4_status table exists with duration column."""
+    """Ensure mp4_status table exists. Only manages: size_mb, duration_minutes, path."""
     cur = conn.cursor()
+
+    # Create table with minimal required columns
     cur.execute("""
         CREATE TABLE IF NOT EXISTS "mp4_status" (
             recording_date TEXT NOT NULL,
             case_no INTEGER NOT NULL,
             camera_name TEXT NOT NULL,
-            size_mb INTEGER,
-            duration_minutes REAL,
             PRIMARY KEY (recording_date, case_no, camera_name)
         );
     """)
 
-    # Add duration_minutes column if it doesn't exist
-    try:
-        cur.execute('ALTER TABLE "mp4_status" ADD COLUMN duration_minutes REAL')
-        conn.commit()
-        print("[INFO] Added duration_minutes column to mp4_status table")
-    except sqlite3.OperationalError:
-        pass
+    # Only add the columns this script manages
+    managed_columns = [
+        ('size_mb', 'INTEGER'),
+        ('duration_minutes', 'REAL'),
+        ('path', 'TEXT')
+    ]
+
+    for col_name, col_type in managed_columns:
+        try:
+            cur.execute(f'ALTER TABLE "mp4_status" ADD COLUMN {col_name} {col_type}')
+            conn.commit()
+            print(f"[INFO] Added {col_name} column to mp4_status table")
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
 
     conn.commit()
 
@@ -267,10 +302,13 @@ def get_video_duration(video_path: Path) -> float | None:
     return None
 
 
-def compute_mp4_status(camera_dir: Path, threshold_bytes: int, calculate_duration: bool = True) -> tuple[int, int | None, float | None]:
-    """Return (status, size_mb, duration_minutes) for MP4 files in camera directory."""
+def compute_mp4_status(camera_dir: Path, threshold_bytes: int, calculate_duration: bool = True, mp4_root: Path | None = None) -> tuple[int, int | None, float | None, str | None]:
+    """Return (status, size_mb, duration_minutes, path) for MP4 files in camera directory.
+
+    Path will be relative starting from 'Recordings' if mp4_root is provided.
+    """
     if not camera_dir.is_dir():
-        return 3, None, None
+        return 3, None, None, None
     max_size = 0
     largest_file = None
     found_any = False
@@ -287,7 +325,7 @@ def compute_mp4_status(camera_dir: Path, threshold_bytes: int, calculate_duratio
                 largest_file = p
 
     if not found_any:
-        return 3, None, None
+        return 3, None, None, None
 
     status = 1 if max_size >= threshold_bytes else 2
     size_mb = int(max_size / (1024 * 1024))
@@ -296,7 +334,21 @@ def compute_mp4_status(camera_dir: Path, threshold_bytes: int, calculate_duratio
     if calculate_duration and largest_file:
         duration = get_video_duration(largest_file)
 
-    return status, size_mb, duration
+    # Store relative path starting from 'Recordings'
+    file_path = None
+    if largest_file and mp4_root:
+        try:
+            # Get path relative to mp4_root and prepend 'Recordings'
+            rel_path = largest_file.relative_to(mp4_root)
+            file_path = str(Path("Recordings") / rel_path)
+        except ValueError:
+            # If relative_to fails, store full path as fallback
+            file_path = str(largest_file)
+    elif largest_file:
+        # Fallback: store full path if mp4_root not provided
+        file_path = str(largest_file)
+
+    return status, size_mb, duration, file_path
 
 
 def delete_small_mp4s(root: Path, threshold_mb: int) -> tuple[int, float]:
@@ -369,7 +421,7 @@ def update_mp4_status(db_path: str, mp4_root: Path, threshold_mb: int,
             print("[WARN] ffprobe not found - skipping duration calculation")
             skip_duration = True
 
-    # Pre-fetch existing data for smart mode
+    # Pre-fetch existing data for smart mode (only read managed columns)
     existing_all = {}
     if not dry_run and not skip_duration:
         conn = sqlite3.connect(db_path)
@@ -377,9 +429,10 @@ def update_mp4_status(db_path: str, mp4_root: Path, threshold_mb: int,
             ensure_mp4_table_exists(conn)
             cur = conn.cursor()
             try:
-                cur.execute('SELECT recording_date, case_no, camera_name, size_mb, duration_minutes FROM "mp4_status"')
+                # Only read columns this script manages
+                cur.execute('SELECT recording_date, case_no, camera_name, size_mb, duration_minutes, path FROM "mp4_status"')
                 for row in cur.fetchall():
-                    existing_all[(row[0], row[1], row[2])] = (row[3], row[4])
+                    existing_all[(row[0], row[1], row[2])] = (row[3], row[4], row[5])
                 if existing_all:
                     print(f"[INFO] Smart mode: Will only calculate duration for new/changed files")
             except sqlite3.OperationalError:
@@ -413,21 +466,21 @@ def update_mp4_status(db_path: str, mp4_root: Path, threshold_mb: int,
                 should_calc_duration = not skip_duration
                 if should_calc_duration and key in existing_all:
                     # Quick size check first
-                    status_quick, size_mb_quick, _ = compute_mp4_status(cam_path, threshold_bytes, calculate_duration=False)
-                    old_size, old_duration = existing_all[key]
+                    status_quick, size_mb_quick, _, path_quick = compute_mp4_status(cam_path, threshold_bytes, calculate_duration=False, mp4_root=mp4_root)
+                    old_size, old_duration, old_path = existing_all[key]
 
                     if size_mb_quick == old_size and old_duration is not None:
-                        status, size_mb, duration = status_quick, size_mb_quick, old_duration
+                        status, size_mb, duration, file_path = status_quick, size_mb_quick, old_duration, path_quick
                     else:
-                        status, size_mb, duration = compute_mp4_status(cam_path, threshold_bytes, calculate_duration=True)
+                        status, size_mb, duration, file_path = compute_mp4_status(cam_path, threshold_bytes, calculate_duration=True, mp4_root=mp4_root)
                         if duration is not None:
                             duration_calculated += 1
                 else:
-                    status, size_mb, duration = compute_mp4_status(cam_path, threshold_bytes, calculate_duration=should_calc_duration)
+                    status, size_mb, duration, file_path = compute_mp4_status(cam_path, threshold_bytes, calculate_duration=should_calc_duration, mp4_root=mp4_root)
                     if duration is not None:
                         duration_calculated += 1
 
-                updates[key] = (status, size_mb, duration)
+                updates[key] = (status, size_mb, duration, file_path)
                 total_processed += 1
 
                 if total_processed % 20 == 0:
@@ -446,35 +499,36 @@ def update_mp4_status(db_path: str, mp4_root: Path, threshold_mb: int,
     if dry_run:
         return {'total': len(updates), 'new': 0, 'changed': 0}
 
-    # Check for changes
+    # Check for changes (only read managed columns)
     conn = sqlite3.connect(db_path)
     try:
         if not existing_all:
             ensure_mp4_table_exists(conn)
             cur = conn.cursor()
             try:
-                cur.execute('SELECT recording_date, case_no, camera_name, size_mb, duration_minutes FROM "mp4_status"')
+                # Only read columns this script manages
+                cur.execute('SELECT recording_date, case_no, camera_name, size_mb, duration_minutes, path FROM "mp4_status"')
                 for row in cur.fetchall():
-                    existing_all[(row[0], row[1], row[2])] = (row[3], row[4])
+                    existing_all[(row[0], row[1], row[2])] = (row[3], row[4], row[5])
             except sqlite3.OperationalError:
                 pass
 
         new_entries = []
         changed_entries = []
 
-        for key, (status, size_mb, duration) in updates.items():
+        for key, (status, size_mb, duration, file_path) in updates.items():
             recording_date, case_no, camera_name = key
             if key not in existing_all:
-                new_entries.append((recording_date, case_no, camera_name, status, size_mb, duration))
+                new_entries.append((recording_date, case_no, camera_name, status, size_mb, duration, file_path))
             else:
-                old_size, old_duration = existing_all[key]
-                if old_size != size_mb or old_duration != duration:
-                    changed_entries.append((recording_date, case_no, camera_name, status, old_size, size_mb, old_duration, duration))
+                old_size, old_duration, old_path = existing_all[key]
+                if old_size != size_mb or old_duration != duration or old_path != file_path:
+                    changed_entries.append((recording_date, case_no, camera_name, status, old_size, size_mb, old_duration, duration, old_path, file_path))
 
         # Show detailed changes
         if new_entries:
             print(f"\n  [NEW] {len(new_entries)} new entries:")
-            for recording_date, case_no, camera_name, status, size_mb, duration in new_entries[:10]:
+            for recording_date, case_no, camera_name, status, size_mb, duration, file_path in new_entries[:10]:
                 status_label = {1: ">=200MB", 2: "<200MB", 3: "Missing"}.get(status, str(status))
                 size_str = f"{size_mb}MB" if size_mb is not None else "NULL"
                 duration_str = f"{duration:.1f}min" if duration is not None else "N/A"
@@ -484,7 +538,7 @@ def update_mp4_status(db_path: str, mp4_root: Path, threshold_mb: int,
 
         if changed_entries:
             print(f"\n  [CHANGED] {len(changed_entries)} changed entries:")
-            for recording_date, case_no, camera_name, status, old_size, new_size, old_duration, new_duration in changed_entries[:10]:
+            for recording_date, case_no, camera_name, status, old_size, new_size, old_duration, new_duration, old_path, new_path in changed_entries[:10]:
                 status_label = {1: ">=200MB", 2: "<200MB", 3: "Missing"}.get(status, str(status))
                 old_size_str = f"{old_size}MB" if old_size is not None else "NULL"
                 new_size_str = f"{new_size}MB" if new_size is not None else "NULL"
@@ -632,7 +686,7 @@ Examples:
         # Show some changes
         if mp4_stats.get('new_entries'):
             print(f"\n  Recent new MP4 entries :")
-            for recording_date, case_no, camera_name, status, size_mb, duration in mp4_stats['new_entries']:
+            for recording_date, case_no, camera_name, status, size_mb, duration, file_path in mp4_stats['new_entries']:
                 status_label = {1: ">=200MB", 2: "<200MB", 3: "Missing"}.get(status, str(status))
                 size_str = f"{size_mb}MB" if size_mb is not None else "NULL"
                 duration_str = f"{duration:.1f}min" if duration is not None else "N/A"
@@ -640,7 +694,7 @@ Examples:
 
         if mp4_stats.get('changed_entries'):
             print(f"\n  Recent changed MP4 entries :")
-            for recording_date, case_no, camera_name, status, old_size, new_size, old_duration, new_duration in mp4_stats['changed_entries']:
+            for recording_date, case_no, camera_name, status, old_size, new_size, old_duration, new_duration, old_path, new_path in mp4_stats['changed_entries']:
                 old_size_str = f"{old_size}MB" if old_size is not None else "NULL"
                 new_size_str = f"{new_size}MB" if new_size is not None else "NULL"
                 old_dur_str = f"{old_duration:.1f}min" if old_duration is not None else "N/A"
@@ -674,23 +728,33 @@ Examples:
             ensure_mp4_table_exists(conn)
             cur = conn.cursor()
 
-            # Write SEQ updates
+            # Write SEQ updates (only updates managed column: size_mb)
             if seq_stats and 'updates' in seq_stats:
                 for (recording_date, case_no, camera_name), (status, size_mb) in seq_stats['updates'].items():
                     cur.execute('''
-                        INSERT OR REPLACE INTO "seq_status"
+                        INSERT INTO "seq_status"
                         (recording_date, case_no, camera_name, size_mb)
                         VALUES (?, ?, ?, ?)
+                        ON CONFLICT(recording_date, case_no, camera_name)
+                        DO UPDATE SET
+                            size_mb = excluded.size_mb
                     ''', (recording_date, case_no, camera_name, size_mb))
 
-            # Write MP4 updates
+            # Write MP4 updates (only updates managed columns: size_mb, duration_minutes, path)
             if mp4_stats and 'updates' in mp4_stats:
-                for (recording_date, case_no, camera_name), (status, size_mb, duration) in mp4_stats['updates'].items():
+                for (recording_date, case_no, camera_name), (status, size_mb, duration, file_path) in mp4_stats['updates'].items():
+                    # Use INSERT ... ON CONFLICT DO UPDATE to only update managed columns
+                    # This preserves all other columns (present and future)
                     cur.execute('''
-                        INSERT OR REPLACE INTO "mp4_status"
-                        (recording_date, case_no, camera_name, size_mb, duration_minutes)
-                        VALUES (?, ?, ?, ?, ?)
-                    ''', (recording_date, case_no, camera_name, size_mb, duration))
+                        INSERT INTO "mp4_status"
+                        (recording_date, case_no, camera_name, size_mb, duration_minutes, path)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(recording_date, case_no, camera_name)
+                        DO UPDATE SET
+                            size_mb = excluded.size_mb,
+                            duration_minutes = excluded.duration_minutes,
+                            path = excluded.path
+                    ''', (recording_date, case_no, camera_name, size_mb, duration, file_path))
 
             conn.commit()
 
