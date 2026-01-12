@@ -62,7 +62,17 @@
       "WebFetch(domain:y-t-g.github.io)",
       "Bash(copy:*)",
       "Bash(git checkout:*)",
-      "Bash(winget install:*)"
+      "Bash(winget install:*)",
+      "Bash(git fetch:*)",
+      "Bash(if [ -d \"specs\" ])",
+      "Bash(then ls -d specs/[0-9]*-multimpv-db-controls)",
+      "Bash(else echo \"\")",
+      "Bash(fi)",
+      "Bash(pwsh:*)",
+      "Bash(mkdir:*)",
+      "Bash(\"C:/Users/user/Downloads/MPV/mpv.exe\" --version)",
+      "Bash(find:*)",
+      "Bash(timeout 3 python:*)"
     ],
     "deny": [],
     "ask": []
