@@ -61,7 +61,8 @@
       "Bash(gdown:*)",
       "WebFetch(domain:y-t-g.github.io)",
       "Bash(copy:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(winget install:*)"
     ],
     "deny": [],
     "ask": []
