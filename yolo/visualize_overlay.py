@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import sys
 import os
+import json
 from tqdm import tqdm
 
 # Suppress FFmpeg warnings
@@ -85,17 +86,39 @@ def draw_skeleton(frame, row, color, min_conf=0.001):
 
 
 def main():
+    # Load config
+    config_path = os.path.join(os.path.dirname(__file__), "0_yolo_config.json")
+    config = {}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+        except Exception as e:
+            print(f"Warning: Could not load config file {config_path}: {e}")
+
+    default_video = config.get('video', {}).get('input_path', '')
+    default_parquet = config.get('video', {}).get('output_path', '')
+
     if len(sys.argv) < 3:
-        print("Usage: python visualize_overlay.py <video_path> <parquet_path>")
-        # Fallback input for easy testing
-        video_path = input("Enter video path: ").strip('"')
-        parquet_path = input("Enter parquet path: ").strip('"')
+        if default_video and default_parquet and os.path.exists(default_video) and os.path.exists(default_parquet):
+            print(f"Using paths from config: {config_path}")
+            print(f"  Video: {default_video}")
+            print(f"  Parquet: {default_parquet}")
+            video_path = default_video
+            parquet_path = default_parquet
+        else:
+            print("Usage: python visualize_overlay.py <video_path> <parquet_path>")
+            # Fallback input for easy testing
+            video_path = input(f"Enter video path [{default_video}]: ").strip('"') or default_video
+            parquet_path = input(f"Enter parquet path [{default_parquet}]: ").strip('"') or default_parquet
     else:
         video_path = sys.argv[1]
         parquet_path = sys.argv[2]
 
     if not os.path.exists(video_path) or not os.path.exists(parquet_path):
         print("Error: Files not found.")
+        print(f"Video: {video_path}")
+        print(f"Parquet: {parquet_path}")
         return
 
     print("Loading data...")

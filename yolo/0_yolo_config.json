@@ -6,7 +6,7 @@
     "iou_threshold": 0.45,
     "brightness_boost": 1.0,
     "use_half_precision": true,
-    "imgsz": 1920
+    "imgsz": 640
   },
   "video": {
     "input_path": "F:\\Room_8_Data\\samples\\b.mp4",
@@ -54,11 +54,11 @@
   "strongsort": {
     "reid_model": "osnet_ain_x1_0_msmt17.pt",
     "reid_model_dir": ".",
-    "min_conf": 0.55,
-    "max_cos_dist": 0.35,
+    "min_conf": 0.30,
+    "max_cos_dist": 0.55,
     "max_iou_dist": 0.9,
     "max_age": 600,
-    "n_init": 15,
+    "n_init": 5,
     "nn_budget": 3000,
     "mc_lambda": 0.98,
     "ema_alpha": 0.995
