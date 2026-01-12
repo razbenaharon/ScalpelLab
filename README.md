@@ -212,7 +212,7 @@ Copies files while preserving directory structure from "Recordings" folder onwar
 
 **`multiMPV/multiMPV.py`** - Synchronized Multi-Camera Viewer
 ```bash
-python multiMPV/multiMPV.py
+python multiMPV/run_viewer.py
 # or double-click multiMPV.exe (if compiled)
 ```
 Displays up to 9 videos in synchronized grid layout using MPV player. Features:
