@@ -131,7 +131,7 @@ class multiMPV:
         mpv_dir = os.path.dirname(mpv_path)
         return mpv_dir
 
-    def _launch_session(self, metadata_list: List[CameraMetadata], mpv_dir: str):
+    def _launch_session(self, metadata_list: List[CameraMetadata], mpv_dir: str, root: Tk = None):
         """
         Launch MPV session with provided camera metadata.
         This handles grid calculation, process launching, and SyncPanel init.
@@ -143,22 +143,9 @@ class multiMPV:
         cols = math.ceil(math.sqrt(n))
         rows = math.ceil(n / cols)
         
-        # We need a root for screen dimensions, but we might already have one if called from DB browser.
-        # However, SyncPanel uses Toplevel.
-        # If we created a root for the startup dialog, we should reuse/hide it.
-        # For simplicity, let's assume we can create a new root or use existing.
-        
-        # Check if we have an active root (Tk) instance
-        try:
-            root = Tk()
-            root.withdraw() # Hide it immediately
-            root_created = True
-        except Exception: 
-            # Tk might already exist? Tk() usually raises if one exists but we can have multiple Toplevels.
-            # Actually Tk() creates a new interpreter or connects to existing.
-            # If we used Tk() in startup dialog and didn't destroy it, we should use that.
-            # Let's assume we need a fresh one or we are passed one.
-            # For this refactor, let's stick to creating one if needed.
+        # Root handling
+        if root is None:
+            # CLI mode or fresh start
             root = Tk()
             root.withdraw()
         
@@ -201,7 +188,7 @@ class multiMPV:
                 camera = Camera(
                     name=meta.camera_name,
                     file_path=meta.file_path,
-                    case_id=("unknown", 0), # We could improve this if metadata had case info
+                    case_id=meta.case_id if meta.case_id else ("unknown", 0),
                     mpv_process=process,
                     ipc_pipe_path=pipe_name,
                     offset_seconds=meta.offset_seconds # Initialize with saved offset
@@ -225,13 +212,22 @@ class multiMPV:
             control_window.protocol("WM_DELETE_WINDOW", cleanup)
             atexit.register(cleanup)
             
-            root.mainloop()
+            # Only call mainloop if we created the root or if we are the main driver
+            # In GUI mode, mainloop is called by _show_startup_dialog
+            if root.state() == 'normal' or root.state() == 'withdrawn': 
+                 # If we are in CLI mode (root created here), block
+                 # If we are in GUI mode, we are already in mainloop?
+                 # Actually, _show_startup_dialog calls mainloop().
+                 # But we are called FROM a callback inside mainloop.
+                 # So we don't need to call mainloop again.
+                 pass
+                 
         else:
             print("No cameras launched.")
             root.destroy()
             sys.exit()
 
-    def run_independent(self, vids, mpv_dir):
+    def run_independent(self, vids, mpv_dir, root: Tk = None):
         """Legacy entry point: convert paths to metadata and launch"""
         metadata_list = []
         for vid in vids:
@@ -246,7 +242,7 @@ class multiMPV:
             )
             metadata_list.append(meta)
             
-        self._launch_session(metadata_list, mpv_dir)
+        self._launch_session(metadata_list, mpv_dir, root)
 
     def _show_startup_dialog(self):
         """Show dialog to choose between File or Database load"""
@@ -267,7 +263,7 @@ class multiMPV:
             vids = self.get_vids()
             if vids:
                 self.assert_vids_location(vids)
-                self.run_independent(vids, self.mpv_dir)
+                self.run_independent(vids, self.mpv_dir, root)
             else:
                 root.destroy()
                 sys.exit()
@@ -280,7 +276,7 @@ class multiMPV:
                 # Callback when cameras selected from DB
                 # Close DB browser is handled by browser class
                 # Launch session
-                self._launch_session(cameras, self.mpv_dir)
+                self._launch_session(cameras, self.mpv_dir, root)
 
             try:
                 DatabaseBrowser(root, on_cameras_selected)
