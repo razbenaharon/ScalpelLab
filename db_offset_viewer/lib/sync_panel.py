@@ -68,6 +68,14 @@ class CameraControlRow:
         self.offset_label = ttk.Label(controls, text=f"{camera.offset_seconds:+.2f}s", width=8)
         self.offset_label.pack(side=tk.LEFT)
         
+        # Play/Pause Buttons
+        play_pause_frame = ttk.Frame(controls)
+        play_pause_frame.pack(side=tk.LEFT, padx=10)
+        ttk.Button(play_pause_frame, text="▶", width=3, 
+                   command=lambda: self.controller.send_command(self.camera.ipc_pipe_path, "set pause no")).pack(side=tk.LEFT, padx=1)
+        ttk.Button(play_pause_frame, text="⏸", width=3, 
+                   command=lambda: self.controller.send_command(self.camera.ipc_pipe_path, "set pause yes")).pack(side=tk.LEFT, padx=1)
+
         # Nudge Buttons
         btn_frame = ttk.Frame(controls)
         btn_frame.pack(side=tk.RIGHT)
@@ -140,37 +148,34 @@ class SyncPanel:
         control_frame = ttk.LabelFrame(main_frame, text="Master Playback Controls", padding=5)
         control_frame.pack(fill=tk.X, pady=(0, 10))
         
-        # Master Seek Buttons (Replaces Timeline)
-        seek_frame = ttk.Frame(control_frame)
-        seek_frame.pack(fill=tk.X, pady=5)
+        # Jump to Timestamp
+        jump_frame = ttk.Frame(control_frame)
+        jump_frame.pack(fill=tk.X, pady=5)
         
         # Current time display
-        self.master_time_label = ttk.Label(seek_frame, text="00:00:00", font=("Arial", 12))
+        self.master_time_label = ttk.Label(jump_frame, text="00:00:00", font=("Arial", 12))
         self.master_time_label.pack(anchor="center")
         
-        # Buttons container
-        btn_container = ttk.Frame(seek_frame)
-        btn_container.pack(anchor="center", pady=5)
+        # Jump Input
+        input_container = ttk.Frame(jump_frame)
+        input_container.pack(anchor="center", pady=5)
         
-        jumps = [
-            ("-1h", -3600), ("-20m", -1200), ("-5m", -300), ("-1m", -60),
-            ("+1m", 60), ("+5m", 300), ("+20m", 1200), ("+1h", 3600)
-        ]
+        ttk.Label(input_container, text="Jump to:").pack(side=tk.LEFT)
+        self.jump_var = tk.StringVar()
+        entry = ttk.Entry(input_container, textvariable=self.jump_var, width=10)
+        entry.pack(side=tk.LEFT, padx=5)
+        entry.bind('<Return>', lambda e: self._jump_to_timestamp())
         
-        for label, sec in jumps:
-            btn = ttk.Button(btn_container, text=label, width=5,
-                             command=lambda s=sec: self._send_global(f"seek {s} relative+exact"))
-            btn.pack(side=tk.LEFT, padx=1)
+        ttk.Button(input_container, text="Go", width=5, command=self._jump_to_timestamp).pack(side=tk.LEFT)
+        ttk.Label(input_container, text="(HH:MM:SS or seconds)").pack(side=tk.LEFT, padx=5)
 
         # Standard Transport Controls
         transport_frame = ttk.Frame(control_frame)
         transport_frame.pack(anchor=tk.CENTER, pady=5)
         
         ttk.Button(transport_frame, text="< Frame", command=lambda: self._send_global("frame-back-step")).pack(side=tk.LEFT, padx=2)
-        ttk.Button(transport_frame, text="<< 10s", command=lambda: self._send_global("seek -10")).pack(side=tk.LEFT, padx=5)
         ttk.Button(transport_frame, text="Play All", command=lambda: self._send_global("set pause no")).pack(side=tk.LEFT, padx=5)
         ttk.Button(transport_frame, text="Pause All", command=lambda: self._send_global("set pause yes")).pack(side=tk.LEFT, padx=5)
-        ttk.Button(transport_frame, text="10s >>", command=lambda: self._send_global("seek 10")).pack(side=tk.LEFT, padx=5)
         ttk.Button(transport_frame, text="Frame >", command=lambda: self._send_global("frame-step")).pack(side=tk.LEFT, padx=2)
 
         # Speed
@@ -223,9 +228,69 @@ class SyncPanel:
         
         ttk.Button(bottom_frame, text="Exit", command=self._on_close).pack(side=tk.RIGHT, padx=5)
         ttk.Button(bottom_frame, text="Export Annotations", command=self._export_annotations).pack(side=tk.RIGHT)
-        ttk.Button(bottom_frame, text="Mark Timestamp", command=self._mark_timestamp).pack(side=tk.RIGHT, padx=10)
 
         self.annotations = []
+
+    def _jump_to_timestamp(self):
+        val = self.jump_var.get().strip()
+        print(f"DEBUG: Jump requested for '{val}'")
+        if not val: return
+        
+        seconds = 0.0
+        try:
+            # Case 1: Separators (HH:MM:SS or MM SS)
+            if ':' in val or ' ' in val:
+                sep = ':' if ':' in val else ' '
+                parts = [p for p in val.split(sep) if p] # Filter empty strings
+                
+                if len(parts) == 3: # HH:MM:SS
+                    h, m, s = map(float, parts)
+                    seconds = h * 3600 + m * 60 + s
+                elif len(parts) == 2: # MM:SS
+                    m, s = map(float, parts)
+                    seconds = m * 60 + s
+                elif len(parts) == 1:
+                    seconds = float(parts[0])
+                else:
+                    raise ValueError("Too many parts")
+            
+            # Case 2: Pure Digits (Short codes)
+            else:
+                if '.' in val:
+                    # Decimal implies seconds (e.g. 90.5)
+                    seconds = float(val)
+                else:
+                    digits = int(val)
+                    s_val = str(digits)
+                    
+                    if len(s_val) <= 2:
+                        # 0-99 -> seconds
+                        seconds = float(digits)
+                    elif len(s_val) <= 4:
+                        # mss or mmss (e.g. 130 -> 1m 30s)
+                        m = digits // 100
+                        s = digits % 100
+                        seconds = m * 60 + s
+                    else:
+                        # hmmss or hhmmss (e.g. 11500 -> 1h 15m 00s)
+                        h = digits // 10000
+                        rem = digits % 10000
+                        m = rem // 100
+                        s = rem % 100
+                        seconds = h * 3600 + m * 60 + s
+
+            print(f"DEBUG: Parsed seconds: {seconds}")
+
+            # Execute Jump
+            for cam in self.cameras:
+                target = max(0.0, seconds - cam.offset_seconds)
+                print(f"DEBUG: Seeking {cam.name} to {target} (Offset: {cam.offset_seconds})")
+                self.controller.send_command(cam.ipc_pipe_path, f"seek {target} absolute+exact")
+                self.controller.send_command(cam.ipc_pipe_path, "set pause yes") # Ensure paused to see frame
+                
+        except ValueError as e:
+            print(f"DEBUG: ValueError: {e}")
+            messagebox.showerror("Invalid Input", "Invalid format. Try:\n- 90 (90s)\n- 130 (1m 30s)\n- 11500 (1h 15m 00s)\n- HH:MM:SS")
 
     def _restart_video(self):
         """Rewind all videos to 00:00:00 (keeps sync offsets)"""
@@ -328,6 +393,24 @@ class SyncPanel:
         except Exception:
             pass
 
+    def _seek_global_synced(self, seconds: float):
+        """
+        Seek all cameras using absolute timestamps to prevent drift.
+        Uses cached timestamps from the last poll to ensure all cameras
+        move by the exact same amount relative to their current position,
+        canceling out any IPC latency delays.
+        """
+        for cam in self.cameras:
+            # Use cached timestamp to calculate target
+            # This 'freezes' the relative offset between cameras
+            target_time = cam.current_timestamp + seconds
+            
+            # Ensure non-negative
+            target_time = max(0.0, target_time)
+            
+            # Use absolute+exact to force position
+            self.controller.send_command(cam.ipc_pipe_path, f"seek {target_time} absolute+exact")
+
     def _send_global(self, command: str):
         """Send command to all cameras"""
         for cam in self.cameras:
@@ -345,52 +428,50 @@ class SyncPanel:
         except ValueError:
             pass
 
-    def _mark_timestamp(self):
-        if not self.reference_camera: return
-        current_time = self.reference_camera.current_timestamp
-        
-        from tkinter import simpledialog
-        text = simpledialog.askstring("Mark Timestamp", f"Annotation at {current_time:.2f}s:")
-        
-        if text:
-            cam_states = {c.name: c.current_timestamp for c in self.cameras}
-            note = {
-                "timestamp": current_time,
-                "text": text,
-                "camera_times": cam_states,
-                "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
-            }
-            self.annotations.append(note)
-            messagebox.showinfo("Marked", "Annotation saved.")
-
     def _export_annotations(self):
-        if not self.annotations:
-            messagebox.showinfo("Export", "No annotations to export.")
-            return
-            
+        # Export current sync offsets for all cameras
+        # This replaces the old "notes" export since manual marking is removed
+        
         from tkinter import filedialog
         import json
         
+        # Construct default filename from case info
+        default_name = "sync_offsets.json"
+        if self.cameras and self.cameras[0].case_id:
+            date_str, case_no = self.cameras[0].case_id
+            if date_str != "unknown":
+                default_name = f"{date_str}_case_{case_no}_sync.json"
+
         fpath = filedialog.asksaveasfilename(
+            initialfile=default_name,
             defaultextension=".json",
-            filetypes=[("JSON files", "*.json"), ("Text files", "*.txt")]
+            filetypes=[("JSON files", "*.json")]
         )
         
         if not fpath: return
         
         try:
-            if fpath.endswith(".json"):
-                with open(fpath, "w") as f:
-                    json.dump(self.annotations, f, indent=2)
-            else:
-                with open(fpath, "w") as f:
-                    for note in self.annotations:
-                        f.write(f"[{note['timestamp']:.2f}s] {note['text']}\n")
-                        for cam, t in note['camera_times'].items():
-                            f.write(f"  - {cam}: {t:.2f}s\n")
-                        f.write("\n")
+            # Build export data structure
+            export_data = {
+                "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "case": {
+                    "date": self.cameras[0].case_id[0] if self.cameras else "unknown",
+                    "number": self.cameras[0].case_id[1] if self.cameras else 0
+                },
+                "cameras": {}
+            }
             
-            messagebox.showinfo("Export", f"Exported {len(self.annotations)} annotations.")
+            for cam in self.cameras:
+                export_data["cameras"][cam.name] = {
+                    "file": cam.file_path,
+                    "offset_seconds": cam.offset_seconds,
+                    "sync_status": cam.sync_status
+                }
+
+            with open(fpath, "w") as f:
+                json.dump(export_data, f, indent=2)
+            
+            messagebox.showinfo("Export", f"Exported sync offsets for {len(self.cameras)} cameras.")
         except Exception as e:
             messagebox.showerror("Export Error", f"Failed to save: {e}")
 
@@ -435,3 +516,5 @@ class SyncPanel:
             self.master.destroy()
         except Exception:
             pass
+        import sys
+        sys.exit(0)
