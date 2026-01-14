@@ -220,7 +220,7 @@ class SyncPanel:
         bottom_frame = ttk.Frame(main_frame, padding=5)
         bottom_frame.pack(fill=tk.X, pady=10)
         
-        self.save_btn = ttk.Button(bottom_frame, text="Save All Offsets", command=self._save_offsets_to_database, state=tk.DISABLED)
+        self.save_btn = ttk.Button(bottom_frame, text="Save All Offsets", command=self._save_offsets_to_database, state=tk.NORMAL)
         self.save_btn.pack(side=tk.LEFT)
         
         self.reset_btn = ttk.Button(bottom_frame, text="Restart Videos", command=self._restart_video)
@@ -233,7 +233,6 @@ class SyncPanel:
 
     def _jump_to_timestamp(self):
         val = self.jump_var.get().strip()
-        print(f"DEBUG: Jump requested for '{val}'")
         if not val: return
         
         seconds = 0.0
@@ -279,17 +278,13 @@ class SyncPanel:
                         s = rem % 100
                         seconds = h * 3600 + m * 60 + s
 
-            print(f"DEBUG: Parsed seconds: {seconds}")
-
             # Execute Jump
             for cam in self.cameras:
                 target = max(0.0, seconds - cam.offset_seconds)
-                print(f"DEBUG: Seeking {cam.name} to {target} (Offset: {cam.offset_seconds})")
                 self.controller.send_command(cam.ipc_pipe_path, f"seek {target} absolute+exact")
                 self.controller.send_command(cam.ipc_pipe_path, "set pause yes") # Ensure paused to see frame
                 
         except ValueError as e:
-            print(f"DEBUG: ValueError: {e}")
             messagebox.showerror("Invalid Input", "Invalid format. Try:\n- 90 (90s)\n- 130 (1m 30s)\n- 11500 (1h 15m 00s)\n- HH:MM:SS")
 
     def _restart_video(self):
@@ -384,15 +379,6 @@ class SyncPanel:
             h, m = divmod(m, 60)
             self.master_time_label.configure(text=f"{h:02d}:{m:02d}:{s:02d}")
 
-        # Enable save button
-        try:
-            if any(c.offset_modified for c in self.cameras):
-                self.save_btn.configure(state=tk.NORMAL)
-            else:
-                self.save_btn.configure(state=tk.DISABLED)
-        except Exception:
-            pass
-
     def _seek_global_synced(self, seconds: float):
         """
         Seek all cameras using absolute timestamps to prevent drift.
@@ -476,36 +462,62 @@ class SyncPanel:
             messagebox.showerror("Export Error", f"Failed to save: {e}")
 
     def _save_offsets_to_database(self):
-        modified_cameras = [c for c in self.cameras if c.offset_modified]
-        if not modified_cameras: return
-
-        msg = "Save the following sync offsets to database?\n\n"
-        for cam in modified_cameras:
-            msg += f"{cam.name}: {cam.offset_seconds:+.2f}s\n"
+        # Save current state for all cameras
+        cameras_to_save = [c for c in self.cameras if c.case_id and c.case_id[0] != "unknown"]
         
+        if not cameras_to_save:
+            messagebox.showwarning("Save Offsets", "No database case associated with these videos. Offsets cannot be saved to the database in 'Local File' mode.")
+            return
+
+        msg = f"Save current sync offsets for {len(cameras_to_save)} cameras to the database?"
         if not messagebox.askyesno("Confirm Save", msg): return
 
         import sqlite3
         import os
+        import configparser
+        
         try:
-            # Database is located at db_offset_viewer root, go up one level from lib/
-            db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ScalpelDatabase.sqlite")
+            # Resolve DB Path using config.ini
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            config_path = os.path.join(base_dir, 'config.ini')
+            db_path = os.path.join(base_dir, "ScalpelDatabase.sqlite")
+            
+            if os.path.exists(config_path):
+                config = configparser.ConfigParser()
+                config.read(config_path)
+                if 'Database' in config and 'database_path' in config['Database']:
+                    configured_path = config['Database']['database_path']
+                    if not os.path.isabs(configured_path):
+                        db_path = os.path.normpath(os.path.join(base_dir, configured_path))
+                    else:
+                        db_path = configured_path
+
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
             
-            for cam in modified_cameras:
-                if cam.case_id:
-                    recording_date, case_no = cam.case_id
+            for cam in cameras_to_save:
+                recording_date, case_no = cam.case_id
+                
+                # Update mp4_status table
+                cursor.execute("""
+                    UPDATE mp4_status 
+                    SET offset_seconds = ? 
+                    WHERE recording_date = ? AND case_no = ? AND camera_name = ?
+                """, (cam.offset_seconds, recording_date, case_no, cam.name))
+                
+                if cursor.rowcount == 0:
+                    # Fallback to path match
                     cursor.execute("""
                         UPDATE mp4_status 
                         SET offset_seconds = ? 
-                        WHERE recording_date = ? AND case_no = ? AND filename LIKE ?
+                        WHERE recording_date = ? AND case_no = ? AND path LIKE ?
                     """, (cam.offset_seconds, recording_date, case_no, f"%{cam.name}%"))
-                    cam.offset_modified = False
+                
+                cam.offset_modified = False
             
             conn.commit()
             conn.close()
-            messagebox.showinfo("Success", "Offsets saved.")
+            messagebox.showinfo("Success", f"Successfully saved offsets for {len(cameras_to_save)} cameras.")
         except Exception as e:
             messagebox.showerror("Error", f"Database save failed: {e}")
 
