@@ -223,7 +223,9 @@ python run_viewer.py
 1. **Create MPVController class**:
 
 ```python
-# db_offset_viewer/mpv_controller.py
+# MPV_DB/mpv_controller.py
+# ... (around line 308)
+# MPV_DB/run_viewer.py (refactored)
 
 import subprocess
 import os
