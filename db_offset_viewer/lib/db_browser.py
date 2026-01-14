@@ -25,7 +25,7 @@ import sys
 from typing import List, Optional, Tuple, Dict
 from .models import Case, CameraMetadata
 
-# Add project root to path to import config.py (go up 3 levels: lib -> db_offset_viewer -> root)
+# Add project root to path to import config.py (go up 3 levels: lib -> MPV_DB -> root)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 import config
 
@@ -62,7 +62,7 @@ class DatabaseBrowser:
 
     def _get_config_values(self):
         config_ini = configparser.ConfigParser()
-        # Config is at db_offset_viewer root, go up one level from lib/
+        # Config is at MPV_DB root, go up one level from lib/
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         config_path = os.path.join(base_dir, 'config.ini')
         config_ini.read(config_path)

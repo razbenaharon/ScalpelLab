@@ -164,6 +164,18 @@ class multiMPV:
         
         cameras = []
         
+        # Normalize start offsets to ensure no negative values for MPV
+        # Find minimum offset
+        min_offset = 0.0
+        if metadata_list:
+            min_offset = min(meta.offset_seconds for meta in metadata_list)
+        
+        # Calculate shift if needed (only if min is negative)
+        shift = 0.0
+        if min_offset < 0:
+            shift = abs(min_offset)
+            print(f"Normalizing offsets: shifting all start times by +{shift}s")
+
         for i, meta in enumerate(metadata_list):
             r = i // cols
             c = i % cols
@@ -174,17 +186,20 @@ class multiMPV:
             pipe_name = f'\\\\.\\pipe\\mpv_socket_{i}_{int(time.time())}'
             geometry = f"{win_width}x{win_height}+{x}+{y}"
             
-            print(f"Launching: {meta.camera_name} ({meta.file_path}) Offset: {meta.offset_seconds}s")
+            # Apply shift to launch start time
+            launch_start = meta.offset_seconds + shift
+            
+            print(f"Launching: {meta.camera_name} ({meta.file_path}) Offset: {meta.offset_seconds}s -> Start: {launch_start}s")
             try:
-                # Launch with offset!
+                # Launch with normalized start time
                 process = controller.launch_video(
                     video_path=meta.file_path, 
                     pipe_name=pipe_name, 
                     geometry=geometry,
-                    start_offset=meta.offset_seconds
+                    start_offset=launch_start
                 )
                 
-                # Create Camera object
+                # Create Camera object (keep original DB offset)
                 camera = Camera(
                     name=meta.camera_name,
                     file_path=meta.file_path,
