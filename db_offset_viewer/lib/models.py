@@ -115,6 +115,7 @@ class CameraMetadata:
     file_size: int  # File size in bytes
     offset_seconds: float = 0.0  # Saved sync offset from DB (or 0.0)
     file_exists: bool = True  # Default to True, trusted from DB
+    case_id: Optional[Tuple[str, int]] = None # (date, case_no)
 
     def __post_init__(self):
         """Validate attributes"""

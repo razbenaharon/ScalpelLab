@@ -181,50 +181,65 @@ class MPVController:
     def query_property(self, pipe_name: str, property_name: str, timeout_ms: int = 500) -> Optional[str]:
         """
         Query MPV property via IPC (blocking with timeout).
-
-        Args:
-            pipe_name: Named pipe path
-            property_name: MPV property to query (e.g., "time-pos", "duration", "pause")
-            timeout_ms: Timeout in milliseconds (default: 500ms)
-
-        Returns:
-            Optional[str]: Property value as string, or None if query failed
-
-        Examples:
-            timestamp = query_property(pipe, "time-pos")     # Returns "123.456"
-            duration = query_property(pipe, "duration")      # Returns "2535.123"
-            is_paused = query_property(pipe, "pause")        # Returns "yes" or "no"
-
-        Response Format:
-            MPV returns plain-text response in format: "ANS_property_name=value"
-            This method parses the response and returns just the value portion.
+        Handles mixed output (JSON events + text response).
         """
         try:
             fd = os.open(pipe_name, os.O_RDWR)
             command = f"get_property {property_name}\n"
             os.write(fd, command.encode('utf-8'))
 
-            # Read response (format: "ANS_property_name=value")
-            response = os.read(fd, 1024).decode('utf-8').strip()
-            os.close(fd)
-
-            # Parse response
             expected_prefix = f"ANS_{property_name}="
-            if response.startswith(expected_prefix):
-                value = response.split('=', 1)[1]
-                return value
-            else:
-                print(f"[IPC Warning] Unexpected response format: {response}")
-                return None
+            start_time = time.time()
+            buffer = ""
+            
+            while (time.time() - start_time) * 1000 < timeout_ms:
+                try:
+                    # Read chunk
+                    chunk = os.read(fd, 4096).decode('utf-8', errors='ignore')
+                    if not chunk:
+                        time.sleep(0.01)
+                        continue
+                    
+                    buffer += chunk
+                    lines = buffer.split('\n')
+                    
+                    # Process lines
+                    for line in lines:
+                        line = line.strip()
+                        if not line: continue
+                        
+                        if line.startswith(expected_prefix):
+                            os.close(fd)
+                            return line.split('=', 1)[1]
+                        
+                        # Debug: Check if it's an error or unexpected non-event
+                        if not line.startswith("{") and not line.startswith("ANS_"):
+                            # Only print true garbage, ignore JSON events
+                            # print(f"[IPC Debug] Ignored: {line}")
+                            pass
+                            
+                    # Keep partial last line if not ending in newline
+                    if not buffer.endswith('\n'):
+                        buffer = lines[-1]
+                    else:
+                        buffer = ""
+                        
+                except BlockingIOError:
+                    time.sleep(0.01)
+                    continue
+                except Exception:
+                    break
+            
+            os.close(fd)
+            return None
 
         except FileNotFoundError:
-            print(f"[IPC Error] Named pipe not found: {pipe_name}")
+            # Common race condition when closing app, suppress noise
             return None
         except BrokenPipeError:
-            print(f"[IPC Error] MPV process terminated (broken pipe)")
             return None
         except Exception as e:
-            print(f"[IPC Error] Failed to query property: {e}")
+            print(f"[IPC Error] Failed to query property {property_name}: {e}")
             return None
 
     def close_all(self):
