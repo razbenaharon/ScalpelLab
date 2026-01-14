@@ -1,6 +1,6 @@
 {
   "yolo": {
-    "model": "yolov8m-pose.pt",
+    "model": "yolov8n-pose.pt",
     "model_dir": "F:\\YOLO_Models",
     "confidence_threshold": 0.3,
     "iou_threshold": 0.45,
@@ -54,14 +54,14 @@
   "strongsort": {
     "reid_model": "osnet_ain_x1_0_msmt17.pt",
     "reid_model_dir": ".",
-    "min_conf": 0.30,
-    "max_cos_dist": 0.55,
+    "min_conf": 0.70,
+    "max_cos_dist": 0.45,
     "max_iou_dist": 0.9,
-    "max_age": 600,
-    "n_init": 5,
-    "nn_budget": 3000,
+    "max_age": 300,
+    "n_init": 15,
+    "nn_budget": 500,
     "mc_lambda": 0.98,
-    "ema_alpha": 0.995
+    "ema_alpha": 0.999
   },
       "strongsort_head": {
     "reid_model": "osnet_ain_x1_0_msmt17.pt",

@@ -1,1 +1,1 @@
-# This package contains the core modules for the db_offset_viewer application
+# This package contains the core modules for the MPV_DB application

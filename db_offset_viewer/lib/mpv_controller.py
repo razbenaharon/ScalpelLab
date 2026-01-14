@@ -94,8 +94,9 @@ class MPVController:
             "--idle", # Keep running even if file fails to load
         ]
 
-        # Add start offset if non-zero (apply saved sync offset)
-        if start_offset != 0.0:
+        # Add start offset if positive (apply saved sync offset)
+        # MPV --start cannot handle negative values or "+-" syntax
+        if start_offset > 0.0:
             mpv_args.append(f"--start=+{start_offset}")
 
         # Add optional flags
