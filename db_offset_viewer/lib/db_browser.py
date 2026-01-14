@@ -63,13 +63,18 @@ class DatabaseBrowser:
     def _get_config_values(self):
         config_ini = configparser.ConfigParser()
         # Config is at db_offset_viewer root, go up one level from lib/
-        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.ini')
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        config_path = os.path.join(base_dir, 'config.ini')
         config_ini.read(config_path)
         
         # DB Path
-        db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ScalpelDatabase.sqlite")
+        db_path = os.path.join(base_dir, "ScalpelDatabase.sqlite")
         if 'Database' in config_ini and 'database_path' in config_ini['Database']:
-            db_path = config_ini['Database']['database_path']
+            configured_path = config_ini['Database']['database_path']
+            if not os.path.isabs(configured_path):
+                db_path = os.path.normpath(os.path.join(base_dir, configured_path))
+            else:
+                db_path = configured_path
             
         # MPV Path
         mpv_path = "mpv.exe"
@@ -312,7 +317,8 @@ class DatabaseBrowser:
                     duration=(duration * 60) if duration else 0.0,
                     file_size=size if size else 0,
                     offset_seconds=offset,
-                    file_exists=exists_in_db # Use the DB-based existence
+                    file_exists=exists_in_db, # Use the DB-based existence
+                    case_id=(date, case_no)
                 )
                 cameras.append(cam)
             except ValueError:
