@@ -316,7 +316,7 @@ def export_file(seq_path, out_path, use_ffmpeg=True, codec="mp4"):
                 ffmpeg_path,
                 "-y",
                 "-hwaccel", "cuda",
-                "-r", "30",
+                #"-r", "18",              --------------Set FOR FAST  VIDEO. the defult is 30 so find the right ratio by the correc tv
                 "-i", str(seq_path),
                 "-c:v", "h264_nvenc",
                 "-preset", "p6",  # Higher preset for better compression (p1=fastest, p7=slowest/best compression)

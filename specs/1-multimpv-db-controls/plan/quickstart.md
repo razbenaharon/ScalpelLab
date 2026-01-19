@@ -307,7 +307,7 @@ class MPVController:
 2. **Refactor multiMPV.py to use MPVController**:
 
 ```python
-# db_offset_viewer/run_viewer.py (refactored)
+# MPV_DB/run_viewer.py (refactored)
 
 from mpv_controller import MPVController
 import tkinter as tk

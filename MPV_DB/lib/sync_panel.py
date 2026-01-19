@@ -22,21 +22,26 @@ from .mpv_controller import MPVController
 
 class CameraControlRow:
     """Helper class to manage UI widgets for a single camera row"""
-    def __init__(self, parent, camera: Camera, controller: MPVController, on_nudge):
+    def __init__(self, parent, camera: Camera, controller: MPVController, on_nudge, on_close):
         self.camera = camera
         self.controller = controller
         self.on_nudge = on_nudge
+        self.on_close = on_close
         
         self.frame = ttk.Frame(parent, padding=5, relief="groove")
         self.frame.pack(fill=tk.X, pady=2, padx=5)
         
-        # --- Header: Name + Status ---
+        # --- Header: Name + Status + Close ---
         header = ttk.Frame(self.frame)
         header.pack(fill=tk.X)
         
         ttk.Label(header, text=camera.name, font=("Arial", 10, "bold")).pack(side=tk.LEFT)
+        
+        # Close Button
+        ttk.Button(header, text="✕", width=3, command=lambda: self.on_close(self.camera)).pack(side=tk.RIGHT, padx=2)
+        
         self.status_label = ttk.Label(header, text="Waiting...", font=("Arial", 9))
-        self.status_label.pack(side=tk.RIGHT)
+        self.status_label.pack(side=tk.RIGHT, padx=5)
         
         # --- Seek Buttons (Replaces Slider) ---
         seek_frame = ttk.Frame(self.frame)
@@ -44,8 +49,8 @@ class CameraControlRow:
         
         # Define jumps: (Label, Seconds)
         jumps = [
-            ("-1h", -3600), ("-20m", -1200), ("-5m", -300), ("-1m", -60),
-            ("+1m", 60), ("+5m", 300), ("+20m", 1200), ("+1h", 3600)
+            ("-1h", -3600), ("-20m", -1200), ("-5m", -300), ("-1m", -60), ("-1s", -1), ("-0.1s", -0.1),
+            ("+0.1s", 0.1), ("+1s", 1), ("+1m", 60), ("+5m", 300), ("+20m", 1200), ("+1h", 3600)
         ]
         
         # Center the buttons
@@ -65,15 +70,15 @@ class CameraControlRow:
         self.time_label.pack(side=tk.LEFT)
         
         ttk.Label(controls, text="Offset:").pack(side=tk.LEFT, padx=(10, 2))
-        self.offset_label = ttk.Label(controls, text=f"{camera.offset_seconds:+.2f}s", width=8)
+        self.offset_label = ttk.Label(controls, text=f"{camera.offset_seconds:+.1f}s", width=8)
         self.offset_label.pack(side=tk.LEFT)
         
         # Play/Pause Buttons
         play_pause_frame = ttk.Frame(controls)
         play_pause_frame.pack(side=tk.LEFT, padx=10)
-        ttk.Button(play_pause_frame, text="▶", width=3, 
+        ttk.Button(play_pause_frame, text="▶", width=3,
                    command=lambda: self.controller.send_command(self.camera.ipc_pipe_path, "set pause no")).pack(side=tk.LEFT, padx=1)
-        ttk.Button(play_pause_frame, text="⏸", width=3, 
+        ttk.Button(play_pause_frame, text="⏸", width=3,
                    command=lambda: self.controller.send_command(self.camera.ipc_pipe_path, "set pause yes")).pack(side=tk.LEFT, padx=1)
 
         # Nudge Buttons
@@ -94,7 +99,7 @@ class CameraControlRow:
         if not self.frame.winfo_exists(): return
         
         self.time_label.configure(text=f"{self.camera.current_timestamp:.2f}s")
-        self.offset_label.configure(text=f"{self.camera.offset_seconds:+.2f}s")
+        self.offset_label.configure(text=f"{self.camera.offset_seconds:+.1f}s")
         
         self.status_label.configure(text=self.camera.sync_status_text)
         if self.camera.sync_status == "synced":
@@ -213,7 +218,7 @@ class SyncPanel:
         
         # Create Rows
         for cam in self.cameras:
-            row = CameraControlRow(self.scrollable_frame, cam, self.controller, self._nudge_camera)
+            row = CameraControlRow(self.scrollable_frame, cam, self.controller, self._nudge_camera, self._close_camera)
             self.camera_rows[cam.name] = row
 
         # --- Bottom: Global Actions ---
@@ -223,8 +228,9 @@ class SyncPanel:
         self.save_btn = ttk.Button(bottom_frame, text="Save All Offsets", command=self._save_offsets_to_database, state=tk.NORMAL)
         self.save_btn.pack(side=tk.LEFT)
         
-        self.reset_btn = ttk.Button(bottom_frame, text="Restart Videos", command=self._restart_video)
-        self.reset_btn.pack(side=tk.LEFT, padx=5)
+        ttk.Button(bottom_frame, text="Restart (Synced)", command=self._restart_video).pack(side=tk.LEFT, padx=5)
+        ttk.Button(bottom_frame, text="Restart (Raw 0s)", command=self._restart_video_raw).pack(side=tk.LEFT, padx=5)
+        ttk.Button(bottom_frame, text="Reset Offsets", command=self._reset_offsets).pack(side=tk.LEFT, padx=5)
         
         ttk.Button(bottom_frame, text="Exit", command=self._on_close).pack(side=tk.RIGHT, padx=5)
         ttk.Button(bottom_frame, text="Export Annotations", command=self._export_annotations).pack(side=tk.RIGHT)
@@ -280,7 +286,8 @@ class SyncPanel:
 
             # Execute Jump
             for cam in self.cameras:
-                target = max(0.0, seconds - cam.offset_seconds)
+                # Calculate absolute time for this camera (Video = Master + Offset)
+                target = max(0.0, seconds + cam.offset_seconds)
                 self.controller.send_command(cam.ipc_pipe_path, f"seek {target} absolute+exact")
                 self.controller.send_command(cam.ipc_pipe_path, "set pause yes") # Ensure paused to see frame
                 
@@ -288,20 +295,88 @@ class SyncPanel:
             messagebox.showerror("Invalid Input", "Invalid format. Try:\n- 90 (90s)\n- 130 (1m 30s)\n- 11500 (1h 15m 00s)\n- HH:MM:SS")
 
     def _restart_video(self):
-        """Rewind all videos to 00:00:00 (keeps sync offsets)"""
-        self._send_global("seek 0 absolute")
+        """Rewind all videos to the initial synced state (Session Start)"""
+        # Calculate shift logic mirroring _launch_session
+        min_offset = 0.0
+        if self.cameras:
+            min_offset = min(c.offset_seconds for c in self.cameras)
+        
+        shift = 0.0
+        if min_offset < 0:
+            shift = abs(min_offset)
+
+        for cam in self.cameras:
+            # Target = Session Start (shift) + Offset
+            target = shift + cam.offset_seconds
+            self.controller.send_command(cam.ipc_pipe_path, f"seek {target} absolute+exact")
+            self.controller.send_command(cam.ipc_pipe_path, "set pause yes")
+
+    def _restart_video_raw(self):
+        """Rewind all videos to absolute 0.0, ignoring sync offsets"""
+        for cam in self.cameras:
+            self.controller.send_command(cam.ipc_pipe_path, "seek 0 absolute+exact")
+            self.controller.send_command(cam.ipc_pipe_path, "set pause yes")
+
+    def _reset_offsets(self):
+        """Reset all camera offsets to 0.0"""
+        if not messagebox.askyesno("Confirm Reset", "Reset all sync offsets to 0?"):
+            return
+            
+        for cam in self.cameras:
+            cam.offset_seconds = 0.0
+            cam.offset_modified = True
+            
+        # Update UI rows immediately
+        for row in self.camera_rows.values():
+            row.update()
+            
+        # Restart to apply 0 offset (which is effectively Raw 0s now)
+        self._restart_video_raw()
 
     def _nudge_camera(self, camera: Camera, amount: float):
         """Callback for nudge buttons"""
-        camera.offset_seconds += amount
+        # Calculate new offset rounded to 0.1s
+        new_offset = round(camera.offset_seconds + amount, 1)
+        
+        # Determine actual delta to apply (handling any rounding diffs)
+        diff = new_offset - camera.offset_seconds
+        
+        camera.offset_seconds = new_offset
         camera.offset_modified = True
         
         # Apply relative seek
-        self.controller.send_command(camera.ipc_pipe_path, f"seek {amount} relative+exact")
+        self.controller.send_command(camera.ipc_pipe_path, f"seek {diff} relative+exact")
         
         # UI updates automatically via polling loop, but we can force update for immediate feedback
         if camera.name in self.camera_rows:
             self.camera_rows[camera.name].update()
+
+    def _close_camera(self, camera: Camera):
+        """Close a specific camera stream"""
+        if not messagebox.askyesno("Close Camera", f"Are you sure you want to close {camera.name}?"):
+            return
+
+        # 1. Terminate Process
+        if camera.mpv_process.poll() is None:
+            camera.mpv_process.terminate()
+        
+        # 2. Remove from list
+        if camera in self.cameras:
+            self.cameras.remove(camera)
+            
+        # 3. Remove UI
+        if camera.name in self.camera_rows:
+            row = self.camera_rows.pop(camera.name)
+            row.frame.destroy()
+            
+        # 4. Handle Reference Logic
+        if camera.is_reference:
+            # Pick new reference if possible
+            if self.cameras:
+                self.reference_camera = self.cameras[0]
+                self.reference_camera.is_reference = True
+            else:
+                self.reference_camera = None
 
     def _poll_loop(self):
         """Background thread for querying timestamps"""
