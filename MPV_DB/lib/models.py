@@ -56,6 +56,9 @@ class Camera:
 
     def __post_init__(self):
         """Validate attributes after initialization"""
+        # Round offset to 1 decimal place (0.1s increments)
+        self.offset_seconds = round(self.offset_seconds, 1)
+
         # Validate offset range (±300 seconds = ±5 minutes)
         if not (-300.0 <= self.offset_seconds <= 300.0):
             raise ValueError(
@@ -119,6 +122,9 @@ class CameraMetadata:
 
     def __post_init__(self):
         """Validate attributes"""
+        # Round offset to 1 decimal place (0.1s increments)
+        self.offset_seconds = round(self.offset_seconds, 1)
+
         # Validate file format
         valid_extensions = ('.mp4', '.MP4', '.mkv', '.MKV', '.avi', '.AVI')
         if not self.file_path.endswith(valid_extensions):
