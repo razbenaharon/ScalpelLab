@@ -18,8 +18,8 @@ Table analysis_information {
 Table anesthesiology {
   anesthesiology_key int [pk]
   name               varchar [not null]
-  code               varchar
-  anesthesiology_start_date varchar
+  code               varchar [not null]
+  anesthesiology_start_date varchar [not null]
   grade_a_date       varchar  // merged column
   Note: 'Resident roster'
 }
@@ -57,10 +57,10 @@ Table seq_status {
 }
 
 // Relationships detected from database:
-Ref: recording_details_old.anesthesiology_key > anesthesiology.anesthesiology_key
+Ref: recording_details_old.anesthesiology_key > anesthesiology_old_backup.anesthesiology_key
 Ref: analysis_information.recording_date > recording_details.recording_date
 Ref: analysis_information.case_no > recording_details.case_no
-Ref: anesthesiology.anesthesiology_key > recording_details.anesthesiology_key
+Ref: anesthesiology_old_backup.anesthesiology_key > recording_details.anesthesiology_key
 Ref: recording_details.recording_date > seq_status.recording_date
 Ref: recording_details.case_no > seq_status.case_no
 Ref: recording_details.recording_date > mp4_times.recording_date
