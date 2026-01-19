@@ -67,7 +67,7 @@ class MPVController:
 
         Args:
             video_path: Absolute path to video file
-            pipe_name: Named pipe path for IPC (Windows: \\\\.\\pipe\\mpv_socket_N)
+            pipe_name: Named pipe path for IPC (Windows: \\.\\pipe\\mpv_socket_N)
             geometry: Window geometry string (WxH+X+Y, e.g., "640x480+0+0")
             start_offset: Start playback at this timestamp in seconds (default: 0.0)
             keep_open: Keep window open after video ends (default: True)
@@ -95,7 +95,7 @@ class MPVController:
         ]
 
         # Add start offset if positive (apply saved sync offset)
-        # MPV --start cannot handle negative values or "+-" syntax
+        # MPV --start cannot handle negative values or "+- " syntax
         if start_offset > 0.0:
             mpv_args.append(f"--start=+{start_offset}")
 
