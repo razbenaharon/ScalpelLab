@@ -1,4 +1,4 @@
-//// ScalpelLab Database, exported 2026-01-06
+//// ScalpelLab Database, exported 2026-01-19
 //// Paste into https://dbdiagram.io
 
 //// System table from SQLite. Usually not modeled, included here for completeness.
@@ -44,6 +44,7 @@ Table mp4_status {
   pre_black_segment  decimal
   post_black_segment decimal
   path               varchar
+  offset_seconds     decimal
   Note: 'MP4 export status per camera, 1..n semantics driven by your app'
 }
 
@@ -60,9 +61,9 @@ Ref: recording_details_old.anesthesiology_key > anesthesiology.anesthesiology_ke
 Ref: analysis_information.recording_date > recording_details.recording_date
 Ref: analysis_information.case_no > recording_details.case_no
 Ref: anesthesiology.anesthesiology_key > recording_details.anesthesiology_key
-Ref: recording_details.recording_date > mp4_status.recording_date
-Ref: recording_details.case_no > mp4_status.case_no
 Ref: recording_details.recording_date > seq_status.recording_date
 Ref: recording_details.case_no > seq_status.case_no
 Ref: recording_details.recording_date > mp4_times.recording_date
 Ref: recording_details.recording_date > mp4_times.case_no
+Ref: recording_details.case_no > mp4_status.case_no
+Ref: recording_details.recording_date > mp4_status.recording_date
