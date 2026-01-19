@@ -1,3 +1,23 @@
+"""
+Simple File Copier
+
+Copies a list of specified files to a destination directory.
+Creates the destination directory if it doesn't exist.
+
+Usage:
+    python scripts/helpers/copy_files.py file1.mp4 file2.mp4 /destination/dir
+
+Args:
+    source_files: One or more source file paths to copy
+    destination_dir: The destination directory where files will be copied
+
+Features:
+    - Validates source files exist before copying
+    - Creates destination directory if needed
+    - Preserves file metadata (using shutil.copy2)
+    - Reports success/failure for each file
+"""
+
 import argparse
 import os
 import shutil

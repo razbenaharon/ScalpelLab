@@ -1,3 +1,25 @@
+"""
+Bulk Monitor Video Copier
+
+Copies a predefined list of Monitor camera MP4 videos to a destination directory
+with standardized renamed filenames.
+
+Usage:
+    1. Edit the SOURCE_FILES list to include the videos you want to copy
+    2. Edit DESTINATION_DIR to set the output location
+    3. Run: python scripts/helpers/run_bulk_copy.py
+
+Features:
+    - Copies videos from a predefined list
+    - Renames files to standardized format: monitor_date_XX-XX-XX_CASE_N.mp4
+    - Extracts date and case number from path structure
+    - Reports progress and statistics
+
+Output Format:
+    Input:  F:\...\DATA_23-07-09\Case1\Monitor\Monitor.mp4
+    Output: I:\Monitor\monitor_date_23-07-09_CASE_1.mp4
+"""
+
 import os
 import shutil
 import re

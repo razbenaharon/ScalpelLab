@@ -1,3 +1,24 @@
+"""
+Compare SEQ Files Between Two Directories
+
+Compares SEQ files in source directory against destination directory.
+Reports missing files based on filename and file size matching.
+
+Usage:
+    Edit PATH_X and PATH_Y in this file, then run:
+    python scripts/helpers/compare_seq.py
+
+Features:
+    - Compares files by both filename AND file size for accuracy
+    - Scans recursively through all subdirectories
+    - Reports missing files with their sizes
+    - Shows summary statistics
+
+Output:
+    Lists all SEQ files from PATH_X that are not found in PATH_Y
+    with matching filename and size.
+"""
+
 import os
 
 # --- Configuration ---
