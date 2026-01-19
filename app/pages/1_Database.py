@@ -24,8 +24,7 @@ import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from utils import (
-    list_tables, get_table_schema, load_table, connect,
-    get_database_schema_graphviz, clear_erd_cache
+    list_tables, get_table_schema, load_table, connect
 )
 
 def get_next_anesthesiology_key(db_path):
@@ -324,104 +323,4 @@ else:
         else:
             st.info("Table is empty. No rows to delete.")
 
-        # ERD Visualization Section
-        st.divider()
-        st.subheader("📊 Database Schema (ERD)")
-
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            if st.button("🔄 Update Schema", help="Regenerate the ERD visualization"):
-                clear_erd_cache()
-                st.rerun()
-
-        st.markdown("""
-        **Entity-Relationship Diagram** (HD Vector Graphics) showing database structure with:
-        - 🔑 **Primary Keys** (Gold)
-        - 🔗 **Foreign Keys** (Blue) - inferred from naming conventions
-        - Logical grouping by table type
-        - Crow's foot notation for relationships
-        - ⚡ **High Resolution**: SVG format scales perfectly at any zoom level
-        """)
-
-        # Manual overrides for special FK relationships (if needed)
-        # Format: {(source_table, source_col): (target_table, target_col)}
-        manual_overrides = {
-            # Example: ('recording_details', 'code'): ('anesthesiology', 'code'),
-            # Add any special relationships here that can't be inferred automatically
-        }
-
-        try:
-            dot_source = get_database_schema_graphviz(db_path, manual_overrides)
-
-            # Render as high-resolution SVG for perfect scaling
-            import graphviz
-            import tempfile
-            import base64
-            from pathlib import Path
-
-            # Create Graphviz object from DOT source
-            graph = graphviz.Source(dot_source)
-
-            # Render to SVG (vector graphics - infinite resolution)
-            svg_data = graph.pipe(format='svg').decode('utf-8')
-
-            # Display SVG with custom styling for better quality
-            st.markdown(
-                f'<div style="background-color: white; padding: 20px; border-radius: 10px; '
-                f'box-shadow: 0 2px 4px rgba(0,0,0,0.1);">'
-                f'{svg_data}'
-                f'</div>',
-                unsafe_allow_html=True
-            )
-
-            # Alternative: Provide download buttons for different formats
-            col1, col2, col3 = st.columns([1, 1, 3])
-            with col1:
-                # Generate high-DPI PNG for download
-                try:
-                    # Try cairo renderer first (best quality)
-                    png_bytes = graph.pipe(format='png', renderer='cairo', formatter='cairo')
-                except:
-                    # Fallback to default renderer (still high quality with dpi=300)
-                    png_bytes = graph.pipe(format='png')
-
-                st.download_button(
-                    label="📥 PNG (HD)",
-                    data=png_bytes,
-                    file_name="database_erd_hd.png",
-                    mime="image/png",
-                    help="Download high-resolution PNG (300 DPI)"
-                )
-
-            with col2:
-                # Also offer SVG download (vector - infinite resolution)
-                st.download_button(
-                    label="📥 SVG (Vector)",
-                    data=svg_data.encode('utf-8'),
-                    file_name="database_erd.svg",
-                    mime="image/svg+xml",
-                    help="Download vector SVG (scales to any size without quality loss)"
-                )
-
-            with st.expander("ℹ️ About Smart Relationship Inference"):
-                st.markdown("""
-                Since SQLite doesn't always enforce foreign key constraints, this ERD uses **smart inference**:
-
-                **Inference Rules:**
-                1. Columns named `tablename_id` or `tablename_key` are assumed to reference the `tablename` table
-                2. The target column is matched in this order:
-                   - Exact column name match (e.g., `anesthesiology_key` → `anesthesiology.anesthesiology_key`)
-                   - Standard `id` column
-                   - Table's primary key column
-
-                **Example:**
-                - `recording_details.anesthesiology_key` → `anesthesiology.anesthesiology_key`
-                - `mp4_status.recording_date`, `mp4_status.case_no` → `recording_details.(recording_date, case_no)`
-
-                **Manual Overrides:**
-                You can define custom relationships in the code by editing the `manual_overrides` dictionary.
-                """)
-
-        except Exception as e:
-            st.error(f"Failed to generate ERD: {e}")
-            st.info("Make sure the `graphviz` Python package is installed: `pip install graphviz`")
+        
