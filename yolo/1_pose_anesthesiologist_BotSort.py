@@ -1,17 +1,65 @@
 """
 Multi-Person Pose Detection using YOLOv8 Pose with BoxMOT BoT-SORT + OSNet ReID
 
-Features:
-- Tracks ALL persons in the video using BoxMOT library
-- Uses OSNet ReID model for better re-identification after occlusions
-- More accurate person tracking via skeletal keypoints
-- Better handling of occlusions and partial visibility
-- Robust tracking with BoT-SORT (handles occlusions, re-identification)
-- Persistent track IDs across the entire video
-- Outputs parquet file with keypoints for all tracks
+This script uses the BoxMOT library's BoT-SORT tracker with external OSNet ReID model
+for superior re-identification after occlusions compared to Ultralytics native tracker.
 
-Requirements:
-- pip install ultralytics opencv-python numpy pandas pyarrow boxmot
+USAGE:
+    python 1_pose_anesthesiologist_BotSort.py [video_path] [output_path]
+
+    If no arguments provided, uses paths from CONFIG below.
+
+OUTPUT:
+    Parquet file (*_keypoints_boxmot.parquet) with columns:
+    - Frame_ID: Frame number in the video
+    - Timestamp: Time in seconds
+    - Track_ID: Unique person identifier
+    - {Keypoint}_x, {Keypoint}_y, {Keypoint}_conf: For each of 17 COCO keypoints
+
+KEYPOINTS (COCO 17):
+    0: Nose, 1: Left_Eye, 2: Right_Eye, 3: Left_Ear, 4: Right_Ear,
+    5: Left_Shoulder, 6: Right_Shoulder, 7: Left_Elbow, 8: Right_Elbow,
+    9: Left_Wrist, 10: Right_Wrist, 11: Left_Hip, 12: Right_Hip,
+    13: Left_Knee, 14: Right_Knee, 15: Left_Ankle, 16: Right_Ankle
+
+CONFIGURATION:
+    Edit the CONFIG dictionary below to customize:
+
+    yolo:
+        model              - YOLO model file (yolov8n/s/m/l/x-pose.pt)
+        model_dir          - Directory containing YOLO models
+        confidence_threshold - Min detection confidence (0-1)
+        iou_threshold      - NMS IoU threshold (0-1)
+        use_half_precision - Use FP16 for faster GPU inference
+        imgsz              - Input image size (640, 1280, etc.)
+
+    video:
+        input_path         - Default video file to process
+        output_path        - Default output parquet path
+        auto_repair        - Auto-repair corrupted videos with ffmpeg
+
+    device:
+        use_cuda           - Use GPU acceleration if available
+
+    boxmot:
+        reid_model         - ReID model file (osnet_ain_x1_0_msmt17.pt)
+        reid_model_dir     - Directory containing ReID model ("." = yolo dir)
+        track_high_thresh  - High confidence for track confirmation (0.6)
+        track_low_thresh   - Low confidence for detection (0.1)
+        new_track_thresh   - Threshold for new tracks (0.7)
+        track_buffer       - Frames to keep lost tracks (300 = 10s at 30fps)
+        match_thresh       - Association threshold (0.5)
+        proximity_thresh   - IoU proximity threshold (0.5)
+        appearance_thresh  - Cosine distance for appearance (0.15, lower = stricter)
+        cmc_method         - Camera motion compensation (sof, orb, ecc, sift)
+
+REQUIREMENTS:
+    pip install ultralytics opencv-python numpy pandas pyarrow boxmot torch
+
+COMPARISON WITH OTHER TRACKERS:
+    - vs Ultralytics BoT-SORT: Better ReID with OSNet, more tunable parameters
+    - vs StrongSort: Faster, but slightly less robust for long occlusions
+    - Best for: Medium complexity scenes with moderate occlusions
 """
 
 import sys
@@ -20,7 +68,6 @@ from pathlib import Path
 import tempfile
 import time
 import subprocess
-import json
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -62,40 +109,49 @@ except ImportError:
 
 
 # =============================================================================
-# LOAD CONFIGURATION
+# CONFIGURATION
 # =============================================================================
-def load_config():
-    """Load configuration from 0_yolo_config.json"""
-    config_path = os.path.join(os.path.dirname(__file__), "0_yolo_config.json")
-
-    with open(config_path, 'r') as f:
-        config = json.load(f)
-
-    # Ensure keys exist
-    if "yolo" not in config:
-        raise ValueError(
-            "yolo configuration not found in 0_yolo_config.json. "
-            "Please add 'yolo' section to the config file."
-        )
-
-    if "tracking" not in config:
-        raise ValueError(
-            "tracking configuration not found in 0_yolo_config.json. "
-            "Please add 'tracking' section to the config file."
-        )
-
-    # Ensure BoxMOT config exists (should be in config file)
-    if "boxmot" not in config:
-        raise ValueError(
-            "BoxMOT configuration not found in 0_yolo_config.json. "
-            "Please add 'boxmot' section to the config file."
-        )
-
-    return config
-
-
-# Load configuration
-CONFIG = load_config()
+CONFIG = {
+    "yolo": {
+        "model": "yolov8n-pose.pt",
+        "model_dir": "F:\\YOLO_Models",
+        "confidence_threshold": 0.3,
+        "iou_threshold": 0.45,
+        "brightness_boost": 1.0,
+        "use_half_precision": True,
+        "imgsz": 640
+    },
+    "video": {
+        "input_path": "F:\\Room_8_Data\\samples\\c.mp4",
+        "output_path": "F:\\Room_8_Data\\samples\\3.parquet",
+        "default_input_dir": "F:\\Room_8_Data\\Recordings",
+        "max_resolution": {"width": 1920, "height": 1080},
+        "auto_resize": False,
+        "auto_repair": True
+    },
+    "device": {
+        "use_cuda": True
+    },
+    "tracking": {
+        "tracker": "custom_botsort.yaml",
+        "persist": True,
+        "verbose": False,
+        "enable_fallback": True,
+        "fallback_max_distance": 400
+    },
+    "boxmot": {
+        "reid_model": "osnet_ain_x1_0_msmt17.pt",
+        "reid_model_dir": ".",
+        "track_high_thresh": 0.6,
+        "track_low_thresh": 0.1,
+        "new_track_thresh": 0.7,
+        "track_buffer": 300,
+        "match_thresh": 0.5,
+        "proximity_thresh": 0.5,
+        "appearance_thresh": 0.15,
+        "cmc_method": "sof"
+    }
+}
 
 # Device
 DEVICE = "cuda" if CONFIG["device"]["use_cuda"] and torch.cuda.is_available() else "cpu"

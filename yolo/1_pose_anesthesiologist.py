@@ -1,21 +1,65 @@
 """
-Multi-Person Pose Detection using YOLOv8 Pose with BoT-SORT Tracking
+Multi-Person Pose Detection using YOLOv8 Pose with BoT-SORT Tracking (Ultralytics Native)
 
-FIX APPLIED:
-- Runs tracking on EVERY frame to ensure ID persistence (solves "too many unique IDs").
-- Saves data only at the specific TARGET_FPS to keep file size manageable.
+This script uses Ultralytics' built-in BoT-SORT tracker for multi-person pose estimation.
+It processes video files and outputs keypoint data to parquet files.
 
-Features:
-- Tracks ALL persons in the video (no manual selection required)
-- More accurate person tracking via skeletal keypoints
-- Better handling of occlusions and partial visibility
-- Faster inference than segmentation models
-- Robust tracking with BoT-SORT (handles occlusions, re-identification)
-- Persistent track IDs across the entire video
-- Outputs parquet file with keypoints for all tracks
+USAGE:
+    python 1_pose_anesthesiologist.py [video_path] [output_path]
 
-Requirements:
-- pip install ultralytics opencv-python numpy pandas pyarrow
+    If no arguments provided, uses paths from CONFIG below.
+
+OUTPUT:
+    Parquet file with columns:
+    - Frame_ID: Frame number in the video
+    - Timestamp: Time in seconds
+    - Track_ID: Unique person identifier
+    - {Keypoint}_x, {Keypoint}_y, {Keypoint}_conf: For each of 17 COCO keypoints
+
+KEYPOINTS (COCO 17):
+    0: Nose, 1: Left_Eye, 2: Right_Eye, 3: Left_Ear, 4: Right_Ear,
+    5: Left_Shoulder, 6: Right_Shoulder, 7: Left_Elbow, 8: Right_Elbow,
+    9: Left_Wrist, 10: Right_Wrist, 11: Left_Hip, 12: Right_Hip,
+    13: Left_Knee, 14: Right_Knee, 15: Left_Ankle, 16: Right_Ankle
+
+CONFIGURATION:
+    Edit the CONFIG dictionary below to customize:
+
+    yolo:
+        model              - YOLO model file (yolov8n/s/m/l/x-pose.pt)
+        model_dir          - Directory containing YOLO models
+        confidence_threshold - Min detection confidence (0-1), lower = more detections
+        iou_threshold      - NMS IoU threshold (0-1), higher = more overlap allowed
+        use_half_precision - Use FP16 for faster GPU inference
+        imgsz              - Input image size (640, 1280, etc.)
+
+    video:
+        input_path         - Default video file to process
+        output_path        - Default output parquet path
+        auto_repair        - Auto-repair corrupted videos with ffmpeg
+
+    device:
+        use_cuda           - Use GPU acceleration if available
+
+    tracking:
+        tracker            - Tracker config file (custom_botsort.yaml)
+        persist            - Keep track IDs across frames (must be True)
+
+    botsort:
+        track_high_thresh  - High confidence threshold for track confirmation
+        track_low_thresh   - Low confidence threshold for detection
+        new_track_thresh   - Threshold for creating new tracks
+        track_buffer       - Frames to keep lost tracks alive
+        match_thresh       - Track-detection association threshold
+        with_reid          - Enable ReID feature matching
+
+REQUIREMENTS:
+    pip install ultralytics opencv-python numpy pandas pyarrow torch
+
+NOTES:
+    - Runs tracking on EVERY frame to ensure ID persistence
+    - Saves data at TARGET_FPS (30) to keep file size manageable
+    - Auto-generates custom_botsort.yaml from botsort config section
 """
 
 import sys
@@ -25,7 +69,6 @@ from pathlib import Path
 import tempfile
 import time
 import subprocess
-import json
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -55,47 +98,59 @@ except ImportError:
 
 
 # =============================================================================
-# LOAD CONFIGURATION
+# CONFIGURATION
 # =============================================================================
-def load_config():
-    """Load configuration from 0_yolo_config.json"""
-    config_path = os.path.join(os.path.dirname(__file__), "0_yolo_config.json")
+CONFIG = {
+    "yolo": {
+        "model": "yolov8n-pose.pt",
+        "model_dir": "F:\\YOLO_Models",
+        "confidence_threshold": 0.3,
+        "iou_threshold": 0.45,
+        "brightness_boost": 1.0,
+        "use_half_precision": True,
+        "imgsz": 640
+    },
+    "video": {
+        "input_path": "F:\\Room_8_Data\\samples\\c.mp4",
+        "output_path": "F:\\Room_8_Data\\samples\\3.parquet",
+        "default_input_dir": "F:\\Room_8_Data\\Recordings",
+        "max_resolution": {"width": 1920, "height": 1080},
+        "auto_resize": False,
+        "auto_repair": True
+    },
+    "device": {
+        "use_cuda": True
+    },
+    "tracking": {
+        "tracker": "custom_botsort.yaml",
+        "persist": True,
+        "verbose": False,
+        "enable_fallback": True,
+        "fallback_max_distance": 400
+    },
+    "botsort": {
+        "tracker_type": "botsort",
+        "track_high_thresh": 0.25,
+        "track_low_thresh": 0.1,
+        "new_track_thresh": 0.25,
+        "track_buffer": 120,
+        "match_thresh": 0.7,
+        "fuse_score": True,
+        "gmc_method": "sparseOptFlow",
+        "proximity_thresh": 0.5,
+        "appearance_thresh": 0.25,
+        "with_reid": True,
+        "model": "F:\\YOLO_Models\\yolov8x-pose.pt"
+    }
+}
 
 
-    with open(config_path, 'r') as f:
-        config = json.load(f)
-
-    # Ensure keys exist
-    if "yolo" not in config:
-        config["yolo"] = {
-            "model": "yolov8m-pose.pt",
-            "confidence_threshold": 0.15,
-            "iou_threshold": 0.7,
-            "brightness_boost": 1.0,
-            "use_half_precision": True,
-            "imgsz": 640
-        }
-
-    if "tracking" not in config:
-        config["tracking"] = {
-            "tracker": "botsort.yaml",
-            "persist": True,
-            "verbose": False
-        }
-
-    return config
-
-
-def generate_botsort_yaml(config):
-    """Generate custom_botsort.yaml from config if botsort section exists."""
-    if "botsort" not in config:
-        return  # Use existing YAML file if no botsort config in JSON
-
-    botsort_config = config["botsort"]
+def generate_botsort_yaml():
+    """Generate custom_botsort.yaml from config."""
+    botsort_config = CONFIG["botsort"]
     yaml_path = os.path.join(os.path.dirname(__file__), "custom_botsort.yaml")
 
-    # Generate YAML content
-    yaml_content = "# custom_botsort.yaml (auto-generated from 0_yolo_config.json)\n"
+    yaml_content = "# custom_botsort.yaml (auto-generated)\n"
     yaml_content += f"tracker_type: {botsort_config.get('tracker_type', 'botsort')}\n"
     yaml_content += f"track_high_thresh: {botsort_config.get('track_high_thresh', 0.25)}\n"
     yaml_content += f"track_low_thresh: {botsort_config.get('track_low_thresh', 0.1)}\n"
@@ -110,16 +165,12 @@ def generate_botsort_yaml(config):
     yaml_content += f"\n# ReID model\n"
     yaml_content += f"model: {botsort_config.get('model', 'auto')}\n"
 
-    # Write to file
     with open(yaml_path, 'w') as f:
         f.write(yaml_content)
 
 
-# Load configuration
-CONFIG = load_config()
-
-# Generate botsort YAML from config (auto-generated, don't edit manually)
-generate_botsort_yaml(CONFIG)
+# Generate botsort YAML from config (auto-generated)
+generate_botsort_yaml()
 
 # Device
 DEVICE = "cuda" if CONFIG["device"]["use_cuda"] and torch.cuda.is_available() else "cpu"
