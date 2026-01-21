@@ -79,15 +79,8 @@ def sqlite_to_dbdiagram(db_path: str, output_path: str):
 
     conn.close()
 
-    # Table notes mapping
-    table_notes = {
-        'sqlite_sequence': 'SQLite internal autoincrement tracking table',
-        'analysis_information': 'Per case labeling metadata',
-        'anesthesiology': 'Resident roster',
-        'recording_details': 'Authoritative case list, parent for case scoped tables',
-        'mp4_status': 'MP4 export status per camera, 1..n semantics driven by your app',
-        'seq_status': 'SEQ ingestion status per camera, values are non negative. 1 more than 200MB, 2 under 200MB, 3 missing, 4 format problem'
-    }
+    # System tables that should be listed separately
+    system_tables = {'sqlite_sequence'}
 
     # Generate dbdiagram.io format
     output_lines = []
@@ -96,23 +89,30 @@ def sqlite_to_dbdiagram(db_path: str, output_path: str):
     output_lines.append("//// Paste into https://dbdiagram.io")
     output_lines.append("")
 
-    # Handle sqlite_sequence first if it exists
-    if 'sqlite_sequence' in table_schemas:
-        output_lines.append("//// System table from SQLite. Usually not modeled, included here for completeness.")
-        output_lines.append("Table sqlite_sequence {")
-        output_lines.append("  name varchar")
-        output_lines.append("  seq  varchar")
-        output_lines.append("  Note: 'SQLite internal autoincrement tracking table'")
-        output_lines.append("}")
-        output_lines.append("")
+    def convert_sqlite_type(col_type: str) -> str:
+        """Convert SQLite type to dbdiagram.io type"""
+        db_type = (col_type or "TEXT").upper()
+        if "INT" in db_type:
+            return "int"
+        elif "REAL" in db_type or "FLOAT" in db_type or "DOUBLE" in db_type:
+            return "decimal"
+        elif "BLOB" in db_type:
+            return "blob"
+        elif "BOOL" in db_type:
+            return "boolean"
+        else:
+            return "varchar"
 
-    # Generate table definitions for regular tables
-    for table in ['analysis_information', 'anesthesiology', 'recording_details', 'mp4_status', 'seq_status']:
-        if table not in table_schemas:
-            continue
+    def generate_table_definition(table_name: str, columns: list, foreign_keys: list) -> list:
+        """Generate dbdiagram.io table definition lines"""
+        lines = []
+        lines.append(f"Table {table_name} {{")
 
-        columns = table_schemas[table]
-        output_lines.append(f"Table {table} {{")
+        # Find max column name length for alignment
+        max_name_len = max(len(col[1]) for col in columns) if columns else 10
+
+        # Build FK lookup for comments
+        fk_lookup = {fk[0]: (fk[1], fk[2]) for fk in foreign_keys} if foreign_keys else {}
 
         for col in columns:
             col_name = col[1]
@@ -121,57 +121,61 @@ def sqlite_to_dbdiagram(db_path: str, output_path: str):
             not_null = col[3]
             default_val = col[4]
 
-            # Convert SQLite types to dbdiagram.io types
-            db_type = col_type.upper()
-            if "INT" in db_type:
-                db_type = "int"
-            elif "REAL" in db_type or "FLOAT" in db_type or "DOUBLE" in db_type:
-                db_type = "decimal"
-            elif "TEXT" in db_type or "CHAR" in db_type or "VARCHAR" in db_type:
-                db_type = "varchar"
-            elif "DATE" in db_type:
-                db_type = "varchar"  # Keep as varchar for flexibility
-            else:
-                db_type = "varchar"
-
-            # Build column definition with proper spacing
-            col_def = f"  {col_name:<18} {db_type}"
+            db_type = convert_sqlite_type(col_type)
+            col_def = f"  {col_name:<{max_name_len}} {db_type}"
 
             # Add constraints
             constraints = []
             if is_pk:
                 constraints.append("pk")
-                # No specific unique constraints needed for composite primary key
             if not_null and not is_pk:
                 constraints.append("not null")
-            if default_val is not None and table == 'seq_status':
+            if default_val is not None:
                 constraints.append(f"default: {default_val}")
 
             if constraints:
                 col_def += f" [{', '.join(constraints)}]"
 
-            # Add inline comments for specific fields
-            if table == 'analysis_information' and col_name == 'labeled':
-                col_def += "     // 0 or 1"
-            elif table == 'anesthesiology' and col_name == 'grade_a_date':
-                col_def += "  // merged column"
-            elif table in ['mp4_status', 'seq_status'] and col_name == 'intern_key':
-                col_def += "      // FK to anesthesiology.intern_key"
-            elif table == 'seq_status' and col_name in ['recording_date', 'case_no']:
-                col_def += " // Part of FK to recording_details"
+            # Add FK comment if this column is a foreign key
+            if col_name in fk_lookup:
+                ref_table, ref_col = fk_lookup[col_name]
+                if ref_col:
+                    col_def += f" // FK to {ref_table}.{ref_col}"
+                else:
+                    col_def += f" // FK to {ref_table}"
 
-            output_lines.append(col_def)
+            lines.append(col_def)
 
-        # Add table note
-        if table in table_notes:
-            output_lines.append(f"  Note: '{table_notes[table]}'")
+        lines.append("}")
+        return lines
 
-        output_lines.append("}")
+    # Handle sqlite_sequence first if it exists
+    if 'sqlite_sequence' in table_schemas:
+        output_lines.append("//// System table from SQLite. Usually not modeled, included here for completeness.")
+        output_lines.extend(generate_table_definition(
+            'sqlite_sequence',
+            table_schemas['sqlite_sequence'],
+            []
+        ))
+        output_lines.append("")
+
+    # Generate table definitions for all regular tables (alphabetically sorted)
+    regular_tables = sorted([t for t in table_schemas.keys() if t not in system_tables])
+
+    for table in regular_tables:
+        table_fks = all_foreign_keys.get(table, [])
+        output_lines.extend(generate_table_definition(
+            table,
+            table_schemas[table],
+            table_fks
+        ))
         output_lines.append("")
 
     # Generate relationships dynamically from detected foreign keys
     if all_foreign_keys:
         output_lines.append("// Relationships detected from database:")
+        seen_refs = set()  # Track seen relationships to avoid duplicates
+
         for table, foreign_keys in all_foreign_keys.items():
             for local_col, ref_table, ref_col in foreign_keys:
                 # Default to primary key if ref_col is not specified
@@ -185,8 +189,14 @@ def sqlite_to_dbdiagram(db_path: str, output_path: str):
                     if not ref_col:
                         ref_col = "id"  # fallback
 
-                # Generate relationship
-                output_lines.append(f"Ref: {ref_table}.{ref_col} > {table}.{local_col}")
+                # Create normalized key for deduplication (sorted endpoints)
+                endpoint1 = f"{table}.{local_col}"
+                endpoint2 = f"{ref_table}.{ref_col}"
+                ref_key = tuple(sorted([endpoint1, endpoint2]))
+
+                if ref_key not in seen_refs:
+                    seen_refs.add(ref_key)
+                    output_lines.append(f"Ref: {ref_table}.{ref_col} > {table}.{local_col}")
         output_lines.append("")
     else:
         output_lines.append("// No foreign key relationships detected in database schema")
