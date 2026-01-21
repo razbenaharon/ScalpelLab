@@ -242,7 +242,7 @@ else:
         # Display table data
         st.subheader(f"📊 {table_choice} Data")
         table_data = load_table(db_path, table_choice)
-        st.dataframe(table_data, width='stretch', hide_index=True)
+        st.dataframe(table_data, use_container_width=True, hide_index=True)
 
         # Delete row section
         st.divider()
