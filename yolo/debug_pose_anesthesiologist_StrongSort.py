@@ -1,17 +1,52 @@
 """
-Multi-Person Pose Detection using YOLOv8 Pose with BoxMOT StrongSORT + OSNet ReID
+DEBUG: StrongSORT Pose Detection with Real-time Visualization
 
-Features:
-- Tracks ALL persons in the video using BoxMOT library
-- Uses OSNet ReID model for better re-identification after occlusions
-- More accurate person tracking via skeletal keypoints
-- Better handling of occlusions and partial visibility
-- Robust tracking with StrongSORT (handles occlusions, re-identification)
-- Persistent track IDs across the entire video
-- Outputs parquet file with keypoints for all tracks
+This is a DEBUG version of 1_pose_anesthesiologist_StrongSort.py that includes:
+- Real-time bounding box visualization window
+- Hardcoded parameter overrides for rapid tuning
+- Start frame selector to skip to specific video positions
+- Press 'q' to stop early
 
-Requirements:
-- pip install ultralytics opencv-python numpy pandas pyarrow boxmot
+USAGE:
+    python debug_pose_anesthesiologist_StrongSort.py [video_path]
+
+    If no argument provided, uses CONFIG default.
+
+DEBUG FEATURES:
+    DEBUG_MODE = True     - Enables live visualization window
+    START_FRAME = 0       - Skip to specific frame for testing
+
+OVERRIDE PARAMETERS (in pose_anesthesiologist_strongsort function):
+    These override CONFIG values for rapid experimentation:
+
+    OVERRIDE_MIN_CONF       - Min confidence to start track (0.7)
+    OVERRIDE_MAX_COS_DIST   - Max cosine distance for ReID (0.45)
+    OVERRIDE_MAX_IOU_DIST   - Max IoU distance for motion (0.9)
+    OVERRIDE_MAX_AGE        - Frames to keep lost tracks (200 = ~7s at 30fps)
+    OVERRIDE_N_INIT         - Detections to confirm track (30)
+    OVERRIDE_NN_BUDGET      - ReID feature gallery size (500)
+    OVERRIDE_MC_LAMBDA      - Motion compensation weight (0.98)
+    OVERRIDE_EMA_ALPHA      - Smoothing factor (0.999)
+
+OUTPUT:
+    When DEBUG_MODE = False: Parquet file (*_keypoints_strongsort.parquet)
+    When DEBUG_MODE = True: Only displays visualization, returns None
+
+CONTROLS:
+    'q' key: Stop processing and exit
+
+CONFIGURATION:
+    Edit the CONFIG dictionary below for default paths and model settings.
+    For rapid tuning, modify the OVERRIDE_* variables in the function.
+
+REQUIREMENTS:
+    pip install ultralytics opencv-python numpy pandas pyarrow boxmot torch
+
+NOTES:
+    - Set DEBUG_MODE = False for production runs
+    - OVERRIDE_MAX_AGE of 200 (~7s) prevents "zombie" tracks
+    - OVERRIDE_NN_BUDGET of 500 stores ~15s of ReID history
+    - Higher OVERRIDE_MC_LAMBDA trusts appearance over motion
 """
 
 import sys
@@ -20,7 +55,6 @@ from pathlib import Path
 import tempfile
 import time
 import subprocess
-import json
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -62,28 +96,49 @@ except ImportError:
 
 
 # =============================================================================
-# LOAD CONFIGURATION
+# CONFIGURATION
 # =============================================================================
-def load_config():
-    """Load configuration from 0_yolo_config.json"""
-    config_path = os.path.join(os.path.dirname(__file__), "0_yolo_config.json")
-
-    with open(config_path, 'r') as f:
-        config = json.load(f)
-
-    # Ensure keys exist
-    if "yolo" not in config:
-        raise ValueError("yolo configuration not found in 0_yolo_config.json.")
-    if "tracking" not in config:
-        raise ValueError("tracking configuration not found in 0_yolo_config.json.")
-    if "strongsort" not in config:
-        raise ValueError("StrongSort configuration not found in 0_yolo_config.json.")
-
-    return config
-
-
-# Load configuration
-CONFIG = load_config()
+CONFIG = {
+    "yolo": {
+        "model": "yolov8n-pose.pt",
+        "model_dir": "F:\\YOLO_Models",
+        "confidence_threshold": 0.3,
+        "iou_threshold": 0.45,
+        "brightness_boost": 1.0,
+        "use_half_precision": True,
+        "imgsz": 640
+    },
+    "video": {
+        "input_path": "F:\\Room_8_Data\\samples\\c.mp4",
+        "output_path": "F:\\Room_8_Data\\samples\\3.parquet",
+        "default_input_dir": "F:\\Room_8_Data\\Recordings",
+        "max_resolution": {"width": 1920, "height": 1080},
+        "auto_resize": False,
+        "auto_repair": True
+    },
+    "device": {
+        "use_cuda": True
+    },
+    "tracking": {
+        "tracker": "custom_botsort.yaml",
+        "persist": True,
+        "verbose": False,
+        "enable_fallback": True,
+        "fallback_max_distance": 400
+    },
+    "strongsort": {
+        "reid_model": "osnet_ain_x1_0_msmt17.pt",
+        "reid_model_dir": ".",
+        "min_conf": 0.70,
+        "max_cos_dist": 0.45,
+        "max_iou_dist": 0.9,
+        "max_age": 300,
+        "n_init": 15,
+        "nn_budget": 500,
+        "mc_lambda": 0.98,
+        "ema_alpha": 0.999
+    }
+}
 
 # Device
 DEVICE = "cuda" if CONFIG["device"]["use_cuda"] and torch.cuda.is_available() else "cpu"

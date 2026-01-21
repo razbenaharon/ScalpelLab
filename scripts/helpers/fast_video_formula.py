@@ -60,5 +60,5 @@ def calculate_fps_ratio(time1, time2, is_fast_video):
 
 
 
-print(calculate_fps_ratio(257.63388346666665, 154, True))
+print(calculate_fps_ratio(232.44555555, 244.5647073, True))
 

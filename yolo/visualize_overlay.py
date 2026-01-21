@@ -1,9 +1,57 @@
+"""
+Skeleton Overlay Video Generator (Batch Mode)
+
+Renders pose skeletons on video and saves to a new video file.
+Unlike live_visualize_overlay.py, this processes the entire video without display.
+
+USAGE:
+    python visualize_overlay.py <video_path> <parquet_path>
+    python visualize_overlay.py  # Uses CONFIG defaults
+
+OUTPUT:
+    Video file (*_debug_overlay.mp4 or .avi) with:
+    - Skeleton connections drawn between keypoints
+    - Keypoint circles at joint positions
+    - Track ID labels above each person's head
+    - Color-coded by Track_ID
+
+CONFIGURATION:
+    Edit the CONFIG dictionary below:
+
+    video:
+        input_path         - Default video file path
+        output_path        - Default parquet file path
+
+FEATURES:
+    - Automatic codec selection (mp4v, MJPG, XVID fallback)
+    - Frame ID remapping if parquet doesn't match video range
+    - Pose persistence for 30 frames (handles detection gaps)
+    - Progress bar with tqdm
+    - Handles corrupted frames gracefully
+
+SKELETON CONNECTIONS:
+    Head:      Nose-Eyes, Eyes-Ears
+    Shoulders: Left-Right shoulder connection
+    Arms:      Shoulder-Elbow-Wrist
+    Torso:     Shoulders-Hips
+    Legs:      Hip-Knee-Ankle
+
+COLORS (by Track_ID % 7):
+    0: Green, 1: Red, 2: Blue, 3: Yellow, 4: Magenta, 5: Cyan, 6: White
+
+REQUIREMENTS:
+    pip install opencv-python pandas numpy tqdm pyarrow
+
+SEE ALSO:
+    - live_visualize_overlay.py: Real-time display version
+    - diagnose_tracking.py: Analyze detection quality
+"""
+
 import cv2
 import pandas as pd
 import numpy as np
 import sys
 import os
-import json
 from tqdm import tqdm
 
 # Suppress FFmpeg warnings
@@ -85,23 +133,24 @@ def draw_skeleton(frame, row, color, min_conf=0.001):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
 
 
-def main():
-    # Load config
-    config_path = os.path.join(os.path.dirname(__file__), "0_yolo_config.json")
-    config = {}
-    if os.path.exists(config_path):
-        try:
-            with open(config_path, 'r') as f:
-                config = json.load(f)
-        except Exception as e:
-            print(f"Warning: Could not load config file {config_path}: {e}")
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+CONFIG = {
+    "video": {
+        "input_path": "F:\\Room_8_Data\\samples\\c.mp4",
+        "output_path": "F:\\Room_8_Data\\samples\\3.parquet"
+    }
+}
 
-    default_video = config.get('video', {}).get('input_path', '')
-    default_parquet = config.get('video', {}).get('output_path', '')
+
+def main():
+    default_video = CONFIG.get('video', {}).get('input_path', '')
+    default_parquet = CONFIG.get('video', {}).get('output_path', '')
 
     if len(sys.argv) < 3:
         if default_video and default_parquet and os.path.exists(default_video) and os.path.exists(default_parquet):
-            print(f"Using paths from config: {config_path}")
+            print(f"Using paths from config")
             print(f"  Video: {default_video}")
             print(f"  Parquet: {default_parquet}")
             video_path = default_video
