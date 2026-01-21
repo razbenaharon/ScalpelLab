@@ -1,43 +1,29 @@
-//// ScalpelLab Database, exported 2026-01-19
+//// ScalpelLab Database, exported 2026-01-21
 //// Paste into https://dbdiagram.io
 
 //// System table from SQLite. Usually not modeled, included here for completeness.
 Table sqlite_sequence {
   name varchar
   seq  varchar
-  Note: 'SQLite internal autoincrement tracking table'
 }
 
 Table analysis_information {
-  recording_date     varchar [pk]
-  case_no            int [pk]
-  label_by           varchar
-  Note: 'Per case labeling metadata'
+  recording_date varchar [pk]
+  case_no        int [pk]
+  label_by       varchar
 }
 
 Table anesthesiology {
-  anesthesiology_key int [pk]
-  name               varchar [not null]
-  code               varchar
+  anesthesiology_key        int [pk]
+  name                      varchar [not null]
+  code                      varchar
   anesthesiology_start_date varchar
-  grade_a_date       varchar  // merged column
-  Note: 'Resident roster'
-}
-
-Table recording_details {
-  recording_date     varchar [pk]
-  case_no            int [pk]
-  signature_time     varchar
-  code               varchar
-  anesthesiology_key int
-  months_anesthetic_recording int
-  anesthetic_attending varchar
-  Note: 'Authoritative case list, parent for case scoped tables'
+  grade_a_date              varchar
 }
 
 Table mp4_status {
-  recording_date     varchar [pk]
-  case_no            int [pk]
+  recording_date     varchar [pk] // FK to recording_details.recording_date
+  case_no            int [pk] // FK to recording_details.case_no
   camera_name        varchar [pk]
   size_mb            int
   duration_minutes   decimal
@@ -45,15 +31,34 @@ Table mp4_status {
   post_black_segment decimal
   path               varchar
   offset_seconds     decimal
-  Note: 'MP4 export status per camera, 1..n semantics driven by your app'
+}
+
+Table mp4_times {
+  recording_date varchar [pk] // FK to recording_details
+  case_no        int [pk] // FK to recording_details
+  start_1        int
+  end_1          int
+  start_2        int
+  end_2          int
+  start_3        int
+  end_3          int
+}
+
+Table recording_details {
+  recording_date              varchar [pk] // FK to analysis_information.recording_date
+  case_no                     int [pk] // FK to analysis_information.case_no
+  signature_time              varchar
+  code                        varchar
+  anesthesiology_key          int // FK to anesthesiology.anesthesiology_key
+  months_anesthetic_recording int
+  anesthetic_attending        varchar
 }
 
 Table seq_status {
-  recording_date     varchar [pk] // Part of FK to recording_details
-  case_no            int [pk] // Part of FK to recording_details
-  camera_name        varchar [pk]
-  size_mb            int
-  Note: 'SEQ ingestion status per camera, values are non negative. 1 more than 200MB, 2 under 200MB, 3 missing, 4 format problem'
+  recording_date varchar [pk] // FK to recording_details.recording_date
+  case_no        int [pk] // FK to recording_details.case_no
+  camera_name    varchar [pk]
+  size_mb        int
 }
 
 // Relationships detected from database:
@@ -66,4 +71,3 @@ Ref: recording_details.recording_date > mp4_times.recording_date
 Ref: recording_details.recording_date > mp4_times.case_no
 Ref: recording_details.case_no > mp4_status.case_no
 Ref: recording_details.recording_date > mp4_status.recording_date
-Ref: recording_details.anesthesiology_key > anesthesiology.anesthesiology_key
