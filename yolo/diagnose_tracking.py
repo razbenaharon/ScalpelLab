@@ -1,6 +1,40 @@
 """
-Diagnostic script to analyze tracking results and identify issues.
-Checks if upper body keypoints are being detected correctly.
+Tracking Diagnostics: Analyze Keypoint Detection Quality
+
+This script analyzes parquet files to diagnose tracking issues by examining
+keypoint detection rates across different body regions.
+
+USAGE:
+    python diagnose_tracking.py [parquet_path]
+
+    If no argument provided, prompts for path.
+
+OUTPUT:
+    Prints diagnostic report to console:
+    - Total rows and unique Track IDs
+    - Detection rates by body region (head, upper body, lower body)
+    - Average confidence scores per keypoint
+    - Per-track analysis showing which tracks have poor detection
+    - Sample frame analysis
+    - Summary with recommendations
+
+BODY REGIONS ANALYZED:
+    HEAD:       Nose, Left_Eye, Right_Eye, Left_Ear, Right_Ear
+    UPPER BODY: Left_Shoulder, Right_Shoulder, Left_Elbow, Right_Elbow, Left_Wrist, Right_Wrist
+    LOWER BODY: Left_Hip, Right_Hip, Left_Knee, Right_Knee, Left_Ankle, Right_Ankle
+
+COMMON ISSUES DETECTED:
+    - Upper body much lower than lower body: People partially out of frame (heads cut off)
+    - Very low overall detection: Poor video quality, lighting, or wrong model
+    - Single track with poor detection: Specific person in difficult position
+
+REQUIREMENTS:
+    pip install pandas numpy pyarrow
+
+TYPICAL WORKFLOW:
+    1. Run pose estimation: python 1_pose_anesthesiologist.py video.mp4
+    2. If results look wrong, diagnose: python diagnose_tracking.py video_keypoints.parquet
+    3. Based on diagnosis, adjust camera angle, lighting, or tracker settings
 """
 
 import pandas as pd

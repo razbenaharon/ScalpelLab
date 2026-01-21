@@ -1,3 +1,64 @@
+"""
+Track Post-Processing: Filter, Merge, Interpolate, and Smooth
+
+This script cleans up tracking results by:
+1. Filtering out short/noisy tracks
+2. Merging fragmented tracks (same person split across multiple IDs)
+3. Interpolating missing frames between detections
+4. Smoothing keypoint coordinates with rolling average
+
+USAGE:
+    python 3_process_tracks.py <parquet_path>
+
+    If no argument provided, prompts for path.
+
+INPUT:
+    Parquet file from pose estimation (*_keypoints.parquet)
+
+OUTPUT:
+    Cleaned parquet file (*_keypoints_cleaned.parquet) with:
+    - Fewer unique Track_IDs (merged fragments)
+    - More rows (interpolated missing frames)
+    - Smoother coordinate values
+
+CONFIGURATION:
+    Edit the CONFIG dictionary below:
+
+    min_track_duration_sec - Minimum track duration to keep (filters noise/false positives)
+                             Tracks shorter than this are removed. Default: 1.5s
+
+    max_merge_gap_sec      - Maximum time gap to merge two track fragments
+                             If track B starts within this time after track A ends,
+                             and they're spatially close, merge them. Default: 3.0s
+
+    max_merge_dist_px      - Maximum pixel distance to merge tracks
+                             Uses centroid of shoulders+hips. Default: 300px
+
+    smooth_window_size     - Rolling average window for smoothing coordinates
+                             Higher = smoother but more lag. Default: 5 frames
+
+    fill_missing_frames    - Whether to linearly interpolate gaps
+                             Default: True
+
+ALGORITHM:
+    1. Filter: Remove tracks < min_track_duration_sec
+    2. Merge: For each track, look for subsequent tracks that:
+       - Start within max_merge_gap_sec of current track's end
+       - Start position is within max_merge_dist_px of current track's end position
+       - If found, merge by reassigning Track_ID
+    3. Interpolate: For each track, fill missing Frame_IDs with linear interpolation
+    4. Smooth: Apply rolling average to x,y coordinates
+
+REQUIREMENTS:
+    pip install pandas numpy scipy pyarrow
+
+TYPICAL WORKFLOW:
+    1. Run pose estimation: python 1_pose_anesthesiologist.py video.mp4
+    2. Inspect results: python 2_inspect_parquet.py video_keypoints.parquet
+    3. Process tracks: python 3_process_tracks.py video_keypoints.parquet
+    4. Visualize: python live_visualize_overlay.py video.mp4 video_keypoints_cleaned.parquet
+"""
+
 import pandas as pd
 import numpy as np
 import sys

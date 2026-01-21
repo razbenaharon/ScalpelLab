@@ -1,3 +1,54 @@
+"""
+Perspective Calibration Tool for Bird's Eye View Transformation
+
+Interactive GUI tool to calibrate perspective transformation for converting
+camera view to top-down (bird's eye) view. Useful for tracking people in
+physical space coordinates.
+
+USAGE:
+    python calibrate.py --video <video_path>
+
+CONTROLS:
+    - Drag the 4 yellow corner points to align the green grid with the floor
+    - 'w' key: Preview the bird's eye view transformation
+    - 's' key: Save calibration and exit
+    - 'q' or Esc: Exit without saving
+
+OUTPUT FILES:
+    calibration_matrix.npy   - 3x3 homography matrix (numpy format)
+    calibration_points.json  - Original corner points and video source
+
+HOW IT WORKS:
+    1. Opens first frame of video
+    2. User drags 4 corners to define a quadrilateral on the floor
+    3. The quadrilateral is mapped to a square (bird's eye view)
+    4. Homography matrix is computed using cv2.getPerspectiveTransform()
+
+USING THE CALIBRATION:
+    import numpy as np
+    import cv2
+
+    # Load the calibration matrix
+    matrix = np.load('calibration_matrix.npy')
+
+    # Transform a point from camera to bird's eye coordinates
+    point = np.array([[[x, y]]], dtype=np.float32)
+    transformed = cv2.perspectiveTransform(point, matrix)
+    bird_eye_x, bird_eye_y = transformed[0][0]
+
+    # Transform entire image
+    warped = cv2.warpPerspective(frame, matrix, (1000, 1000))
+
+REQUIREMENTS:
+    pip install opencv-python numpy
+
+NOTES:
+    - Grid is 5x5 by default to help visualize perspective alignment
+    - Large videos are automatically scaled down to fit screen (max 1280px width)
+    - Calibration is saved in original video resolution (not scaled)
+    - Target output is 1000x1000 pixels by default
+"""
+
 import cv2
 import numpy as np
 import argparse

@@ -1,3 +1,52 @@
+"""
+Live Skeleton Overlay Visualization (Real-time Display)
+
+Displays pose skeletons overlaid on video in real-time window.
+Also saves output video while displaying. Press 'q' to stop early.
+
+USAGE:
+    python live_visualize_overlay.py <video_path> <parquet_path>
+    python live_visualize_overlay.py  # Prompts for paths with CONFIG defaults
+
+CONTROLS:
+    'q' key: Stop playback and exit
+
+OUTPUT:
+    - Real-time display window "Live Pose Overlay"
+    - Video file (*_debug_overlay.mp4 or .avi) saved simultaneously
+
+CONFIGURATION:
+    Edit the CONFIG dictionary below:
+
+    video:
+        input_path         - Default video file path
+        output_path        - Default parquet file path
+
+FEATURES:
+    - Real-time display with cv2.imshow
+    - Resizable window (cv2.WINDOW_NORMAL)
+    - Simultaneous video file output
+    - Pose persistence for 30 frames (smooth visualization)
+    - Progress bar with tqdm
+
+SKELETON CONNECTIONS:
+    Head:      Nose-Eyes, Eyes-Ears
+    Shoulders: Left-Right shoulder connection
+    Arms:      Shoulder-Elbow-Wrist
+    Torso:     Shoulders-Hips
+    Legs:      Hip-Knee-Ankle
+
+COLORS (by Track_ID % 7):
+    0: Green, 1: Red, 2: Blue, 3: Yellow, 4: Magenta, 5: Cyan, 6: White
+
+REQUIREMENTS:
+    pip install opencv-python pandas numpy tqdm pyarrow
+
+SEE ALSO:
+    - visualize_overlay.py: Batch mode (no display, faster)
+    - diagnose_tracking.py: Analyze detection quality
+"""
+
 import cv2
 import pandas as pd
 import numpy as np
@@ -7,6 +56,17 @@ from tqdm import tqdm
 
 # Suppress FFmpeg warnings
 os.environ['OPENCV_FFMPEG_LOGLEVEL'] = '-8'
+
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+CONFIG = {
+    "video": {
+        "input_path": "F:\\Room_8_Data\\samples\\c.mp4",
+        "output_path": "F:\\Room_8_Data\\samples\\3.parquet"
+    }
+}
 
 # Define connections between keypoints for drawing skeletons
 SKELETON_CONNECTIONS = [
@@ -70,10 +130,13 @@ def draw_skeleton(frame, row, color):
 
 
 def main():
+    default_video = CONFIG.get('video', {}).get('input_path', '')
+    default_parquet = CONFIG.get('video', {}).get('output_path', '')
+
     if len(sys.argv) < 3:
         print("Usage: python live_visualize_overlay.py <video_path> <parquet_path>")
-        video_path = input("Enter video path: ").strip('"')
-        parquet_path = input("Enter parquet path: ").strip('"')
+        video_path = input(f"Enter video path [{default_video}]: ").strip('"') or default_video
+        parquet_path = input(f"Enter parquet path [{default_parquet}]: ").strip('"') or default_parquet
     else:
         video_path = sys.argv[1]
         parquet_path = sys.argv[2]
