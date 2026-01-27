@@ -72,7 +72,10 @@
       "Bash(mkdir:*)",
       "Bash(\"C:/Users/user/Downloads/MPV/mpv.exe\" --version)",
       "Bash(find:*)",
-      "Bash(timeout 3 python:*)"
+      "Bash(timeout 3 python:*)",
+      "Bash(tree:*)",
+      "Bash(git add:*)",
+      "WebFetch(domain:docs.ultralytics.com)"
     ],
     "deny": [],
     "ask": []

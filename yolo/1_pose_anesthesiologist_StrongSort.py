@@ -1,5 +1,5 @@
 """
-Multi-Person Pose Detection using YOLOv8 Pose with BoxMOT StrongSORT + OSNet ReID
+Multi-Person Pose Detection using YOLO26 Pose with BoxMOT StrongSORT + OSNet ReID
 
 This script uses the BoxMOT library's StrongSORT tracker with external OSNet ReID model.
 StrongSORT is the most robust tracker for long occlusions and crowded scenes.
@@ -26,7 +26,7 @@ CONFIGURATION:
     Edit the CONFIG dictionary below to customize:
 
     yolo:
-        model              - YOLO model file (yolov8n/s/m/l/x-pose.pt)
+        model              - YOLO model file (yolo26n/s/m/l/x-pose.pt)
         model_dir          - Directory containing YOLO models
         confidence_threshold - Min detection confidence (0-1)
         iou_threshold      - NMS IoU threshold (0-1)
@@ -118,7 +118,7 @@ except ImportError:
 # =============================================================================
 CONFIG = {
     "yolo": {
-        "model": "yolov8n-pose.pt",
+        "model": "yolo26n-pose.pt",
         "model_dir": "F:\\YOLO_Models",
         "confidence_threshold": 0.3,
         "iou_threshold": 0.45,
@@ -227,7 +227,7 @@ def repair_video(video_path):
 
 def pose_anesthesiologist_strongsort(video_path, output_path=None):
     """
-    Detect and track ALL persons from video using YOLOv8 pose detection with BoxMOT StrongSORT + OSNet tracking.
+    Detect and track ALL persons from video using YOLO26 pose detection with BoxMOT StrongSORT + OSNet tracking.
     Saves keypoint data for all detected persons to a parquet file.
     """
     # Setup device
@@ -496,7 +496,7 @@ def pose_anesthesiologist_strongsort(video_path, output_path=None):
 def main():
     """Main entry point for the script."""
     print("\n" + "=" * 70)
-    print("MULTI-PERSON POSE DETECTION - YOLOv8-Pose + BoxMOT StrongSORT")
+    print("MULTI-PERSON POSE DETECTION - YOLO26-Pose + BoxMOT StrongSORT")
     print("=" * 70)
     print(f"Model: {CONFIG['yolo']['model']}")
     print(f"Tracker: BoxMOT StrongSORT")
