@@ -1,5 +1,5 @@
 """
-DEBUG: StrongSORT Pose Detection with Real-time Visualization
+DEBUG: YOLO26 StrongSORT Pose Detection with Real-time Visualization
 
 This is a DEBUG version of 1_pose_anesthesiologist_StrongSort.py that includes:
 - Real-time bounding box visualization window
@@ -100,7 +100,7 @@ except ImportError:
 # =============================================================================
 CONFIG = {
     "yolo": {
-        "model": "yolov8n-pose.pt",
+        "model": "yolo26n-pose.pt",
         "model_dir": "F:\\YOLO_Models",
         "confidence_threshold": 0.3,
         "iou_threshold": 0.45,
@@ -205,7 +205,7 @@ def repair_video(video_path):
 
 def pose_anesthesiologist_strongsort(video_path, output_path=None):
     """
-    Detect and track ALL persons from video using YOLOv8 pose detection.
+    Detect and track ALL persons from video using YOLO26 pose detection.
     """
     # =============================================================================
     # DEBUG PLAYGROUND - RAPID HYPERPARAMETER TUNING

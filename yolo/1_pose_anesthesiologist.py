@@ -1,5 +1,5 @@
 """
-Multi-Person Pose Detection using YOLOv8 Pose with BoT-SORT Tracking (Ultralytics Native)
+Multi-Person Pose Detection using YOLO26 Pose with BoT-SORT Tracking (Ultralytics Native)
 
 This script uses Ultralytics' built-in BoT-SORT tracker for multi-person pose estimation.
 It processes video files and outputs keypoint data to parquet files.
@@ -26,7 +26,7 @@ CONFIGURATION:
     Edit the CONFIG dictionary below to customize:
 
     yolo:
-        model              - YOLO model file (yolov8n/s/m/l/x-pose.pt)
+        model              - YOLO model file (yolo26n/s/m/l/x-pose.pt)
         model_dir          - Directory containing YOLO models
         confidence_threshold - Min detection confidence (0-1), lower = more detections
         iou_threshold      - NMS IoU threshold (0-1), higher = more overlap allowed
@@ -102,7 +102,7 @@ except ImportError:
 # =============================================================================
 CONFIG = {
     "yolo": {
-        "model": "yolov8n-pose.pt",
+        "model": "yolo26n-pose.pt",
         "model_dir": "F:\\YOLO_Models",
         "confidence_threshold": 0.3,
         "iou_threshold": 0.45,
@@ -140,7 +140,7 @@ CONFIG = {
         "proximity_thresh": 0.5,
         "appearance_thresh": 0.25,
         "with_reid": True,
-        "model": "F:\\YOLO_Models\\yolov8x-pose.pt"
+        "model": "F:\\YOLO_Models\\yolo26x-pose.pt"
     }
 }
 
@@ -241,7 +241,7 @@ def repair_video(video_path):
 
 def pose_anesthesiologist_yolo(video_path, output_path=None):
     """
-    Detect and track ALL persons from video using YOLOv8 pose detection with BoT-SORT tracking.
+    Detect and track ALL persons from video using YOLO26 pose detection with BoT-SORT tracking.
     Saves keypoint data for all detected persons to a parquet file.
     """
     # Setup device
@@ -430,7 +430,7 @@ def pose_anesthesiologist_yolo(video_path, output_path=None):
 def main():
     """Main entry point for the script."""
     print("\n" + "=" * 70)
-    print("MULTI-PERSON POSE DETECTION - YOLOv8-Pose + BoT-SORT")
+    print("MULTI-PERSON POSE DETECTION - YOLO26-Pose + BoT-SORT")
     print("=" * 70)
     print(f"Model: {CONFIG['yolo']['model']}")
     print(f"Tracker: {CONFIG['tracking']['tracker']}")
