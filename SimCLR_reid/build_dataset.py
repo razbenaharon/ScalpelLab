@@ -1,5 +1,5 @@
 """
-build_reid_dataset.py - Person Re-ID Dataset Builder for SimCLR Training
+build_dataset.py - Person Re-ID Dataset Builder for SimCLR Training
 
 ================================================================================
 PURPOSE
@@ -65,7 +65,7 @@ Checkpoints are stored per-case in case_XXX/checkpoints/progress.json
 ================================================================================
 USAGE
 ================================================================================
-    python build_reid_dataset.py
+    python build_dataset.py
 
 Configuration is done via constants at the top of the file.
 The script queries the SQLite database for General_3 camera videos.
@@ -370,22 +370,22 @@ def load_checkpoint(checkpoint_path: Path) -> dict | None:
 def process_video(
         video_info: dict,
         model: YOLO,
-        case_output_dir: Path,
-        case_track_stats: dict,
+        output_dir: Path,
+        group_track_stats: dict,
         target_remaining: int
 ) -> dict:
     """
     Process a single video and extract quality-filtered person crops.
 
     Uses cap.grab()/cap.retrieve() optimization to skip frames efficiently
-    without decoding every frame. Saves crops to flat per-case directory.
+    without decoding every frame. Saves crops to flat output directory.
 
     Args:
         video_info: Dictionary containing 'path', 'recording_date', 'case_no'
         model: Loaded YOLO model with tracking capability
-        case_output_dir: Per-case output directory (e.g., OUTPUT_ROOT/case_001/)
-        case_track_stats: Track statistics dictionary for THIS case only
-                          (used to limit crops per track ID within the case)
+        output_dir: Output directory for this group (e.g., OUTPUT_ROOT/2024-01-15/)
+        group_track_stats: Track statistics dictionary for this group
+                           (used to limit crops per track ID within the group)
         target_remaining: Number of images still needed to reach target
 
     Returns:
@@ -397,8 +397,8 @@ def process_video(
             - skipped: True if video was skipped (target reached)
 
     Output:
-        Crops saved directly to case_output_dir with filename format:
-        Gen3_{date}_F{frame:06d}_T{track:03d}.jpg
+        Crops saved directly to output_dir with filename format:
+        Gen3_F{frame:06d}_T{track:03d}.jpg
     """
     video_path = video_info["path"]
     date_str = sanitize_date(video_info["recording_date"])
@@ -482,12 +482,12 @@ def process_video(
             for i, box in enumerate(boxes):
                 track_id = int(box.id[0]) if box.id is not None else i
 
-                # Use case-specific track stats (prevents cross-case ID collision)
-                case_count = case_track_stats.get(track_id, 0)
+                # Use group-specific track stats (prevents cross-date ID collision)
+                group_count = group_track_stats.get(track_id, 0)
                 local_count = track_stats[track_id]['count']
 
                 # Limits
-                if case_count >= MAX_IMAGES_PER_CLASS: continue
+                if group_count >= MAX_IMAGES_PER_CLASS: continue
                 if local_count >= MAX_SAMPLES_PER_TRACK_PER_VIDEO: continue
 
                 # Temporal diversity
@@ -533,11 +533,11 @@ def process_video(
                 sharpness = compute_sharpness_score(crop)
                 quality_score = (blur_score * 0.5 + sharpness * 0.3 + (area / 10000) * 0.2)
 
-                # Save directly to case folder (flat structure)
+                # Save directly to date folder (flat structure)
                 # Track ID included in filename for potential analysis, not for SimCLR pairing
                 # SimCLR will learn to group similar people via contrastive learning
-                filename = f"Gen3_{date_str}_F{frame_num:06d}_T{track_id:03d}.jpg"
-                save_path = case_output_dir / filename
+                filename = f"Gen3_F{frame_num:06d}_T{track_id:03d}.jpg"
+                save_path = output_dir / filename
 
                 cv2.imwrite(str(save_path), crop)
                 crops_saved += 1
@@ -658,22 +658,22 @@ def main():
     # Initialize global stats
     if global_checkpoint:
         total_crops = global_checkpoint.get('total_crops', 0)
-        completed_cases = set(global_checkpoint.get('completed_cases', []))
+        completed_dates = set(global_checkpoint.get('completed_dates', []))
     else:
         total_crops = 0
-        completed_cases = set()
+        completed_dates = set()
 
     failed_videos = []
     start_time = datetime.now()
-    case_stats_all = {}
+    date_stats_all = {}
 
-    # Process each case independently
-    for case_idx, case_no in enumerate(case_numbers):
-        case_videos = cases[case_no]
+    # Process each date independently
+    for date_idx, date_key in enumerate(date_keys):
+        date_videos = dates_dict[date_key]
 
-        # Skip already completed cases
-        if case_no in completed_cases:
-            print(f"[SKIP] Case {case_no} already completed")
+        # Skip already completed dates
+        if date_key in completed_dates:
+            print(f"[SKIP] {date_key} already completed")
             continue
 
         target_remaining = TARGET_TOTAL_IMAGES - total_crops
@@ -681,73 +681,73 @@ def main():
             print("\n[INFO] Global target reached!")
             break
 
-        # Create case-specific output directory
-        case_output_dir = OUTPUT_ROOT / f"case_{case_no:03d}"
-        case_output_dir.mkdir(parents=True, exist_ok=True)
-        case_checkpoint_dir = case_output_dir / "checkpoints"
-        case_checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        case_checkpoint_path = case_checkpoint_dir / "progress.json"
+        # Create date-specific output directory
+        date_output_dir = OUTPUT_ROOT / date_key
+        date_output_dir.mkdir(parents=True, exist_ok=True)
+        date_checkpoint_dir = date_output_dir / "checkpoints"
+        date_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        date_checkpoint_path = date_checkpoint_dir / "progress.json"
 
         print(f"\n{'='*60}")
-        print(f"PROCESSING CASE {case_no} ({case_idx+1}/{len(case_numbers)})")
-        print(f"  Output: {case_output_dir}")
-        print(f"  Videos: {len(case_videos)}")
+        print(f"PROCESSING {date_key} ({date_idx+1}/{len(date_keys)})")
+        print(f"  Output: {date_output_dir}")
+        print(f"  Videos: {len(date_videos)}")
         print_cuda_usage("  ")
         print(f"{'='*60}")
 
-        # Load case checkpoint
-        case_checkpoint = load_checkpoint(case_checkpoint_path)
-        if case_checkpoint:
-            case_track_stats = defaultdict(int, case_checkpoint.get('track_stats', {}))
-            case_crops = case_checkpoint.get('total_crops', 0)
-            start_video_idx = case_checkpoint.get('last_video_idx', -1) + 1
+        # Load date checkpoint
+        date_checkpoint = load_checkpoint(date_checkpoint_path)
+        if date_checkpoint:
+            date_track_stats = defaultdict(int, date_checkpoint.get('track_stats', {}))
+            date_crops = date_checkpoint.get('total_crops', 0)
+            start_video_idx = date_checkpoint.get('last_video_idx', -1) + 1
         else:
-            case_track_stats = defaultdict(int)
-            case_crops = 0
+            date_track_stats = defaultdict(int)
+            date_crops = 0
             start_video_idx = 0
 
-        # Process each video in the case
-        for video_idx in range(start_video_idx, len(case_videos)):
-            video_info = case_videos[video_idx]
+        # Process each video for this date
+        for video_idx in range(start_video_idx, len(date_videos)):
+            video_info = date_videos[video_idx]
 
             try:
                 stats = process_video(
                     video_info,
                     model,
-                    case_output_dir,
-                    case_track_stats,
-                    target_remaining - case_crops
+                    date_output_dir,
+                    date_track_stats,
+                    target_remaining - date_crops
                 )
 
                 if stats['skipped']:
                     continue
 
-                case_crops += stats['total_crops']
+                date_crops += stats['total_crops']
                 total_crops += stats['total_crops']
 
-                # Update case track stats
+                # Update date track stats
                 for track_id, count in stats['crops_per_track'].items():
-                    case_track_stats[track_id] += count
+                    date_track_stats[track_id] += count
 
                 progress = (total_crops / TARGET_TOTAL_IMAGES) * 100
                 elapsed = (datetime.now() - start_time).total_seconds() / 3600
 
                 skipped_sim = stats.get('skipped_similar', 0)
                 print(
-                    f"  [{video_idx+1}/{len(case_videos)}] "
+                    f"  [{video_idx+1}/{len(date_videos)}] "
                     f"+{stats['total_crops']} crops "
                     f"(-{skipped_sim} dupes) | "
-                    f"Case: {case_crops:,} | "
+                    f"Date: {date_crops:,} | "
                     f"Global: {total_crops:,} ({progress:.1f}%) | "
                     f"{elapsed:.1f}h"
                 )
 
-                # Save case checkpoint every 3 videos
+                # Save date checkpoint every 3 videos
                 if video_idx % 3 == 0:
-                    save_checkpoint(case_checkpoint_path, {
-                        'case_no': case_no,
-                        'total_crops': case_crops,
-                        'track_stats': dict(case_track_stats),
+                    save_checkpoint(date_checkpoint_path, {
+                        'date': date_key,
+                        'total_crops': date_crops,
+                        'track_stats': dict(date_track_stats),
                         'last_video_idx': video_idx,
                         'timestamp': datetime.now().isoformat()
                     })
@@ -756,33 +756,33 @@ def main():
                 failed_videos.append((video_info['path'], str(e)))
                 print(f"  [FAIL] {video_info['path']}: {e}")
 
-        # Mark case as complete
-        completed_cases.add(case_no)
-        case_stats_all[case_no] = {
-            'total_crops': case_crops,
-            'unique_ids': len(case_track_stats),
-            'track_stats': dict(case_track_stats)
+        # Mark date as complete
+        completed_dates.add(date_key)
+        date_stats_all[date_key] = {
+            'total_crops': date_crops,
+            'unique_ids': len(date_track_stats),
+            'track_stats': dict(date_track_stats)
         }
 
-        # Save case final stats
-        save_checkpoint(case_checkpoint_path, {
-            'case_no': case_no,
-            'total_crops': case_crops,
-            'track_stats': dict(case_track_stats),
+        # Save date final stats
+        save_checkpoint(date_checkpoint_path, {
+            'date': date_key,
+            'total_crops': date_crops,
+            'track_stats': dict(date_track_stats),
             'completed': True,
             'timestamp': datetime.now().isoformat()
         })
 
-        # Save global checkpoint after each case
+        # Save global checkpoint after each date
         save_checkpoint(global_checkpoint_path, {
             'total_crops': total_crops,
-            'completed_cases': list(completed_cases),
-            'case_stats': case_stats_all,
+            'completed_dates': list(completed_dates),
+            'date_stats': date_stats_all,
             'timestamp': datetime.now().isoformat()
         })
 
-        # Print CUDA usage after each case
-        print_cuda_usage(f"  [CASE {case_no} DONE] ")
+        # Print CUDA usage after each date
+        print_cuda_usage(f"  [{date_key} DONE] ")
 
     # Final summary
     print("\n" + "=" * 80)
@@ -790,7 +790,7 @@ def main():
     print("=" * 80)
     total_time = (datetime.now() - start_time).total_seconds() / 3600
     print(f"Total crops: {total_crops:,}")
-    print(f"Cases processed: {len(completed_cases)}")
+    print(f"Dates processed: {len(completed_dates)}")
     print(f"Failed videos: {len(failed_videos)}")
     print(f"Total time: {total_time:.2f} hours")
     print_cuda_usage("[FINAL] ")
@@ -799,8 +799,8 @@ def main():
     final_stats_path = OUTPUT_ROOT / "dataset_stats.json"
     save_checkpoint(final_stats_path, {
         'total_crops': total_crops,
-        'cases_completed': len(completed_cases),
-        'case_stats': case_stats_all,
+        'dates_completed': len(completed_dates),
+        'date_stats': date_stats_all,
         'failed_videos': failed_videos,
         'processing_time_hours': total_time,
         'config': {
@@ -809,6 +809,7 @@ def main():
             'min_area': MIN_AREA_PIXELS,
             'blur_threshold': BLUR_THRESHOLD,
             'min_frame_gap': MIN_FRAME_GAP,
+            'similarity_threshold': SIMILARITY_THRESHOLD,
             'max_per_class': MAX_IMAGES_PER_CLASS,
             'max_per_track_per_video': MAX_SAMPLES_PER_TRACK_PER_VIDEO
         },
