@@ -75,7 +75,8 @@
       "Bash(timeout 3 python:*)",
       "Bash(tree:*)",
       "Bash(git add:*)",
-      "WebFetch(domain:docs.ultralytics.com)"
+      "WebFetch(domain:docs.ultralytics.com)",
+      "Bash(/c/ProgramData/anaconda3/python.exe:*)"
     ],
     "deny": [],
     "ask": []
