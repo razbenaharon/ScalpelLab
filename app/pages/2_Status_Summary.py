@@ -23,13 +23,12 @@ Navigation:
 import streamlit as st
 import pandas as pd
 from collections import Counter
-import plotly.express as px
 import sys, os
 
 # If utils.py is in project root (not pages/), uncomment to add parent dir to path:
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from utils import load_table, list_tables, get_table_schema, connect
+from utils import connect
 
 DEFAULT_CAMERAS = [
     "Cart_Center_2","Cart_LT_4","Cart_RT_1",
