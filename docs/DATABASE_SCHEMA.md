@@ -56,6 +56,7 @@ The ScalpelLab project uses a SQLite database (`ScalpelDatabase.sqlite`) to mana
 │ PK case_no              ├────────────────┤
 │ PK camera_name          │                │
 │    size_mb              │                │
+│    path                 │                │
 └─────────────────────────┘                │
                                            │
 ┌─────────────────────────┐                │
@@ -226,6 +227,7 @@ VALUES ('2023-05-15', 3, 'Monitor', 342, 58.5,
 | `case_no` | INTEGER | PRIMARY KEY | Case number (1-based) |
 | `camera_name` | TEXT | PRIMARY KEY | Camera identifier |
 | `size_mb` | INTEGER | NULLABLE | File size in megabytes |
+| `path` | TEXT | NULLABLE | Relative path to the SEQ file (from Sequence_Backup) |
 
 **Composite Primary Key**: `(recording_date, case_no, camera_name)`
 
@@ -244,8 +246,8 @@ Example: F:\Room_8_Data\Sequence_Backup\DATA_23-05-15\Case3\Monitor\recording_00
 
 **Example Data**:
 ```sql
-INSERT INTO seq_status (recording_date, case_no, camera_name, size_mb)
-VALUES ('2023-05-15', 3, 'Monitor', 487);
+INSERT INTO seq_status (recording_date, case_no, camera_name, size_mb, path)
+VALUES ('2023-05-15', 3, 'Monitor', 487, 'Sequence_Backup\DATA_23-05-15\Case3\Monitor\recording_001.seq');
 ```
 
 ---
@@ -910,6 +912,7 @@ CREATE TABLE IF NOT EXISTS seq_status (
     case_no INTEGER NOT NULL,
     camera_name TEXT NOT NULL,
     size_mb INTEGER,
+    path TEXT,
     PRIMARY KEY (recording_date, case_no, camera_name),
     FOREIGN KEY (recording_date, case_no) REFERENCES recording_details(recording_date, case_no)
 );
