@@ -1,59 +1,177 @@
 """
-Batch Convert Script - FFmpeg GPU with CLExport Fallback
-Exports SEQ files to MP4 using GPU-accelerated FFmpeg
-Falls back to CLExport if GPU encoding fails
-Much more stable for large batches
+Smart SEQ Sync Converter — VFR-to-CFR Multi-Camera Synchronization
+====================================================================
+Converts NorPix SEQ files to MP4 with precise multi-camera time
+synchronization using IDX binary index files.
+
+Cameras in the same group, date, and case are synchronized to a shared
+global timeline (union strategy), ensuring all output videos have
+identical duration with black frames for pre-roll/post-roll.
+
+Pipeline (VFR → CFR):
+  1. Python extracts raw H.264 frames from SEQ using IDX byte offsets
+     → saves to a temporary .h264 file
+  2. Simultaneously generates a 'timecode format v2' text file with
+     exact per-frame timestamps (ms) from IDX records
+  3. mkvmerge muxes .h264 + timecodes → temporary .mkv (VFR container)
+  4. FFmpeg reads the MKV, applies fps=30 (nearest-neighbor resampling:
+     duplicates frames on gaps, drops on bursts), tpad for pre/post-roll,
+     and hard-cuts at -t for exact global duration → final .mp4
+
+This preserves the original capture timing through the MKV stage, then
+normalizes to exactly 30 CFR for perfect multi-camera sync.
+
+Features:
+  • Parallel processing (configurable concurrent cameras)
+  • HEVC/H.265 encoding (hevc_nvenc)
+  • IDX-based raw H.264 extraction (no container timestamp drift)
+  • mkvmerge VFR packaging with per-frame timecodes
+  • FFmpeg fps=30 nearest-neighbor CFR normalization
+  • Duration & sync validation via ffprobe after encoding
+  • Automatic cleanup of all temporary files
+
+Author: Raz (Technion)
 """
 
 import sqlite3
 import subprocess
+import struct
 import sys
 import os
+import re
 import time
 import threading
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple, Optional, NamedTuple
+from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Add parent directory to path to import config
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import get_db_path, get_seq_root, get_mp4_root, DEFAULT_CAMERAS
 
-# Configuration (from config.py)
+# =========================
+# Configuration
+# =========================
 DB_PATH = get_db_path()
 SEQ_ROOT = get_seq_root()
 OUT_ROOT = get_mp4_root()
 
-# FFmpeg possible locations
+TARGET_FPS = 30
+MAX_PARALLEL = 3           # concurrent FFmpeg processes
+
+# Camera synchronization groups
+GROUP_A = ["Cart_Center_2", "Cart_LT_4", "Cart_RT_1", "General_3"]
+GROUP_B = ["Monitor", "Patient_Monitor", "Ventilator_Monitor"]
+ALL_GROUPS = {"A": GROUP_A, "B": GROUP_B}
+
+# Executable search paths
 FFMPEG_PATHS = [
-    r"C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe",
-    r"C:\\ffmpeg\\bin\\ffmpeg.exe",
-    r"C:\\Program Files (x86)\\ffmpeg\\bin\\ffmpeg.exe",
-    "ffmpeg",  # Try from PATH
+    r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+    r"C:\ffmpeg\bin\ffmpeg.exe",
+    r"C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe",
+    "ffmpeg",
 ]
 
-MIN_VALID_FILE_SIZE_MB = 1.0  # Minimum size for valid MP4 file
+FFPROBE_PATHS = [
+    r"C:\Program Files\ffmpeg\bin\ffprobe.exe",
+    r"C:\ffmpeg\bin\ffprobe.exe",
+    r"C:\Program Files (x86)\ffmpeg\bin\ffprobe.exe",
+    "ffprobe",
+]
+
+MKVMERGE_PATHS = [
+    r"C:\Program Files\MKVToolNix\mkvmerge.exe",
+    r"C:\Program Files (x86)\MKVToolNix\mkvmerge.exe",
+    r"C:\mkvtoolnix\mkvmerge.exe",
+    "mkvmerge",
+]
+
+MIN_VALID_FILE_SIZE_MB = 1.0
+
+# H.264 Annex B start code
+ANNEX_B_START = b'\x00\x00\x00\x01'
+
+
+# =========================
+# Data Structures
+# =========================
+class IdxRecord(NamedTuple):
+    """Single parsed IDX record (32 bytes)."""
+    offset: int       # uint64 - byte position in SEQ file
+    size: int         # uint32 - frame data size
+    timestamp: float  # decoded full timestamp (seconds since epoch)
+    frame_number: int # uint32 - sequential frame counter
+
+
+@dataclass
+class CameraTimeline:
+    """Holds parsed IDX data and metadata for a single camera."""
+    camera_name: str
+    seq_path: Path
+    idx_path: Path
+    records: List[IdxRecord] = field(default_factory=list)
+    width: int = 0
+    height: int = 0
+    pix_fmt: str = "yuv420p"
+    t_start: float = 0.0
+    t_end: float = 0.0
+
+    @property
+    def duration(self) -> float:
+        return self.t_end - self.t_start
+
+    @property
+    def frame_count(self) -> int:
+        return len(self.records)
+
+    @property
+    def source_fps(self) -> float:
+        """Calculate actual source FPS from IDX timestamps."""
+        if self.duration > 0 and self.frame_count > 1:
+            return (self.frame_count - 1) / self.duration
+        return TARGET_FPS
+
+
+@dataclass
+class SessionGroup:
+    """A group of cameras for a specific date+case that must be synchronized."""
+    recording_date: str
+    case_no: int
+    group_name: str
+    cameras: Dict[str, CameraTimeline] = field(default_factory=dict)
+    t_global_start: float = float('inf')
+    t_global_end: float = float('-inf')
+
+    @property
+    def global_duration(self) -> float:
+        if self.t_global_start == float('inf'):
+            return 0.0
+        return self.t_global_end - self.t_global_start
+
+    @property
+    def total_output_frames(self) -> int:
+        return int(round(self.global_duration * TARGET_FPS))
 
 
 # =========================
 # Utility Functions
 # =========================
-def find_ffmpeg():
-    """Find ffmpeg executable in common locations or PATH"""
-    for path in FFMPEG_PATHS:
-        if path == "ffmpeg":
-            # Try from PATH
+def find_executable(paths: List[str]) -> Optional[str]:
+    """Find an executable in common locations or PATH."""
+    for path in paths:
+        if path in ("ffmpeg", "ffprobe", "mkvmerge"):
             try:
+                which_cmd = "where" if os.name == 'nt' else "which"
                 result = subprocess.run(
-                    ["where" if os.name == 'nt' else "which", "ffmpeg"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
+                    [which_cmd, path],
+                    capture_output=True, text=True, timeout=5
                 )
                 if result.returncode == 0:
-                    ffmpeg_path = result.stdout.strip().split('\n')[0]
-                    if os.path.exists(ffmpeg_path):
-                        return ffmpeg_path
+                    found = result.stdout.strip().split('\n')[0]
+                    if os.path.exists(found):
+                        return found
             except Exception:
                 pass
         else:
@@ -62,104 +180,178 @@ def find_ffmpeg():
     return None
 
 
+def find_ffmpeg() -> Optional[str]:
+    return find_executable(FFMPEG_PATHS)
+
+
+def find_ffprobe() -> Optional[str]:
+    return find_executable(FFPROBE_PATHS)
+
+
+def find_mkvmerge() -> Optional[str]:
+    return find_executable(MKVMERGE_PATHS)
+
+
 def is_valid_video_file(file_path: Path, min_size_mb: float = MIN_VALID_FILE_SIZE_MB) -> bool:
     """Check if video file exists and has reasonable size."""
     if not file_path.exists():
         return False
     try:
-        size_mb = file_path.stat().st_size / (1024 * 1024)
-        return size_mb > min_size_mb
-    except:
+        return file_path.stat().st_size / (1024 * 1024) > min_size_mb
+    except Exception:
         return False
 
 
-def get_next_available_filename(out_dir: Path, base_stem: str, extension: str) -> Tuple[str, Path]:
-    """Get next available filename that doesn't exist."""
-    # First try without counter
-    filename = f"{base_stem}{extension}"
-    file_path = out_dir / filename
-
-    if not file_path.exists():
-        return filename, file_path
-
-    # Try with counter
-    counter = 1
-    while counter < 1000:  # Safety limit
-        filename = f"{base_stem}_{counter}{extension}"
-        file_path = out_dir / filename
-        if not file_path.exists():
-            return filename, file_path
-        counter += 1
-
-    raise ValueError(f"Could not find available filename for {base_stem} after 1000 attempts")
+def get_video_duration(filepath: Path, ffprobe_path: str) -> Optional[float]:
+    """Get video duration in seconds via ffprobe."""
+    try:
+        cmd = [
+            ffprobe_path, "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "csv=p=0",
+            str(filepath),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip())
+    except Exception:
+        pass
+    return None
 
 
-def resolve_channel_label(seq_path: Path, channel_names: Dict[str, str]) -> str:
+def get_video_frame_count(filepath: Path, ffprobe_path: str) -> Optional[int]:
+    """Get video frame count via ffprobe."""
+    try:
+        cmd = [
+            ffprobe_path, "-v", "error",
+            "-select_streams", "v:0",
+            "-count_packets",
+            "-show_entries", "stream=nb_read_packets",
+            "-of", "csv=p=0",
+            str(filepath),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode == 0 and result.stdout.strip():
+            return int(result.stdout.strip())
+    except Exception:
+        pass
+    return None
+
+
+def fmt_seconds(s: float) -> str:
+    """Format seconds as HH:MM:SS."""
+    h = int(s) // 3600
+    m = (int(s) % 3600) // 60
+    sec = int(s) % 60
+    return f"{h:02d}:{m:02d}:{sec:02d}"
+
+
+def cleanup_temp_files(*paths: Path):
+    """Silently remove temporary files."""
+    for p in paths:
+        try:
+            if p and p.exists():
+                p.unlink()
+        except Exception:
+            pass
+
+
+# =========================
+# IDX Binary Parser
+# =========================
+IDX_RECORD_SIZE = 32
+IDX_STRUCT = struct.Struct('<QIIIIIi')
+
+
+def decode_timestamp(ts_seconds: int, ts_sub: int) -> float:
     """
-    Choose the output base name using mapping (stem -> filename -> fullpath -> parent name),
-    falling back to parent folder name or stem.
+    Decode NorPix IDX packed timestamp.
+
+    ts_sub layout:
+        bits 15-0  (low word):  milliseconds (0-999)
+        bits 31-16 (high word): microseconds within ms (0-999)
     """
-    stem = seq_path.stem
-    name = seq_path.name
-    full = str(seq_path.resolve())
-    parent_name = seq_path.parent.name if seq_path.parent else ""
+    ms = ts_sub & 0xFFFF
+    us = (ts_sub >> 16) & 0xFFFF
+    return ts_seconds + ms / 1000.0 + us / 1000000.0
 
-    return (
-            channel_names.get(stem)
-            or channel_names.get(name)
-            or channel_names.get(full)
-            or channel_names.get(parent_name)
-            or parent_name
-            or stem
-    )
 
-def compute_out_dir(seq_path: Path, out_root_path: Path) -> Path:
+def parse_idx_file(idx_path: Path) -> List[IdxRecord]:
     """
-    Decide where to write the output.
-    - If the input path includes a DATA_* anchor, mirror from there.
-    - Otherwise, fall back to DATA_Unknown/CaseUnknown/<Channel>.
+    Parse a NorPix IDX binary index file into a list of IdxRecords.
+    Format: 32-byte records, no header, little-endian.
     """
-    parts = seq_path.parts
-    anchor_idx = None
-    for i, part in enumerate(parts):
-        if part.upper().startswith("DATA_"):
-            anchor_idx = i
-            break
+    file_size = idx_path.stat().st_size
+    if file_size == 0:
+        return []
 
-    if anchor_idx is not None:
-        rel_from_data = Path(*parts[anchor_idx:])
-        out_dir = out_root_path / rel_from_data.parent
-    else:
-        channel = seq_path.parent.name if seq_path.parent else "ChannelUnknown"
-        case = seq_path.parent.parent.name if seq_path.parent and seq_path.parent.parent else "CaseUnknown"
-        date = seq_path.parent.parent.parent.name if seq_path.parent and seq_path.parent.parent and seq_path.parent.parent.parent else "DATA_Unknown"
-        if not str(date).upper().startswith("DATA_"):
-            date = "DATA_Unknown"
-        out_dir = out_root_path / str(date) / str(case) / str(channel)
+    if file_size % IDX_RECORD_SIZE != 0:
+        print(f"  ⚠️  IDX file size ({file_size}) not divisible by {IDX_RECORD_SIZE}, "
+              f"truncating to {file_size // IDX_RECORD_SIZE} records")
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    return out_dir
+    num_records = file_size // IDX_RECORD_SIZE
+    records = []
+
+    with open(idx_path, 'rb') as f:
+        raw = f.read(num_records * IDX_RECORD_SIZE)
+
+    for i in range(num_records):
+        chunk = raw[i * IDX_RECORD_SIZE : (i + 1) * IDX_RECORD_SIZE]
+        offset, size, ts_sec, ts_sub, _reserved, _flags, frame_no = IDX_STRUCT.unpack(chunk)
+
+        if size == 0:
+            continue
+
+        timestamp = decode_timestamp(ts_sec, ts_sub)
+        frame_no_unsigned = frame_no & 0xFFFFFFFF
+
+        records.append(IdxRecord(
+            offset=offset,
+            size=size,
+            timestamp=timestamp,
+            frame_number=frame_no_unsigned,
+        ))
+
+    return records
+
+
+# =========================
+# Resolution Detection (ffprobe)
+# =========================
+def detect_resolution(seq_path: Path, ffprobe_path: str) -> Tuple[int, int, str]:
+    """Use ffprobe on the SEQ file to detect width, height, pixel format."""
+    cmd = [
+        ffprobe_path,
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=width,height,pix_fmt",
+        "-of", "csv=p=0",
+        str(seq_path),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0 and result.stdout.strip():
+            parts = result.stdout.strip().split(',')
+            if len(parts) >= 3:
+                return int(parts[0]), int(parts[1]), parts[2].strip()
+            elif len(parts) == 2:
+                return int(parts[0]), int(parts[1]), "yuv420p"
+    except Exception as e:
+        print(f"  ⚠️  ffprobe failed: {e}")
+
+    print(f"  ⚠️  Could not detect resolution, using defaults (1920x1080, yuv420p)")
+    return 1920, 1080, "yuv420p"
 
 
 # =========================
 # Database Functions
 # =========================
-def connect_db(db_path):
-    """Connect to SQLite database."""
+def connect_db(db_path: str) -> sqlite3.Connection:
     return sqlite3.connect(db_path)
 
-def get_missing_mp4_files(db_path, cameras=None, limit=None):
-    """
-    Get all SEQ files that don't have MP4s.
 
-    Args:
-        db_path: Path to database
-        cameras: List of camera names to filter (None = all)
-        limit: Maximum number of files to return (None = all)
-
-    Returns:
-        List of dicts with file info
-    """
+def get_all_sessions(db_path: str, cameras: Optional[List[str]] = None) -> List[Dict]:
+    """Get all SEQ files that need MP4 conversion."""
     if cameras is None:
         cameras = DEFAULT_CAMERAS
 
@@ -179,13 +371,10 @@ def get_missing_mp4_files(db_path, cameras=None, limit=None):
         AND s.camera_name = m.camera_name
     WHERE
         s.camera_name IN ({})
-        AND s.size_mb >= 200  -- Only valid SEQ files
-        AND (m.size_mb IS NULL OR m.size_mb < 1)  -- Missing or invalid MP4
+        AND s.size_mb >= 200
+        AND (m.size_mb IS NULL OR m.size_mb < 1)
     ORDER BY s.recording_date DESC, s.case_no, s.camera_name
     """.format(','.join(['?'] * len(cameras)))
-
-    if limit:
-        query += f" LIMIT {limit}"
 
     cursor.execute(query, cameras)
 
@@ -195,463 +384,806 @@ def get_missing_mp4_files(db_path, cameras=None, limit=None):
             'recording_date': row[0],
             'case_no': row[1],
             'camera_name': row[2],
-            'seq_size_mb': row[3]
+            'seq_size_mb': row[3],
         })
 
     conn.close()
     return files
 
-def build_seq_path(recording_date, case_no, camera_name):
-    """Build the path to the .seq file."""
+
+def build_seq_path(recording_date: str, case_no: int, camera_name: str) -> Optional[Path]:
+    """Build path to the .seq file and return first match."""
     yy = recording_date[2:4]
     mm = recording_date[5:7]
     dd = recording_date[8:10]
     data_folder = f"DATA_{yy}-{mm}-{dd}"
     case_folder = f"Case{case_no}"
 
-    seq_path = Path(SEQ_ROOT) / data_folder / case_folder / camera_name
+    seq_dir = Path(SEQ_ROOT) / data_folder / case_folder / camera_name
+    seq_files = list(seq_dir.glob("*.seq"))
+    return seq_files[0] if seq_files else None
 
-    # Find the first .seq file
-    seq_files = list(seq_path.glob("*.seq"))
-    if seq_files:
-        return seq_files[0]
+
+def build_idx_path(seq_path: Path) -> Optional[Path]:
+    """Find the .idx file corresponding to a .seq file (X.seq.idx)."""
+    idx_path = Path(str(seq_path) + '.idx')
+    if idx_path.exists():
+        return idx_path
+
+    # Case-insensitive fallback
+    parent = seq_path.parent
+    seq_name = seq_path.name
+    for f in parent.iterdir():
+        if f.name.lower() == (seq_name + '.idx').lower():
+            return f
+
     return None
 
-def find_clexport():
-    """Find CLExport.exe in common locations."""
-    CLEXPORT_PATHS = [
-        r"C:\\Program Files\\NorPix\\BatchProcessor\\CLExport.exe",
-        r"C:\\Program Files (x86)\\NorPix\\BatchProcessor\\CLExport.exe",
-        r"C:\\NorPix\\BatchProcessor\\CLExport.exe",
+
+def compute_out_dir(seq_path: Path, out_root_path: Path) -> Path:
+    """Mirror directory structure under output root."""
+    parts = seq_path.parts
+    anchor_idx = None
+    for i, part in enumerate(parts):
+        if part.upper().startswith("DATA_"):
+            anchor_idx = i
+            break
+
+    if anchor_idx is not None:
+        rel_from_data = Path(*parts[anchor_idx:])
+        out_dir = out_root_path / rel_from_data.parent
+    else:
+        channel = seq_path.parent.name if seq_path.parent else "ChannelUnknown"
+        case = seq_path.parent.parent.name if seq_path.parent and seq_path.parent.parent else "CaseUnknown"
+        date = "DATA_Unknown"
+        if seq_path.parent and seq_path.parent.parent and seq_path.parent.parent.parent:
+            d = seq_path.parent.parent.parent.name
+            if d.upper().startswith("DATA_"):
+                date = d
+        out_dir = out_root_path / date / case / channel
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir
+
+
+def get_next_available_filename(out_dir: Path, base_stem: str, extension: str) -> Tuple[str, Path]:
+    """Get next available filename that doesn't exist."""
+    filename = f"{base_stem}{extension}"
+    file_path = out_dir / filename
+    if not file_path.exists():
+        return filename, file_path
+
+    counter = 1
+    while counter < 1000:
+        filename = f"{base_stem}_{counter}{extension}"
+        file_path = out_dir / filename
+        if not file_path.exists():
+            return filename, file_path
+        counter += 1
+
+    raise ValueError(f"Could not find available filename for {base_stem} after 1000 attempts")
+
+
+# =========================
+# Camera Group Discovery
+# =========================
+def get_camera_group(camera_name: str) -> Optional[str]:
+    """Return the group name ('A' or 'B') for a camera, or None if ungrouped."""
+    for group_name, members in ALL_GROUPS.items():
+        if camera_name in members:
+            return group_name
+    return None
+
+
+def build_session_groups(files: List[Dict], ffprobe_path: str) -> List[SessionGroup]:
+    """Organize files into synchronized session groups."""
+    group_map: Dict[Tuple[str, int, str], SessionGroup] = {}
+
+    for file_info in files:
+        date = file_info['recording_date']
+        case = file_info['case_no']
+        camera = file_info['camera_name']
+
+        grp = get_camera_group(camera)
+        if grp is None:
+            grp = f"solo_{camera}"
+
+        key = (date, case, grp)
+        if key not in group_map:
+            group_map[key] = SessionGroup(
+                recording_date=date,
+                case_no=case,
+                group_name=grp,
+            )
+
+        session = group_map[key]
+
+        # Build paths
+        seq_path = build_seq_path(date, case, camera)
+        if seq_path is None or not seq_path.exists():
+            print(f"  ⚠️  SEQ not found: {date} Case{case} {camera} — skipping")
+            continue
+
+        idx_path = build_idx_path(seq_path)
+        if idx_path is None:
+            print(f"  ⚠️  IDX not found for: {seq_path.name} — skipping camera")
+            continue
+
+        # Parse IDX
+        print(f"  Parsing IDX: {camera} ...", end="", flush=True)
+        records = parse_idx_file(idx_path)
+        if not records:
+            print(f" ⚠️  0 records, skipping")
+            continue
+        print(f" {len(records)} frames")
+
+        # Detect resolution
+        w, h, pix_fmt = detect_resolution(seq_path, ffprobe_path)
+
+        cam_timeline = CameraTimeline(
+            camera_name=camera,
+            seq_path=seq_path,
+            idx_path=idx_path,
+            records=records,
+            width=w,
+            height=h,
+            pix_fmt=pix_fmt,
+            t_start=records[0].timestamp,
+            t_end=records[-1].timestamp,
+        )
+
+        session.cameras[camera] = cam_timeline
+
+        if cam_timeline.t_start < session.t_global_start:
+            session.t_global_start = cam_timeline.t_start
+        if cam_timeline.t_end > session.t_global_end:
+            session.t_global_end = cam_timeline.t_end
+
+    return [sg for sg in group_map.values() if sg.cameras]
+
+
+# =========================
+# Raw H.264 Extraction from SEQ via IDX
+# =========================
+def _extract_sps_pps(seq_f, records, max_search=500) -> Optional[bytes]:
+    """
+    Extract SPS and PPS NAL units from the beginning of the stream.
+
+    Some cameras (like Patient_Monitor) only emit SPS/PPS once at the start
+    of recording, not with every IDR. We extract these once and can prepend
+    them to the stream to ensure it's always decodable.
+
+    Returns bytes containing the SPS+PPS NAL units (with Annex B start codes),
+    or None if not found.
+    """
+    sps_data = None
+    pps_data = None
+
+    for i in range(min(max_search, len(records))):
+        rec = records[i]
+        seq_f.seek(rec.offset)
+        raw = seq_f.read(min(rec.size, 8192))  # SPS+PPS are tiny, first 8KB is plenty
+
+        # Find all NAL units in this frame
+        pos = 0
+        while True:
+            idx = raw.find(ANNEX_B_START, pos)
+            if idx < 0 or idx + 4 >= len(raw):
+                break
+            nal_type = raw[idx + 4] & 0x1F
+
+            # Find the end of this NAL (next start code or end of data)
+            next_start = raw.find(ANNEX_B_START, idx + 4)
+            if next_start < 0:
+                nal_bytes = raw[idx:]
+            else:
+                nal_bytes = raw[idx:next_start]
+
+            if nal_type == 7 and sps_data is None:  # SPS
+                sps_data = nal_bytes
+            elif nal_type == 8 and pps_data is None:  # PPS
+                pps_data = nal_bytes
+
+            if sps_data and pps_data:
+                return sps_data + pps_data
+
+            pos = idx + 4
+
+    # Return whatever we found
+    if sps_data:
+        return sps_data + (pps_data or b'')
+    return None
+
+
+# =========================
+# VFR-to-CFR Pipeline Steps
+# =========================
+def step1_extract_h264_and_timecodes(
+    cam: CameraTimeline,
+    temp_h264_path: Path,
+    temp_timecodes_path: Path,
+) -> Tuple[bool, int]:
+    """
+    Step 1: Extract raw H.264 bitstream and generate timecodes v2 file.
+
+    Reads each frame from the SEQ file using IDX byte offsets, writes the
+    raw Annex B data to a .h264 file, and simultaneously writes a timecodes
+    v2 text file with the exact timestamp (in ms) for each frame.
+
+    Returns (success, frames_written).
+    """
+    cam_name = cam.camera_name
+    frames_written = 0
+
+    # Timecodes v2 format: header line + one timestamp (ms) per frame
+    # Timestamps are relative to the first frame (frame 0 = 0ms)
+    t_base = cam.records[0].timestamp
+
+    with open(cam.seq_path, 'rb') as seq_f:
+        # Extract SPS+PPS header
+        sps_pps = _extract_sps_pps(seq_f, cam.records)
+        if sps_pps:
+            print(f"  [{cam_name}] Wrote SPS+PPS header ({len(sps_pps)} bytes)")
+        else:
+            print(f"  [{cam_name}] ⚠️  Could not find SPS/PPS in stream!")
+
+        with open(temp_h264_path, 'wb') as h264_f, \
+             open(temp_timecodes_path, 'w') as tc_f:
+
+            # Write timecodes v2 header
+            tc_f.write("# timecode format v2\n")
+
+            # Write SPS+PPS as prologue (not counted as a frame)
+            if sps_pps:
+                h264_f.write(sps_pps)
+
+            # Write all frames
+            for rec in cam.records:
+                seq_f.seek(rec.offset)
+                raw = seq_f.read(rec.size)
+
+                # Find Annex B start code and write H.264 data
+                pos = raw.find(ANNEX_B_START)
+                if pos >= 0:
+                    h264_f.write(raw[pos:])
+
+                    # Write timecode in milliseconds relative to first frame
+                    ts_ms = (rec.timestamp - t_base) * 1000.0
+                    tc_f.write(f"{ts_ms:.3f}\n")
+
+                    frames_written += 1
+
+    if frames_written == 0:
+        return False, 0
+
+    h264_size_mb = temp_h264_path.stat().st_size / (1024 * 1024)
+    print(f"  [{cam_name}] Extracted {frames_written} frames → "
+          f"{temp_h264_path.name} ({h264_size_mb:.1f} MB) + "
+          f"{temp_timecodes_path.name}")
+
+    return True, frames_written
+
+
+def step2_mkvmerge_vfr(
+    cam_name: str,
+    mkvmerge_path: str,
+    temp_h264_path: Path,
+    temp_timecodes_path: Path,
+    temp_mkv_path: Path,
+) -> Tuple[bool, str]:
+    """
+    Step 2: Use mkvmerge to mux raw H.264 + timecodes into a VFR MKV.
+
+    mkvmerge reads the .h264 as a raw bitstream and applies the timecodes
+    v2 file to assign exact timestamps to each frame, preserving the
+    original variable capture timing in the container.
+
+    Returns (success, error_message).
+    """
+    cmd = [
+        mkvmerge_path,
+        "-o", str(temp_mkv_path),
+        "--timecodes", f"0:{temp_timecodes_path}",
+        str(temp_h264_path),
     ]
-    for path in CLEXPORT_PATHS:
-        if os.path.exists(path):
-            return path
-    return None
 
-def monitor_file_growth(out_path, process, timeout=15, check_interval=5):
-    """
-    Monitor if output file is growing. Kill process if stuck at any size for too long.
+    print(f"  [{cam_name}] mkvmerge: muxing VFR MKV ...")
 
-    Args:
-        out_path: Path to output file
-        process: Subprocess to monitor
-        timeout: How long (seconds) to wait before killing if file size doesn't change
-        check_interval: How often (seconds) to check file size
-
-    Returns:
-        True if file completed successfully, False if stuck
-    """
-    elapsed = 0
-    last_size = 0
-    stuck_time = 0
-    file_created = False
-
-    while process.poll() is None:  # While process is running
-        time.sleep(check_interval)
-        elapsed += check_interval
-
-        # Check if file exists and get size
-        if out_path.exists():
-            current_size = out_path.stat().st_size
-            size_mb = current_size / (1024*1024)
-
-            if not file_created:
-                print(f"    [Monitor] ✓ File created: {size_mb:.2f} MB")
-                file_created = True
-                last_size = current_size
-                stuck_time = 0
-            elif current_size == last_size:
-                # File size hasn't changed
-                stuck_time += check_interval
-                print(f"    [Monitor] File size unchanged: {size_mb:.2f} MB (stuck for {stuck_time}s)")
-
-                # If stuck for too long, kill the process
-                if stuck_time >= timeout:
-                    print(f"    [Monitor] ❌ File stuck at {size_mb:.2f} MB for {timeout}s - killing process")
-                    process.kill()
-                    return False
-            else:
-                # File is growing
-                growth = (current_size - last_size) / (1024*1024)
-                print(f"    [Monitor] Progress: {size_mb:.2f} MB (+{growth:.2f} MB)")
-                last_size = current_size
-                stuck_time = 0  # Reset stuck timer
-        else:
-            # File doesn't exist yet
-            print(f"    [Monitor] Waiting for output file... ({elapsed}s)")
-            if elapsed >= timeout:
-                print(f"    [Monitor] ❌ Output file not created after {timeout}s - killing process")
-                process.kill()
-                return False
-
-    # Process finished, check final result
-    if out_path.exists() and out_path.stat().st_size > 0:
-        final_size = out_path.stat().st_size / (1024*1024)
-        print(f"    [Monitor] ✓ Conversion complete - Final size: {final_size:.2f} MB")
-        return True
-    return False
-
-def export_file(seq_path, out_path, use_ffmpeg=True, codec="mp4"):
-    """
-    Export a single SEQ file to MP4.
-
-    Args:
-        seq_path: Path to .seq file
-        out_path: Path to output .mp4 file
-        use_ffmpeg: True for FFmpeg (GPU), False for CLExport
-        codec: Codec for CLExport (mp4 or mjpeg)
-
-    Returns:
-        (success, message)
-    """
     try:
-        if use_ffmpeg:
-            # GPU encoding using NVIDIA NVENC - optimized for smaller file size
-            ffmpeg_path = find_ffmpeg()
-            if not ffmpeg_path:
-                return False, "ffmpeg.exe not found"
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        # mkvmerge returns 0 for success, 1 for warnings, 2 for errors
+        if result.returncode >= 2:
+            err = result.stderr[-500:] if result.stderr else result.stdout[-500:]
+            return False, f"mkvmerge failed (code {result.returncode}): {err}"
 
-            cmd = [
-                ffmpeg_path,
-                "-y",
-                "-hwaccel", "cuda",
-                # --------------Set FOR FAST  VIDEO. the defult is 30 so find the right ratio by the correc tv
-                "-r", "28.429918135379943",
-                "-i", str(seq_path),
-                "-c:v", "h264_nvenc",
-                "-preset", "p6",  # Higher preset for better compression (p1=fastest, p7=slowest/best compression)
-                "-rc", "vbr",  # Variable bitrate mode
-                "-cq", "28",  # Quality level (higher = lower quality = smaller size)
-                "-b:v", "2M",  # Target bitrate
-                "-maxrate", "3M",  # Max bitrate
-                "-bufsize", "3M",  # Buffer size
-                "-profile:v", "high",
-                "-pix_fmt", "yuv420p",
-                str(out_path)
-            ]
+        if result.returncode == 1:
+            print(f"  [{cam_name}] mkvmerge: completed with warnings")
 
-            # Run FFmpeg with real-time output
-            print(f"  Running: {' '.join(cmd[:3])} ... (GPU-accelerated)")
-            print(f"  --- Output from FFmpeg ---")
+        mkv_size_mb = temp_mkv_path.stat().st_size / (1024 * 1024)
+        print(f"  [{cam_name}] mkvmerge: {temp_mkv_path.name} ({mkv_size_mb:.1f} MB)")
+        return True, ""
 
-            # Use Popen for real-time output
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True,
-                bufsize=1  # Line-buffered
-            )
+    except subprocess.TimeoutExpired:
+        return False, "mkvmerge timed out after 600s"
+    except Exception as e:
+        return False, f"mkvmerge error: {e}"
 
-            # Print output in real-time
-            for line in iter(process.stdout.readline, ''):
-                if line:
-                    print(f"  {line.rstrip()}")
 
-            # Wait for process to complete
-            process.wait()
-            print(f"  --- End Output ---")
+def step3_ffmpeg_cfr_encode(
+    cam: CameraTimeline,
+    session: SessionGroup,
+    cam_name: str,
+    ffmpeg_path: str,
+    temp_mkv_path: Path,
+    out_path: Path,
+) -> Tuple[bool, str]:
+    """
+    Step 3: FFmpeg reads VFR MKV, normalizes to CFR 30fps, adds sync
+    padding, and encodes to HEVC MP4.
 
-            # Check if successful
-            if process.returncode == 0 and is_valid_video_file(out_path):
-                size_mb = out_path.stat().st_size / (1024 * 1024)
-                return True, f"Success - GPU ({size_mb:.1f} MB)"
-            else:
-                return False, f"GPU encoding failed with code {process.returncode}"
+    The fps=30 filter performs nearest-neighbor sampling:
+      - Gaps (camera stutter): duplicates the last available frame
+      - Bursts (frames too close): drops excess frames
+    This ensures exactly 30 frames per second in the output.
 
-        else:
-            # CLExport with file size monitoring
-            clexport_path = find_clexport()
-            if not clexport_path:
-                return False, "CLExport.exe not found"
+    The tpad filter adds black frames at the start to align this camera
+    with the global session start time. The -t flag hard-cuts the output
+    at the exact global session duration.
 
-            out_dir = out_path.parent
-            out_filename = out_path.stem
+    Returns (success, error_or_info_message).
+    """
+    total_frames = session.total_output_frames
+    if total_frames <= 0:
+        return False, "Zero output frames"
 
-            cmd = [
-                clexport_path,
-                "-i", str(seq_path),
-                "-o", str(out_dir),
-                "-of", out_filename,
-                "-f", codec
-            ]
+    # Calculate sync padding from IDX timestamps
+    pre_roll_sec = cam.t_start - session.t_global_start
+    target_duration = session.global_duration
 
-            # Run CLExport with monitoring
-            print(f"  Running: {' '.join(cmd[:3])} ... {cmd[-1]}")
-            print(f"  --- Output from CLExport ---")
+    # Convert pre-roll from seconds to discrete frame count
+    pre_roll_frames = int(round(pre_roll_sec * TARGET_FPS))
 
-            # Delete output file if it exists (to ensure clean start)
-            if out_path.exists():
-                out_path.unlink()
+    print(f"  [{cam_name}] Pre-roll: {pre_roll_sec:.3f}s → {pre_roll_frames} frames | "
+          f"Target duration: {target_duration:.3f}s")
 
-            # Start process
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True
-            )
+    # Build filter chain
+    # fps=30 does the VFR→CFR conversion (nearest neighbor resampling)
+    filters = [f"fps={TARGET_FPS}"]
 
-            # Start monitoring thread
-            monitor_result = [None]  # Use list to share result between threads
+    tpad_parts = []
+    if pre_roll_frames > 0:
+        tpad_parts.append(f"start={pre_roll_frames}")   # discrete frame count
+    tpad_parts.append("stop=-1")                         # infinite black post-roll
+    tpad_parts.append("color=black")
+    filters.append(f"tpad={':'.join(tpad_parts)}")
 
-            def monitor_thread():
-                monitor_result[0] = monitor_file_growth(out_path, process, timeout=15, check_interval=5)
+    vf = ','.join(filters)
 
-            monitor = threading.Thread(target=monitor_thread, daemon=True)
-            monitor.start()
+    # Build FFmpeg command — read from VFR MKV
+    ffmpeg_cmd = [
+        ffmpeg_path,
+        "-y",
+        "-hwaccel", "cuda",
+        "-i", str(temp_mkv_path),           # VFR MKV with true timecodes
+        "-vf", vf,
+        "-c:v", "hevc_nvenc",               # HEVC/H.265 encoder
+        "-preset", "p1",
+        "-rc", "vbr",
+        "-cq", "35",
+        "-pix_fmt", "yuv420p",
+        "-r", str(TARGET_FPS),
+        "-t", f"{target_duration:.6f}",      # hard-cut at exact global duration
+        "-movflags", "+faststart",
+        str(out_path),
+    ]
 
-            # Wait for process and collect output
-            stdout, _ = process.communicate()
+    print(f"  [{cam_name}] Filter: {vf}")
+    print(f"  [{cam_name}] Hard-cut: -t {target_duration:.6f}s | Encoder: hevc_nvenc (H.265)")
+    print(f"  [{cam_name}] Output: {out_path}")
 
-            # Wait for monitor thread to finish
-            monitor.join(timeout=2)
+    # Launch FFmpeg
+    try:
+        process = subprocess.Popen(
+            ffmpeg_cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+    except Exception as e:
+        return False, f"FFmpeg launch failed: {e}"
 
-            # Print the output
-            if stdout:
-                for line in stdout.splitlines():
-                    print(f"  {line}")
-            print(f"  --- End Output ---")
+    # Start stderr reader in background thread (prevents pipe deadlock)
+    stderr_lines = []
+    last_progress_holder = [time.time()]
 
-            # Check results
-            file_was_growing = monitor_result[0]
+    def stderr_reader():
+        try:
+            while True:
+                raw_line = process.stderr.readline()
+                if not raw_line:
+                    break
+                line = raw_line.decode('utf-8', errors='replace')
+                stderr_lines.append(line)
+                m = re.search(r'frame=\s*(\d+)', line)
+                if m:
+                    now = time.time()
+                    if now - last_progress_holder[0] >= 5.0:
+                        current_frame = int(m.group(1))
+                        pct = min(100.0, current_frame / max(1, total_frames) * 100)
+                        fps_match = re.search(r'fps=\s*([\d.]+)', line)
+                        fps_str = f" @ {fps_match.group(1)} fps" if fps_match else ""
+                        speed_match = re.search(r'speed=\s*([\d.]+)x', line)
+                        speed_str = f" ({speed_match.group(1)}x)" if speed_match else ""
+                        print(f"  [{cam_name}] ⏳ {pct:5.1f}% — "
+                              f"frame {current_frame}/{total_frames}{fps_str}{speed_str}")
+                        last_progress_holder[0] = now
+        except Exception:
+            pass
 
-            if not file_was_growing:
-                # File stuck at 0 bytes - monitoring already killed the process
-                if out_path.exists():
-                    out_path.unlink()  # Clean up the 0-byte file
-                return False, "File stuck at 0 bytes - CLExport killed"
+    stderr_thread = threading.Thread(target=stderr_reader, daemon=True)
+    stderr_thread.start()
 
-            # Check if successful
-            if process.returncode == 0 and is_valid_video_file(out_path):
-                size_mb = out_path.stat().st_size / (1024 * 1024)
-                return True, f"Success ({size_mb:.1f} MB)"
-            else:
-                return False, f"Failed with code {process.returncode}"
+    # Wait for FFmpeg to finish (2 hours max for very long recordings)
+    try:
+        process.wait(timeout=7200)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        stderr_thread.join(timeout=5)
+        return False, "FFmpeg timed out after 7200s"
+
+    stderr_thread.join(timeout=10)
+
+    if process.returncode != 0:
+        err_tail = ''.join(stderr_lines[-10:])
+        return False, f"FFmpeg exited with code {process.returncode}:\n{err_tail}"
+
+    return True, ""
+
+
+# =========================
+# Full VFR→CFR Conversion (runs in thread)
+# =========================
+def process_camera_sync(
+    cam: CameraTimeline,
+    session: SessionGroup,
+    ffmpeg_path: str,
+    ffprobe_path: str,
+    mkvmerge_path: str,
+    out_path: Path,
+) -> Dict:
+    """
+    Convert a single camera's SEQ to MP4 using the VFR→CFR pipeline.
+    Returns a result dict for the summary.
+
+    Pipeline:
+      1. Extract raw H.264 + timecodes v2 from SEQ (using IDX offsets)
+      2. mkvmerge: mux into VFR MKV (preserves original capture timing)
+      3. FFmpeg: fps=30 nearest-neighbor → tpad → -t → hevc_nvenc → MP4
+      4. Verify output and clean up all temporary files
+    """
+    cam_name = cam.camera_name
+    result = {
+        'camera': cam_name,
+        'success': False,
+        'message': '',
+        'duration': None,
+        'frames': None,
+        'output_path': None,
+    }
+
+    # Temporary file paths (all in the same directory as the output)
+    temp_dir = out_path.parent
+    temp_h264 = temp_dir / f"{cam_name}_temp.h264"
+    temp_timecodes = temp_dir / f"{cam_name}_temp_timecodes.txt"
+    temp_mkv = temp_dir / f"{cam_name}_temp_vfr.mkv"
+
+    try:
+        # === Step 1: Extract H.264 + timecodes ===
+        print(f"  [{cam_name}] Step 1/3: Extracting H.264 bitstream + timecodes ...")
+        ok, frames_written = step1_extract_h264_and_timecodes(
+            cam, temp_h264, temp_timecodes,
+        )
+        if not ok:
+            result['message'] = "No valid H.264 frames extracted"
+            print(f"  [{cam_name}] ❌ No H.264 frames extracted")
+            return result
+
+        # === Step 2: mkvmerge VFR packaging ===
+        print(f"  [{cam_name}] Step 2/3: VFR packaging with mkvmerge ...")
+        ok, err_msg = step2_mkvmerge_vfr(
+            cam_name, mkvmerge_path,
+            temp_h264, temp_timecodes, temp_mkv,
+        )
+        if not ok:
+            result['message'] = err_msg
+            print(f"  [{cam_name}] ❌ mkvmerge failed: {err_msg}")
+            return result
+
+        # H.264 and timecodes no longer needed after mkvmerge
+        cleanup_temp_files(temp_h264, temp_timecodes)
+
+        # === Step 3: FFmpeg CFR encode ===
+        print(f"  [{cam_name}] Step 3/3: CFR normalization + HEVC encode ...")
+        ok, err_msg = step3_ffmpeg_cfr_encode(
+            cam, session, cam_name, ffmpeg_path, temp_mkv, out_path,
+        )
+        if not ok:
+            result['message'] = err_msg
+            print(f"  [{cam_name}] ❌ FFmpeg failed: {err_msg}")
+            return result
+
+        # MKV no longer needed after FFmpeg
+        cleanup_temp_files(temp_mkv)
+
+        # === Verify output ===
+        if not is_valid_video_file(out_path):
+            result['message'] = "Output file is too small or missing"
+            print(f"  [{cam_name}] ❌ Output file too small or missing")
+            return result
+
+        size_mb = out_path.stat().st_size / (1024 * 1024)
+
+        # Verify output duration and frame count with ffprobe
+        dur = get_video_duration(out_path, ffprobe_path)
+        frames = get_video_frame_count(out_path, ffprobe_path)
+
+        duration_str = ""
+        if dur is not None:
+            expected_dur = session.global_duration
+            drift = abs(dur - expected_dur)
+            duration_str = f" | {dur:.1f}s (expected {expected_dur:.1f}s, drift={drift:.2f}s)"
+
+        result['success'] = True
+        result['duration'] = dur
+        result['frames'] = frames
+        result['output_path'] = out_path
+        result['message'] = f"{size_mb:.1f} MB{duration_str}"
+
+        print(f"  [{cam_name}] ✅ {result['message']}")
+        return result
 
     except Exception as e:
-        return False, f"Error: {str(e)}"
+        result['message'] = f"Error: {e}"
+        print(f"  [{cam_name}] ❌ Error: {e}")
+        return result
+
+    finally:
+        # Always clean up any remaining temp files
+        cleanup_temp_files(temp_h264, temp_timecodes, temp_mkv)
+
+
+# =========================
+# Main Pipeline
+# =========================
+def display_session_plan(groups: List[SessionGroup]):
+    """Print a summary of what will be processed."""
+    print("\n" + "=" * 90)
+    print("SYNCHRONIZATION PLAN")
+    print("=" * 90)
+
+    for sg in groups:
+        dur = sg.global_duration
+        n_frames = sg.total_output_frames
+
+        print(f"\n📁 {sg.recording_date} Case{sg.case_no} — Group {sg.group_name}")
+        print(f"   Global timeline: {dur:.3f}s ({fmt_seconds(dur)}) → {n_frames} frames @ {TARGET_FPS} FPS")
+
+        for cam_name, cam in sg.cameras.items():
+            offset_start = cam.t_start - sg.t_global_start
+            offset_end = sg.t_global_end - cam.t_end
+            pre_frames = int(round(offset_start * TARGET_FPS))
+            print(f"   📷 {cam_name:25s} | {cam.width}x{cam.height} {cam.pix_fmt:12s} | "
+                  f"{cam.frame_count:7d} src frames @ {cam.source_fps:.2f}fps | "
+                  f"pre={offset_start:.3f}s ({pre_frames} frames)  post={offset_end:.3f}s")
+
+    print("\n" + "=" * 90)
+
 
 def main():
-    """Main batch convert function."""
-    print("=" * 80)
-    print("BATCH CONVERT SCRIPT - FFmpeg GPU with CLExport Fallback")
-    print("=" * 80)
-    print(f"Database: {DB_PATH}")
-    print(f"SEQ Root: {SEQ_ROOT}")
+    print("=" * 90)
+    print("SMART SEQ SYNC CONVERTER — VFR-to-CFR Multi-Camera Synchronization")
+    print("=" * 90)
+    print(f"Database:    {DB_PATH}")
+    print(f"SEQ Root:    {SEQ_ROOT}")
     print(f"Output Root: {OUT_ROOT}")
+    print(f"Target FPS:  {TARGET_FPS}")
+    print(f"Parallel:    {MAX_PARALLEL} cameras")
+    print(f"Encoder:     hevc_nvenc (H.265)")
+    print(f"Pipeline:    SEQ→H.264+timecodes→mkvmerge(VFR MKV)→FFmpeg fps={TARGET_FPS}(CFR)→MP4")
     print()
 
-    # Check FFmpeg availability
+    # Check tool availability
     ffmpeg_path = find_ffmpeg()
     if not ffmpeg_path:
-        print("❌ FFmpeg not found!")
-        print("Please install FFmpeg or add it to your PATH.")
+        print("❌ FFmpeg not found! Install FFmpeg or add it to PATH.")
         return
+    print(f"✓ FFmpeg:    {ffmpeg_path}")
 
-    # Check CLExport availability
-    clexport_path = find_clexport()
-    use_clexport_fallback = clexport_path is not None
+    ffprobe_path = find_ffprobe()
+    if not ffprobe_path:
+        print("❌ FFprobe not found! It should come with FFmpeg.")
+        return
+    print(f"✓ FFprobe:   {ffprobe_path}")
 
-    print(f"✓ Primary: FFmpeg with GPU acceleration: {ffmpeg_path}")
-    if use_clexport_fallback:
-        print(f"✓ Fallback: CLExport available: {clexport_path}")
-    else:
-        print("⚠️  CLExport not found - no fallback available")
+    mkvmerge_path = find_mkvmerge()
+    if not mkvmerge_path:
+        print("❌ mkvmerge not found! Install MKVToolNix or add it to PATH.")
+        print("   Download: https://mkvtoolnix.download/downloads.html")
+        return
+    print(f"✓ mkvmerge:  {mkvmerge_path}")
+
+    all_cameras = list(set(GROUP_A + GROUP_B))
+    print(f"\nCamera groups:")
+    print(f"  Group A: {', '.join(GROUP_A)}")
+    print(f"  Group B: {', '.join(GROUP_B)}")
     print()
 
-    # Always use all cameras
-    cameras = DEFAULT_CAMERAS
-    print(f"Cameras: All ({len(cameras)} cameras)")
-    print()
-
-    print("Fetching files from database...")
-    files = get_missing_mp4_files(DB_PATH, cameras, limit=None)
+    print("Querying database for pending conversions...")
+    files = get_all_sessions(DB_PATH, cameras=all_cameras)
 
     if not files:
         print("✓ No files need converting!")
         return
 
-    print(f"\nFound {len(files)} files with missing MP4s")
-    print("=" * 80)
+    print(f"Found {len(files)} camera files pending conversion")
 
-    # Display files and let user choose
-    print("\nAVAILABLE FILES:")
-    print("-" * 80)
-    for i, file_info in enumerate(files, 1):
-        recording_date = file_info['recording_date']
-        case_no = file_info['case_no']
-        camera_name = file_info['camera_name']
-        size_mb = file_info['seq_size_mb']
-        print(f"  {i:3d}. {recording_date} | Case{case_no:2d} | {camera_name:20s} | {size_mb:6.1f} MB")
+    print("\nScanning IDX files and detecting resolutions...")
+    print("-" * 90)
+    session_groups = build_session_groups(files, ffprobe_path)
 
-    print("-" * 80)
-    print("\nHow do you want to select files?")
-    print("  1. Convert ALL files")
-    print("  2. Convert first N files")
-    print("  3. Choose specific files by number")
-
-    selection_mode = input("\nChoice (1, 2, or 3): ").strip()
-
-    selected_files = []
-
-    if selection_mode == '1':
-        # Export all
-        selected_files = files
-        print(f"✓ Selected all {len(files)} files")
-
-    elif selection_mode == '2':
-        # Export first N
-        n_input = input("How many files (from the top)? ").strip()
-        try:
-            n = int(n_input)
-            selected_files = files[:n]
-            print(f"✓ Selected first {len(selected_files)} files")
-        except ValueError:
-            print("❌ Invalid number")
-            return
-
-    elif selection_mode == '3':
-        # Choose specific files
-        print("\nEnter file numbers (comma-separated or ranges)")
-        print("  Examples:")
-        print("    1,3,5         - Files 1, 3, and 5")
-        print("    1-10          - Files 1 through 10")
-        print("    1-5,8,10-15   - Files 1-5, 8, and 10-15")
-
-        numbers_input = input("\nFile numbers: ").strip()
-
-        try:
-            # Parse input
-            selected_indices = set()
-            parts = numbers_input.split(',')
-
-            for part in parts:
-                part = part.strip()
-                if '-' in part:
-                    # Range
-                    start, end = part.split('-')
-                    start_idx = int(start.strip())
-                    end_idx = int(end.strip())
-                    selected_indices.update(range(start_idx, end_idx + 1))
-                else:
-                    # Single number
-                    selected_indices.add(int(part))
-
-            # Convert to file list
-            for idx in sorted(selected_indices):
-                if 1 <= idx <= len(files):
-                    selected_files.append(files[idx - 1])
-
-            print(f"✓ Selected {len(selected_files)} files")
-
-        except Exception as e:
-            print(f"❌ Invalid input: {e}")
-            return
-    else:
-        print("❌ Invalid choice")
+    if not session_groups:
+        print("❌ No valid session groups found (missing IDX files?)")
         return
 
-    if not selected_files:
-        print("No files selected!")
-        return
+    display_session_plan(session_groups)
 
+    total_cameras = sum(len(sg.cameras) for sg in session_groups)
+    total_frames = sum(
+        sg.total_output_frames * len(sg.cameras)
+        for sg in session_groups
+    )
+
+    print(f"\nTotal: {total_cameras} cameras across {len(session_groups)} groups")
+    print(f"Estimated total output frames: {total_frames:,}")
     print()
 
-    # Confirm
-    response = input(f"Convert {len(selected_files)} files using FFmpeg GPU? (y/n): ").strip().lower()
+    response = input("Proceed with synchronized conversion? (y/n): ").strip().lower()
     if response != 'y':
         print("Cancelled.")
         return
 
-    print()
-    print("=" * 80)
-    print("STARTING CONVERSION")
-    print("=" * 80)
+    print("\n" + "=" * 90)
+    print(f"STARTING VFR→CFR SYNCHRONIZED CONVERSION (up to {MAX_PARALLEL} cameras in parallel)")
+    print("=" * 90)
 
-    # Export files
-    success_count = 0
-    failed_count = 0
-    skipped_count = 0
-    fallback_count = 0
+    all_results = []
+    global_start_time = time.time()
 
-    start_time = datetime.now()
-    codec = "mp4"  # Codec for CLExport
+    group_idx = 0
+    for sg in session_groups:
+        group_idx += 1
+        print(f"\n{'─' * 90}")
+        print(f"[Group {group_idx}/{len(session_groups)}] "
+              f"{sg.recording_date} Case{sg.case_no} — Group {sg.group_name} "
+              f"({len(sg.cameras)} cameras, {sg.global_duration:.1f}s / {fmt_seconds(sg.global_duration)})")
+        print(f"{'─' * 90}")
 
-    for i, file_info in enumerate(selected_files, 1):
-        recording_date = file_info['recording_date']
-        case_no = file_info['case_no']
-        camera_name = file_info['camera_name']
+        # Prepare tasks: resolve output paths before launching threads
+        tasks = []
+        for cam_name, cam in sg.cameras.items():
+            out_root_path = Path(OUT_ROOT).resolve()
+            out_dir = compute_out_dir(cam.seq_path, out_root_path)
+            _, mp4_path = get_next_available_filename(out_dir, cam_name, ".mp4")
 
-        print(f"\n[{i}/{len(selected_files)}] {recording_date} Case{case_no} - {camera_name}")
-        print(f"  SEQ Size: {file_info['seq_size_mb']:.1f} MB")
+            if is_valid_video_file(mp4_path):
+                print(f"\n  📷 {cam_name} — ⏭️  SKIP: MP4 already exists ({mp4_path.name})")
+                all_results.append({
+                    'camera': cam_name, 'success': True, 'skipped': True,
+                    'message': 'Already exists', 'duration': None, 'frames': None,
+                })
+                continue
 
-        # Build paths
-        seq_path = build_seq_path(recording_date, case_no, camera_name)
+            tasks.append((cam_name, cam, mp4_path))
 
-        if not seq_path or not seq_path.exists():
-            print(f"  ❌ SKIP: SEQ file not found")
-            skipped_count += 1
+        if not tasks:
+            print("  All cameras already converted, skipping group.")
             continue
 
-        # Compute output path
-        out_root_path = Path(OUT_ROOT).resolve()
-        out_dir = compute_out_dir(seq_path, out_root_path)
-        ch_label = resolve_channel_label(seq_path, {})
-        exported_name, mp4_path = get_next_available_filename(out_dir, ch_label, ".mp4")
+        # Launch parallel processing
+        with ThreadPoolExecutor(max_workers=MAX_PARALLEL) as executor:
+            futures = {}
+            for cam_name, cam, mp4_path in tasks:
+                future = executor.submit(
+                    process_camera_sync,
+                    cam, sg, ffmpeg_path, ffprobe_path, mkvmerge_path, mp4_path,
+                )
+                futures[future] = (cam_name, mp4_path)
 
-        # Check if already exists
-        if is_valid_video_file(mp4_path):
-            print(f"  ⏭️  SKIP: MP4 already exists ({mp4_path.name})")
-            skipped_count += 1
-            continue
+            for future in as_completed(futures):
+                cam_name, mp4_path = futures[future]
+                try:
+                    result = future.result()
+                    result['skipped'] = False
+                    all_results.append(result)
 
-        # Export with GPU-accelerated FFmpeg
-        success, message = export_file(seq_path, mp4_path, use_ffmpeg=True, codec=codec)
+                    # Clean up failed output files
+                    if not result['success'] and mp4_path.exists():
+                        try:
+                            mp4_path.unlink()
+                        except Exception:
+                            pass
 
-        if success:
-            print(f"  ✅ {message}")
-            success_count += 1
-        else:
-            # Try fallback to CLExport if GPU failed and CLExport is available
-            if use_clexport_fallback:
-                print(f"  ⚠️  GPU encoding failed: {message}")
-                print(f"  🔄 Trying CLExport fallback...")
+                except Exception as e:
+                    print(f"  [{cam_name}] ❌ Exception: {e}")
+                    all_results.append({
+                        'camera': cam_name, 'success': False, 'skipped': False,
+                        'message': str(e), 'duration': None, 'frames': None,
+                    })
+                    if mp4_path.exists():
+                        try:
+                            mp4_path.unlink()
+                        except Exception:
+                            pass
 
-                # Try with CLExport
-                success_fallback, message_fallback = export_file(seq_path, mp4_path, use_ffmpeg=False, codec=codec)
-
-                if success_fallback:
-                    print(f"  ✅ CLExport fallback succeeded: {message_fallback}")
-                    success_count += 1
-                    fallback_count += 1
-                else:
-                    print(f"  ❌ CLExport fallback also failed: {message_fallback}")
-                    failed_count += 1
-            else:
-                print(f"  ❌ FAILED: {message}")
-                failed_count += 1
-
-    # Summary
-    end_time = datetime.now()
-    duration = end_time - start_time
-
+    # =========================
+    # Summary & Sync Validation
+    # =========================
+    total_time = time.time() - global_start_time
     print()
-    print("=" * 80)
+    print("=" * 90)
     print("CONVERSION COMPLETE")
-    print("=" * 80)
-    print(f"Success:       {success_count}")
-    if fallback_count > 0:
-        print(f"  (CLExport):  {fallback_count}")
-    print(f"Failed:        {failed_count}")
-    print(f"Skipped:       {skipped_count}")
-    print(f"Total:         {len(selected_files)}")
-    print(f"Duration:      {duration}")
-    print(f"Primary:       FFmpeg GPU (NVENC)")
-    if use_clexport_fallback:
-        print(f"Fallback:      CLExport (mp4/H.264)")
-    print("=" * 80)
+    print("=" * 90)
+
+    successes = [r for r in all_results if r['success'] and not r.get('skipped')]
+    failures = [r for r in all_results if not r['success']]
+    skipped = [r for r in all_results if r.get('skipped')]
+
+    print(f"\n  Processed: {len(all_results)} cameras in {total_time:.1f}s ({fmt_seconds(total_time)})")
+    print(f"  Success:   {len(successes)}")
+    print(f"  Skipped:   {len(skipped)}")
+    print(f"  Failed:    {len(failures)}")
+    print(f"  Encoder:   hevc_nvenc (H.265)")
+    print(f"  Strategy:  VFR→CFR via mkvmerge+FFmpeg @ {TARGET_FPS} FPS")
+    print(f"  Pipeline:  SEQ→H.264+timecodes→MKV(VFR)→MP4(CFR)")
+    print(f"  Parallel:  {MAX_PARALLEL} cameras")
+
+    if failures:
+        print(f"\n  ❌ FAILURES:")
+        for r in failures:
+            print(f"     {r['camera']}: {r['message']}")
+
+    # Sync validation across groups
+    if len(successes) >= 2:
+        print(f"\n  ⏱️  SYNC VALIDATION (durations must match within group):")
+        durations = [(r['camera'], r['duration'], r['frames']) for r in successes if r['duration']]
+        if durations:
+            ref_dur = durations[0][1]
+            ref_frames = durations[0][2]
+            max_drift = 0.0
+
+            for cam, dur, frames in durations:
+                drift = abs(dur - ref_dur) if ref_dur and dur else 0
+                max_drift = max(max_drift, drift)
+                frame_diff = abs(frames - ref_frames) if ref_frames and frames else "?"
+                status = "✓" if drift < 0.05 else "⚠️  DRIFT"
+                print(f"     {cam:25s}: {dur:.3f}s ({frames} frames) — "
+                      f"Δ={drift:.3f}s ({frame_diff} frames) {status}")
+
+            print()
+            if max_drift < 0.034:  # less than 1 frame at 30fps
+                print(f"  ✅ SYNC OK — max drift {max_drift:.3f}s (< 1 frame)")
+            elif max_drift < 0.1:
+                print(f"  ⚠️  SYNC MARGINAL — max drift {max_drift:.3f}s ({int(max_drift * TARGET_FPS)} frames)")
+            else:
+                print(f"  ❌ SYNC FAILED — max drift {max_drift:.3f}s ({int(max_drift * TARGET_FPS)} frames)")
+
+    print("=" * 90)
 
 
 if __name__ == "__main__":
