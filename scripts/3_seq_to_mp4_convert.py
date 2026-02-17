@@ -59,7 +59,7 @@ SEQ_ROOT = get_seq_root()
 OUT_ROOT = get_mp4_root()
 
 TARGET_FPS = 30
-MAX_PARALLEL = 3           # concurrent FFmpeg processes
+MAX_PARALLEL = 4           # concurrent FFmpeg processes
 
 # Camera synchronization groups
 GROUP_A = ["Cart_Center_2", "Cart_LT_4", "Cart_RT_1", "General_3"]
@@ -89,6 +89,7 @@ MKVMERGE_PATHS = [
 ]
 
 MIN_VALID_FILE_SIZE_MB = 1.0
+LOG_FILE = Path(OUT_ROOT) / "conversion_log.txt"
 
 # H.264 Annex B start code
 ANNEX_B_START = b'\x00\x00\x00\x01'
@@ -254,6 +255,37 @@ def cleanup_temp_files(*paths: Path):
                 p.unlink()
         except Exception:
             pass
+
+
+def append_log(result: Dict, recording_date: str = "", case_no: int = 0, group_name: str = ""):
+    """Append a single conversion result to the log file."""
+    try:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        camera = result.get('camera', '?')
+        success = result.get('success', False)
+        skipped = result.get('skipped', False)
+        message = result.get('message', '')
+        output_path = result.get('output_path', '')
+
+        if skipped:
+            status = "SKIPPED"
+        elif success:
+            status = "OK"
+        else:
+            status = "FAILED"
+
+        elapsed = result.get('elapsed')
+        elapsed_str = fmt_seconds(elapsed) if elapsed else "--:--:--"
+
+        line = (f"[{timestamp}] {status:7s} | {recording_date} Case{case_no} "
+                f"Group {group_name} | {camera:25s} | {elapsed_str} | {message}")
+        if output_path:
+            line += f" | {output_path}"
+
+        with open(LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
 
 # =========================
@@ -772,9 +804,9 @@ def step3_ffmpeg_cfr_encode(
         "-i", str(temp_mkv_path),           # VFR MKV with true timecodes
         "-vf", vf,
         "-c:v", "hevc_nvenc",               # HEVC/H.265 encoder
-        "-preset", "p1",
+        "-preset", "p4",
         "-rc", "vbr",
-        "-cq", "35",
+        "-cq", "27",
         "-pix_fmt", "yuv420p",
         "-r", str(TARGET_FPS),
         "-t", f"{target_duration:.6f}",      # hard-cut at exact global duration
@@ -877,6 +909,8 @@ def process_camera_sync(
         'output_path': None,
     }
 
+    cam_start_time = time.time()
+
     # Temporary file paths (all in the same directory as the output)
     temp_dir = out_path.parent
     temp_h264 = temp_dir / f"{cam_name}_temp.h264"
@@ -943,12 +977,14 @@ def process_camera_sync(
         result['duration'] = dur
         result['frames'] = frames
         result['output_path'] = out_path
+        result['elapsed'] = time.time() - cam_start_time
         result['message'] = f"{size_mb:.1f} MB{duration_str}"
 
-        print(f"  [{cam_name}] ✅ {result['message']}")
+        print(f"  [{cam_name}] ✅ {result['message']} (took {fmt_seconds(result['elapsed'])})")
         return result
 
     except Exception as e:
+        result['elapsed'] = time.time() - cam_start_time
         result['message'] = f"Error: {e}"
         print(f"  [{cam_name}] ❌ Error: {e}")
         return result
@@ -1058,6 +1094,17 @@ def main():
         print("Cancelled.")
         return
 
+    # Initialize log file with run header
+    try:
+        with open(LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(f"\n{'=' * 100}\n")
+            f.write(f"RUN STARTED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | "
+                    f"{total_cameras} cameras, {len(session_groups)} groups\n")
+            f.write(f"{'=' * 100}\n")
+    except Exception:
+        pass
+    print(f"Log file:    {LOG_FILE}")
+
     print("\n" + "=" * 90)
     print(f"STARTING VFR→CFR SYNCHRONIZED CONVERSION (up to {MAX_PARALLEL} cameras in parallel)")
     print("=" * 90)
@@ -1083,10 +1130,12 @@ def main():
 
             if is_valid_video_file(mp4_path):
                 print(f"\n  📷 {cam_name} — ⏭️  SKIP: MP4 already exists ({mp4_path.name})")
-                all_results.append({
+                skip_result = {
                     'camera': cam_name, 'success': True, 'skipped': True,
                     'message': 'Already exists', 'duration': None, 'frames': None,
-                })
+                }
+                all_results.append(skip_result)
+                append_log(skip_result, sg.recording_date, sg.case_no, sg.group_name)
                 continue
 
             tasks.append((cam_name, cam, mp4_path))
@@ -1111,6 +1160,7 @@ def main():
                     result = future.result()
                     result['skipped'] = False
                     all_results.append(result)
+                    append_log(result, sg.recording_date, sg.case_no, sg.group_name)
 
                     # Clean up failed output files
                     if not result['success'] and mp4_path.exists():
@@ -1121,10 +1171,12 @@ def main():
 
                 except Exception as e:
                     print(f"  [{cam_name}] ❌ Exception: {e}")
-                    all_results.append({
+                    err_result = {
                         'camera': cam_name, 'success': False, 'skipped': False,
                         'message': str(e), 'duration': None, 'frames': None,
-                    })
+                    }
+                    all_results.append(err_result)
+                    append_log(err_result, sg.recording_date, sg.case_no, sg.group_name)
                     if mp4_path.exists():
                         try:
                             mp4_path.unlink()
