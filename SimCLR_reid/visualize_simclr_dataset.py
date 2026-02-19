@@ -58,13 +58,12 @@ def analyze_dataset(dataset_path: Path) -> dict:
 
     Returns:
         Dictionary with analysis results:
-            - case_counts: images per case
-            - video_counts: images per (case, video) pair
+            - case_counts: images per (case_no, video_idx) pair — unique identity is date+case
             - total_images: total count
             - burst_analysis: burst grouping info
     """
+    # Key: (case_no, video_idx) — this is the true unique identity (date+case)
     case_counts = defaultdict(int)
-    video_counts = defaultdict(int)  # (case_no, video_idx) -> count
     frame_ids_by_case_video = defaultdict(list)  # for burst analysis
 
     total_images = 0
@@ -81,14 +80,14 @@ def analyze_dataset(dataset_path: Path) -> dict:
         parsed = parse_filename(filepath.name)
         if parsed:
             case_no, video_idx, frame_id = parsed
-            case_counts[case_no] += 1
-            video_counts[(case_no, video_idx)] += 1
-            frame_ids_by_case_video[(case_no, video_idx)].append(frame_id)
+            key = (case_no, video_idx)
+            case_counts[key] += 1
+            frame_ids_by_case_video[key].append(frame_id)
             total_images += 1
         else:
             parse_failures += 1
 
-    # Sort case counts
+    # Sort by (case_no, video_idx)
     case_counts = OrderedDict(sorted(case_counts.items()))
 
     # Analyze bursts (groups of 3 consecutive captures ~20 frames apart)
@@ -96,11 +95,10 @@ def analyze_dataset(dataset_path: Path) -> dict:
 
     return {
         'case_counts': case_counts,
-        'video_counts': dict(video_counts),
         'total_images': total_images,
         'parse_failures': parse_failures,
         'num_cases': len(case_counts),
-        'num_videos': len(video_counts),
+        'num_videos': len(case_counts),
         'burst_stats': burst_stats
     }
 
@@ -171,8 +169,10 @@ def create_case_distribution_chart(analysis: dict, output_path: Path):
         print("No data to visualize!")
         return None
 
-    cases = list(case_counts.keys())
+    cases = list(case_counts.keys())  # list of (case_no, video_idx) tuples
     counts = list(case_counts.values())
+    # Label format: "42_v03" — unique per date+case
+    labels = [f"{c}_v{v:02d}" for c, v in cases]
 
     # Calculate statistics
     total_images = sum(counts)
@@ -186,7 +186,7 @@ def create_case_distribution_chart(analysis: dict, output_path: Path):
 
     # Create color gradient based on count values
     norm_counts = np.array(counts) / max(counts)
-    colors = plt.cm.viridis(norm_counts)
+    colors = plt.colormaps['viridis'](norm_counts)
 
     # Create bar chart
     x_positions = np.arange(len(cases))
@@ -205,17 +205,17 @@ def create_case_distribution_chart(analysis: dict, output_path: Path):
                         fontsize=7, fontweight='bold',
                         color='white', rotation=90)
 
-    # Customize x-axis
-    ax.set_xticks(x_positions[::max(1, len(cases) // 30)])  # Show ~30 labels max
-    ax.set_xticklabels([str(cases[i]) for i in range(0, len(cases), max(1, len(cases) // 30))],
-                       rotation=45, ha='right', fontsize=8)
+    # Customize x-axis — show ~30 labels max
+    step = max(1, len(cases) // 30)
+    ax.set_xticks(x_positions[::step])
+    ax.set_xticklabels(labels[::step], rotation=45, ha='right', fontsize=8)
 
     # Add grid
     ax.yaxis.grid(True, linestyle='--', alpha=0.3)
     ax.set_axisbelow(True)
 
     # Labels and title
-    ax.set_xlabel('Case Number', fontsize=12, fontweight='bold')
+    ax.set_xlabel('Case (case_no_vVideoIdx)', fontsize=12, fontweight='bold')
     ax.set_ylabel('Number of Images', fontsize=12, fontweight='bold')
     ax.set_title('SimCLR Burst Dataset - Images per Case\n(simclr_burst_v3_cleaned)',
                  fontsize=14, fontweight='bold', pad=20)
@@ -274,7 +274,7 @@ def create_histogram(analysis: dict, output_path: Path):
     # Color by height
     max_n = max(n)
     for patch, height in zip(patches, n):
-        patch.set_facecolor(plt.cm.viridis(height / max_n))
+        patch.set_facecolor(plt.colormaps['viridis'](height / max_n))
 
     ax.set_xlabel('Images per Case', fontsize=12, fontweight='bold')
     ax.set_ylabel('Number of Cases', fontsize=12, fontweight='bold')
@@ -352,16 +352,16 @@ def print_summary(analysis: dict):
         sorted_cases = sorted(case_counts.items(), key=lambda x: x[1], reverse=True)
         print(f"\n{'TOP 10 CASES':^60}")
         print("-" * 60)
-        print(f"  {'Case':<10} {'Images':>10}")
-        for case_no, count in sorted_cases[:10]:
-            print(f"  {case_no:<10} {count:>10,}")
+        print(f"  {'Case':<15} {'Images':>10}")
+        for (case_no, video_idx), count in sorted_cases[:10]:
+            print(f"  {f'{case_no}_v{video_idx:02d}':<15} {count:>10,}")
 
         # Bottom 10 cases
         print(f"\n{'BOTTOM 10 CASES':^60}")
         print("-" * 60)
-        print(f"  {'Case':<10} {'Images':>10}")
-        for case_no, count in sorted_cases[-10:]:
-            print(f"  {case_no:<10} {count:>10,}")
+        print(f"  {'Case':<15} {'Images':>10}")
+        for (case_no, video_idx), count in sorted_cases[-10:]:
+            print(f"  {f'{case_no}_v{video_idx:02d}':<15} {count:>10,}")
 
     print("\n" + "=" * 60)
 
@@ -369,17 +369,20 @@ def print_summary(analysis: dict):
 def save_analysis_json(analysis: dict, output_path: Path):
     """Save analysis results to JSON file."""
     # Convert defaultdict and tuple keys for JSON serialization
+    counts = list(analysis['case_counts'].values())
     json_data = {
         'total_images': analysis['total_images'],
         'num_cases': analysis['num_cases'],
         'num_videos': analysis['num_videos'],
         'parse_failures': analysis['parse_failures'],
         'burst_stats': analysis['burst_stats'],
-        'case_counts': dict(analysis['case_counts']),
+        # Keys serialized as "case_no_vVideoIdx" strings
+        'case_counts': {f"{c}_v{v:02d}": cnt
+                        for (c, v), cnt in analysis['case_counts'].items()},
         'statistics': {
-            'mean': float(np.mean(list(analysis['case_counts'].values()))) if analysis['case_counts'] else 0,
-            'median': float(np.median(list(analysis['case_counts'].values()))) if analysis['case_counts'] else 0,
-            'std': float(np.std(list(analysis['case_counts'].values()))) if analysis['case_counts'] else 0,
+            'mean': float(np.mean(counts)) if counts else 0,
+            'median': float(np.median(counts)) if counts else 0,
+            'std': float(np.std(counts)) if counts else 0,
         }
     }
 
