@@ -234,17 +234,17 @@ class DatabaseBrowser:
         cursor = conn.cursor()
         
         query = """
-            SELECT 
-                rd.recording_date,
-                rd.case_no,
+            SELECT
+                ms.recording_date,
+                ms.case_no,
                 a.name as provider,
                 COUNT(ms.camera_name) as cam_count,
                 MAX(ms.duration_minutes) as max_dur
-            FROM recording_details rd
+            FROM mp4_status ms
+            LEFT JOIN recording_details rd ON ms.recording_date = rd.recording_date AND ms.case_no = rd.case_no
             LEFT JOIN anesthesiology a ON rd.anesthesiology_key = a.anesthesiology_key
-            LEFT JOIN mp4_status ms ON rd.recording_date = ms.recording_date AND rd.case_no = ms.case_no
-            GROUP BY rd.recording_date, rd.case_no
-            ORDER BY rd.recording_date DESC, rd.case_no DESC
+            GROUP BY ms.recording_date, ms.case_no
+            ORDER BY ms.recording_date DESC, ms.case_no DESC
         """
         
         cursor.execute(query)
