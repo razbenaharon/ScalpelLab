@@ -59,7 +59,7 @@ SEQ_ROOT = get_seq_root()
 OUT_ROOT = get_mp4_root()
 
 TARGET_FPS = 30
-MAX_PARALLEL = 4           # concurrent FFmpeg processes
+MAX_PARALLEL = 2           # concurrent FFmpeg processes
 
 # Camera synchronization groups
 GROUP_A = ["Cart_Center_2", "Cart_LT_4", "Cart_RT_1", "General_3"]
@@ -118,6 +118,7 @@ class CameraTimeline:
     pix_fmt: str = "yuv420p"
     t_start: float = 0.0
     t_end: float = 0.0
+    _cached_frame_count: int = 0
 
     @property
     def duration(self) -> float:
@@ -125,7 +126,9 @@ class CameraTimeline:
 
     @property
     def frame_count(self) -> int:
-        return len(self.records)
+        if self.records:
+            return len(self.records)
+        return self._cached_frame_count
 
     @property
     def source_fps(self) -> float:
@@ -133,6 +136,14 @@ class CameraTimeline:
         if self.duration > 0 and self.frame_count > 1:
             return (self.frame_count - 1) / self.duration
         return TARGET_FPS
+
+    def load_records(self):
+        """Parse full IDX records on demand (lazy load before conversion)."""
+        if not self.records:
+            print(f"  [{self.camera_name}] Loading full IDX ({self._cached_frame_count} frames) ...")
+            self.records = parse_idx_file(self.idx_path)
+            if self.records:
+                print(f"  [{self.camera_name}] Loaded {len(self.records)} records")
 
 
 @dataclass
@@ -347,6 +358,39 @@ def parse_idx_file(idx_path: Path) -> List[IdxRecord]:
     return records
 
 
+def parse_idx_metadata_fast(idx_path: Path) -> Optional[dict]:
+    """
+    Fast IDX scan: read ONLY the first and last records to get
+    t_start, t_end, and frame_count without parsing the entire file.
+    This avoids reading millions of records just for the planning phase.
+    """
+    file_size = idx_path.stat().st_size
+    if file_size == 0 or file_size < IDX_RECORD_SIZE:
+        return None
+
+    num_records = file_size // IDX_RECORD_SIZE
+
+    with open(idx_path, 'rb') as f:
+        # Read first record
+        first_raw = f.read(IDX_RECORD_SIZE)
+        offset0, size0, ts_sec0, ts_sub0, _, _, _ = IDX_STRUCT.unpack(first_raw)
+
+        # Read last record
+        f.seek((num_records - 1) * IDX_RECORD_SIZE)
+        last_raw = f.read(IDX_RECORD_SIZE)
+        offsetN, sizeN, ts_secN, ts_subN, _, _, _ = IDX_STRUCT.unpack(last_raw)
+
+    if size0 == 0:
+        return None
+
+    return {
+        'frame_count': num_records,
+        't_start': decode_timestamp(ts_sec0, ts_sub0),
+        't_end': decode_timestamp(ts_secN, ts_subN),
+        'idx_file_size': file_size,
+    }
+
+
 # =========================
 # Resolution Detection (ffprobe)
 # =========================
@@ -380,6 +424,69 @@ def detect_resolution(seq_path: Path, ffprobe_path: str) -> Tuple[int, int, str]
 # =========================
 def connect_db(db_path: str) -> sqlite3.Connection:
     return sqlite3.connect(db_path)
+
+
+def ensure_idx_cache_table(db_path: str):
+    """Create idx_cache table if it doesn't exist."""
+    conn = connect_db(db_path)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS idx_cache (
+            idx_path      TEXT PRIMARY KEY,
+            idx_file_size INTEGER,
+            frame_count   INTEGER,
+            t_start       REAL,
+            t_end         REAL,
+            cached_at     TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def get_cached_idx_metadata(db_path: str, idx_path: Path) -> Optional[dict]:
+    """Get cached IDX metadata if cache is still valid (same file size)."""
+    conn = connect_db(db_path)
+    row = conn.execute(
+        "SELECT idx_file_size, frame_count, t_start, t_end FROM idx_cache WHERE idx_path = ?",
+        (str(idx_path),)
+    ).fetchone()
+    conn.close()
+
+    if row is None:
+        return None
+
+    # Validate: file size must match (if IDX changed, invalidate)
+    try:
+        current_size = idx_path.stat().st_size
+    except OSError:
+        return None
+    if current_size != row[0]:
+        return None
+
+    return {
+        'frame_count': row[1],
+        't_start': row[2],
+        't_end': row[3],
+        'idx_file_size': row[0],
+    }
+
+
+def save_idx_cache(db_path: str, idx_path: Path, metadata: dict):
+    """Save parsed IDX metadata to cache."""
+    conn = connect_db(db_path)
+    conn.execute("""
+        INSERT OR REPLACE INTO idx_cache (idx_path, idx_file_size, frame_count, t_start, t_end, cached_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (
+        str(idx_path),
+        metadata['idx_file_size'],
+        metadata['frame_count'],
+        metadata['t_start'],
+        metadata['t_end'],
+        datetime.now().isoformat(),
+    ))
+    conn.commit()
+    conn.close()
 
 
 def get_all_sessions(db_path: str, cameras: Optional[List[str]] = None) -> List[Dict]:
@@ -541,13 +648,18 @@ def build_session_groups(files: List[Dict], ffprobe_path: str) -> List[SessionGr
             print(f"  ⚠️  IDX not found for: {seq_path.name} — skipping camera")
             continue
 
-        # Parse IDX
-        print(f"  Parsing IDX: {camera} ...", end="", flush=True)
-        records = parse_idx_file(idx_path)
-        if not records:
-            print(f" ⚠️  0 records, skipping")
-            continue
-        print(f" {len(records)} frames")
+        # Parse IDX — try cache first, then fast scan (first+last record only)
+        meta = get_cached_idx_metadata(DB_PATH, idx_path)
+        if meta:
+            print(f"  IDX (cached): {camera} ... {meta['frame_count']} frames")
+        else:
+            print(f"  Parsing IDX: {camera} ...", end="", flush=True)
+            meta = parse_idx_metadata_fast(idx_path)
+            if not meta or meta['frame_count'] == 0:
+                print(f" ⚠️  0 records, skipping")
+                continue
+            print(f" {meta['frame_count']} frames")
+            save_idx_cache(DB_PATH, idx_path, meta)
 
         # Detect resolution
         w, h, pix_fmt = detect_resolution(seq_path, ffprobe_path)
@@ -556,13 +668,20 @@ def build_session_groups(files: List[Dict], ffprobe_path: str) -> List[SessionGr
             camera_name=camera,
             seq_path=seq_path,
             idx_path=idx_path,
-            records=records,
+            records=[],
             width=w,
             height=h,
             pix_fmt=pix_fmt,
-            t_start=records[0].timestamp,
-            t_end=records[-1].timestamp,
+            t_start=meta['t_start'],
+            t_end=meta['t_end'],
+            _cached_frame_count=meta['frame_count'],
         )
+
+        # Sanity check: skip cameras with corrupted IDX timestamps
+        if cam_timeline.duration > 200000:  # > ~2.3 days = definitely corrupted
+            print(f"  ⚠️  CORRUPTED timestamps: {camera} "
+                  f"(duration={cam_timeline.duration:.0f}s / {cam_timeline.duration/86400:.1f} days) — skipping")
+            continue
 
         session.cameras[camera] = cam_timeline
 
@@ -777,6 +896,9 @@ def step3_ffmpeg_cfr_encode(
     pre_roll_sec = cam.t_start - session.t_global_start
     target_duration = session.global_duration
 
+    # Stall detection: kill FFmpeg if no new frames for this many seconds
+    STALL_TIMEOUT = 600  # 10 minutes with no progress = hung
+
     # Convert pre-roll from seconds to discrete frame count
     pre_roll_frames = int(round(pre_roll_sec * TARGET_FPS))
 
@@ -816,6 +938,7 @@ def step3_ffmpeg_cfr_encode(
 
     print(f"  [{cam_name}] Filter: {vf}")
     print(f"  [{cam_name}] Hard-cut: -t {target_duration:.6f}s | Encoder: hevc_nvenc (H.265)")
+    print(f"  [{cam_name}] Stall timeout: {STALL_TIMEOUT}s (no progress = kill)")
     print(f"  [{cam_name}] Output: {out_path}")
 
     # Launch FFmpeg
@@ -831,43 +954,64 @@ def step3_ffmpeg_cfr_encode(
         return False, f"FFmpeg launch failed: {e}"
 
     # Start stderr reader in background thread (prevents pipe deadlock)
+    # NOTE: FFmpeg progress lines use \r (carriage return), not \n.
+    # We read byte-by-byte and split on both \r and \n to capture progress.
     stderr_lines = []
-    last_progress_holder = [time.time()]
+    last_progress_time = [time.time()]  # wall-clock of last frame advance
+    last_frame_count = [0]              # last observed frame number
+    last_print_time = [time.time()]
 
     def stderr_reader():
         try:
+            line_buf = bytearray()
             while True:
-                raw_line = process.stderr.readline()
-                if not raw_line:
+                b = process.stderr.read(1)
+                if not b:
                     break
-                line = raw_line.decode('utf-8', errors='replace')
-                stderr_lines.append(line)
-                m = re.search(r'frame=\s*(\d+)', line)
-                if m:
-                    now = time.time()
-                    if now - last_progress_holder[0] >= 5.0:
-                        current_frame = int(m.group(1))
-                        pct = min(100.0, current_frame / max(1, total_frames) * 100)
-                        fps_match = re.search(r'fps=\s*([\d.]+)', line)
-                        fps_str = f" @ {fps_match.group(1)} fps" if fps_match else ""
-                        speed_match = re.search(r'speed=\s*([\d.]+)x', line)
-                        speed_str = f" ({speed_match.group(1)}x)" if speed_match else ""
-                        print(f"  [{cam_name}] ⏳ {pct:5.1f}% — "
-                              f"frame {current_frame}/{total_frames}{fps_str}{speed_str}")
-                        last_progress_holder[0] = now
+                if b in (b'\r', b'\n'):
+                    if line_buf:
+                        line = line_buf.decode('utf-8', errors='replace')
+                        stderr_lines.append(line)
+                        m = re.search(r'frame=\s*(\d+)', line)
+                        if m:
+                            current_frame = int(m.group(1))
+                            now = time.time()
+                            # Update stall tracker when frame count advances
+                            if current_frame > last_frame_count[0]:
+                                last_frame_count[0] = current_frame
+                                last_progress_time[0] = now
+                            # Print progress every 5 seconds
+                            if now - last_print_time[0] >= 5.0:
+                                pct = min(100.0, current_frame / max(1, total_frames) * 100)
+                                fps_match = re.search(r'fps=\s*([\d.]+)', line)
+                                fps_str = f" @ {fps_match.group(1)} fps" if fps_match else ""
+                                speed_match = re.search(r'speed=\s*([\d.]+)x', line)
+                                speed_str = f" ({speed_match.group(1)}x)" if speed_match else ""
+                                print(f"  [{cam_name}] ⏳ {pct:5.1f}% — "
+                                      f"frame {current_frame}/{total_frames}{fps_str}{speed_str}")
+                                last_print_time[0] = now
+                        line_buf = bytearray()
+                else:
+                    line_buf.extend(b)
         except Exception:
             pass
 
     stderr_thread = threading.Thread(target=stderr_reader, daemon=True)
     stderr_thread.start()
 
-    # Wait for FFmpeg to finish (2 hours max for very long recordings)
-    try:
-        process.wait(timeout=7200)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        stderr_thread.join(timeout=5)
-        return False, "FFmpeg timed out after 7200s"
+    # Poll for completion with stall detection (no fixed timeout)
+    # Kill FFmpeg only if it stops producing new frames for STALL_TIMEOUT seconds
+    while True:
+        try:
+            process.wait(timeout=30)  # check every 30 seconds
+            break  # process finished
+        except subprocess.TimeoutExpired:
+            stall_duration = time.time() - last_progress_time[0]
+            if stall_duration > STALL_TIMEOUT:
+                process.kill()
+                stderr_thread.join(timeout=5)
+                return False, (f"FFmpeg stalled — no new frames for {int(stall_duration)}s "
+                               f"(last frame: {last_frame_count[0]}/{total_frames})")
 
     stderr_thread.join(timeout=10)
 
@@ -918,6 +1062,13 @@ def process_camera_sync(
     temp_mkv = temp_dir / f"{cam_name}_temp_vfr.mkv"
 
     try:
+        # === Lazy-load full IDX records (only parsed now, not during planning) ===
+        cam.load_records()
+        if not cam.records:
+            result['message'] = "Failed to parse IDX records"
+            print(f"  [{cam_name}] ❌ Failed to load IDX records")
+            return result
+
         # === Step 1: Extract H.264 + timecodes ===
         print(f"  [{cam_name}] Step 1/3: Extracting H.264 bitstream + timecodes ...")
         ok, frames_written = step1_extract_h264_and_timecodes(
@@ -1061,6 +1212,7 @@ def main():
     print()
 
     print("Querying database for pending conversions...")
+    ensure_idx_cache_table(DB_PATH)
     files = get_all_sessions(DB_PATH, cameras=all_cameras)
 
     if not files:
