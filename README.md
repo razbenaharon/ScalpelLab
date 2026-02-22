@@ -139,11 +139,11 @@ Automates the organization and export of raw SEQ video files from source to stru
 
 #### `2_4_update_db.py` - Combined Database Status Updater
 ```bash
-python scripts/2_4_update_db.py                    # Full update with duration
-python scripts/2_4_update_db.py --skip-duration    # Fast update, no duration
-python scripts/2_4_update_db.py --dry-run          # Preview changes
-python scripts/2_4_update_db.py --skip-seq         # Skip SEQ status update
-python scripts/2_4_update_db.py --skip-mp4         # Skip MP4 status update
+python scripts/2_update_db.py                    # Full update with duration
+python scripts/2_update_db.py --skip-duration    # Fast update, no duration
+python scripts/2_update_db.py --dry-run          # Preview changes
+python scripts/2_update_db.py --skip-seq         # Skip SEQ status update
+python scripts/2_update_db.py --skip-mp4         # Skip MP4 status update
 ```
 Scans file directories and updates both `seq_status` and `mp4_status` tables. Features:
 - **Future-proof design** - Only manages specific columns, preserves all others

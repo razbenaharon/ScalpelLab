@@ -556,7 +556,7 @@ Security & Privacy:
     - Audit: Track all processing via tracking file timestamps
 
 See Also:
-    - scripts/2_4_update_db.py: Update database with video metadata
+    - scripts/2_update_db.py: Update database with video metadata
     - scripts/helpers/sql_to_path.py: Query database for file paths
     - docs/DATABASE_SCHEMA.md: Database schema documentation
 
