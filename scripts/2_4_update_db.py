@@ -4,7 +4,7 @@ r"""
 Combined status updater - Updates both seq_status and mp4_status tables in one run.
 
 This script:
-  - Updates seq_status: Scans SEQ files in Sequence_Backup (with start_time from IDX)
+  - Updates seq_status: Scans SEQ files in Sequence_Backup
   - Updates mp4_status: Scans MP4 files in Recordings (with duration and path)
   - Shows combined statistics and changes
   - Requires single confirmation for both updates
@@ -25,7 +25,6 @@ SEQ Status Columns:
   This script manages:
   - size_mb: Size of largest SEQ file
   - path: Full path to the SEQ file (relative from Sequence_Backup)
-  - start_time: Timestamp of first frame from IDX file
 
 Performance:
   - First run with duration: ~5-10 minutes (ffprobe for all MP4s)
@@ -37,12 +36,10 @@ import argparse
 import os
 import re
 import sqlite3
-import struct
 import sys
 import time
 import subprocess
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
 # Add parent directory to path to import config
@@ -75,62 +72,8 @@ def parse_recording_date_and_case(data_dir_name: str, case_dir_name: str) -> tup
     return f"{yyyy}-{mm}-{dd}", case_no
 
 
-def parse_idx_start_time(idx_path: Path) -> str | None:
-    """Parse the first frame's timestamp from an IDX file.
-
-    IDX file structure (per frame, 32 bytes each, little-endian):
-      Bytes  0-7:  uint64  Offset (pointer into SEQ file)
-      Bytes  8-11: uint32  Size (frame data length)
-      Bytes 12-15: uint32  Seconds (Unix timestamp)
-      Bytes 16-19: uint32  Sub-seconds (low 2 bytes = ms, high 2 bytes = us)
-      Bytes 20-23: uint32  Reserved
-      Bytes 24-27: uint32  Flags
-      Bytes 28-31: uint32  Frame ID
-
-    Returns ISO-format datetime string or None on failure.
-    """
-    try:
-        with open(idx_path, 'rb') as f:
-            block = f.read(32)
-
-        if len(block) < 32:
-            return None
-
-        # Bytes 12-15: Unix seconds (uint32, little-endian)
-        unix_seconds = struct.unpack_from('<I', block, 12)[0]
-
-        # Bytes 16-19: Sub-seconds
-        # Low 2 bytes (16-17): milliseconds (0-999)
-        # High 2 bytes (18-19): microseconds (0-999)
-        sub_ms = struct.unpack_from('<H', block, 16)[0]   # milliseconds
-        sub_us = struct.unpack_from('<H', block, 18)[0]   # microseconds
-
-        if unix_seconds == 0:
-            return None
-
-        # Sanity check: timestamp should be between 2000 and 2100
-        if unix_seconds < 946684800 or unix_seconds > 4102444800:
-            print(f"[WARN] IDX file {idx_path}: suspicious timestamp {unix_seconds} (out of 2000-2100 range)")
-            return None
-
-        # Clamp sub-second values to valid ranges (protect against corrupted data)
-        sub_ms = min(sub_ms, 999)
-        sub_us = min(sub_us, 999)
-
-        # Build datetime with microsecond precision
-        total_microseconds = (sub_ms * 1000) + sub_us
-        dt = datetime.fromtimestamp(unix_seconds, tz=timezone.utc)
-        dt = dt.replace(microsecond=total_microseconds)
-
-        return dt.strftime('%Y-%m-%d %H:%M:%S.%f')
-
-    except Exception as e:
-        print(f"[WARN] Failed to parse IDX file {idx_path}: {e}")
-        return None
-
-
 def ensure_seq_table_exists(conn: sqlite3.Connection) -> None:
-    """Ensure seq_status table exists. Only manages: size_mb, path, start_time."""
+    """Ensure seq_status table exists. Only manages: size_mb, path."""
     cur = conn.cursor()
 
     # Create table with minimal required columns
@@ -147,7 +90,6 @@ def ensure_seq_table_exists(conn: sqlite3.Connection) -> None:
     managed_columns = [
         ('size_mb', 'INTEGER'),
         ('path', 'TEXT'),
-        ('start_time', 'TEXT'),
     ]
 
     for col_name, col_type in managed_columns:
@@ -198,14 +140,13 @@ def ensure_mp4_table_exists(conn: sqlite3.Connection) -> None:
 # ============================================
 # SEQ status functions
 # ============================================
-def compute_seq_status(camera_dir: Path, threshold_bytes: int, seq_root: Path | None = None) -> tuple[int, int | None, str | None, str | None]:
-    """Return (status, size_mb, path, start_time) for SEQ files in camera directory.
+def compute_seq_status(camera_dir: Path, threshold_bytes: int, seq_root: Path | None = None) -> tuple[int, int | None, str | None]:
+    """Return (status, size_mb, path) for SEQ files in camera directory.
 
     Path will be relative starting from 'Sequence_Backup' if seq_root is provided.
-    start_time is parsed from the corresponding .idx file of the largest SEQ.
     """
     if not camera_dir.is_dir():
-        return 3, None, None, None
+        return 3, None, None
     max_size = 0
     largest_file = None
     found_any = False
@@ -220,7 +161,7 @@ def compute_seq_status(camera_dir: Path, threshold_bytes: int, seq_root: Path | 
                 max_size = sz
                 largest_file = p
     if not found_any:
-        return 3, None, None, None
+        return 3, None, None
     status = 1 if max_size >= threshold_bytes else 2
     size_mb = int(max_size / (1024 * 1024))
 
@@ -235,19 +176,7 @@ def compute_seq_status(camera_dir: Path, threshold_bytes: int, seq_root: Path | 
     elif largest_file:
         file_path = str(largest_file)
 
-    # Parse start_time from the IDX file
-    # Primary: (seqpath).idx  e.g. video.seq.idx (appended)
-    # Fallback: video.idx (suffix replaced)
-    start_time = None
-    if largest_file:
-        idx_path_appended = Path(str(largest_file) + '.idx')
-        idx_path_replaced = largest_file.with_suffix('.idx')
-        if idx_path_appended.is_file():
-            start_time = parse_idx_start_time(idx_path_appended)
-        elif idx_path_replaced.is_file():
-            start_time = parse_idx_start_time(idx_path_replaced)
-
-    return status, size_mb, file_path, start_time
+    return status, size_mb, file_path
 
 
 def update_seq_status(db_path: str, seq_root: Path, threshold_mb: int, dry_run: bool = False) -> dict:
@@ -273,16 +202,14 @@ def update_seq_status(db_path: str, seq_root: Path, threshold_mb: int, dry_run: 
 
             for cam in CAMERAS:
                 cam_path = case_dir / cam
-                status, size_mb, file_path, start_time = compute_seq_status(cam_path, threshold_bytes, seq_root)
-                updates[(recording_date, case_no, cam)] = (status, size_mb, file_path, start_time)
+                status, size_mb, file_path = compute_seq_status(cam_path, threshold_bytes, seq_root)
+                updates[(recording_date, case_no, cam)] = (status, size_mb, file_path)
 
     if not updates:
         print("[WARN] No SEQ files found")
         return {'total': 0, 'new': 0, 'changed': 0}
 
-    # Count how many have start_time
-    with_start_time = sum(1 for _, _, _, st in updates.values() if st is not None)
-    print(f"[INFO] Found {len(updates)} camera entries ({with_start_time} with start_time from IDX)")
+    print(f"[INFO] Found {len(updates)} camera entries")
 
     if dry_run:
         return {'total': len(updates), 'new': 0, 'changed': 0}
@@ -295,46 +222,41 @@ def update_seq_status(db_path: str, seq_root: Path, threshold_mb: int, dry_run: 
 
         existing = {}
         try:
-            cur.execute('SELECT recording_date, case_no, camera_name, size_mb, path, start_time FROM "seq_status"')
+            cur.execute('SELECT recording_date, case_no, camera_name, size_mb, path FROM "seq_status"')
             for row in cur.fetchall():
-                existing[(row[0], row[1], row[2])] = (row[3], row[4], row[5])
+                existing[(row[0], row[1], row[2])] = (row[3], row[4])
         except sqlite3.OperationalError:
             pass
 
         new_entries = []
         changed_entries = []
 
-        for key, (status, size_mb, file_path, start_time) in updates.items():
+        for key, (status, size_mb, file_path) in updates.items():
             recording_date, case_no, camera_name = key
             if key not in existing:
-                new_entries.append((recording_date, case_no, camera_name, status, size_mb, file_path, start_time))
+                new_entries.append((recording_date, case_no, camera_name, status, size_mb, file_path))
             else:
-                old_size, old_path, old_start_time = existing[key]
-                if old_size != size_mb or old_path != file_path or old_start_time != start_time:
-                    changed_entries.append((recording_date, case_no, camera_name, status, old_size, size_mb, old_path, file_path, old_start_time, start_time))
+                old_size, old_path = existing[key]
+                if old_size != size_mb or old_path != file_path:
+                    changed_entries.append((recording_date, case_no, camera_name, status, old_size, size_mb, old_path, file_path))
 
         # Show detailed changes
         if new_entries:
             print(f"\n  [NEW] {len(new_entries)} new entries:")
-            for recording_date, case_no, camera_name, status, size_mb, file_path, start_time in new_entries[:10]:
+            for recording_date, case_no, camera_name, status, size_mb, file_path in new_entries[:10]:
                 status_label = {1: ">=200MB", 2: "<200MB", 3: "Missing"}.get(status, str(status))
                 size_str = f"{size_mb}MB" if size_mb is not None else "NULL"
-                time_str = start_time if start_time else "N/A"
-                print(f"    {recording_date} Case{case_no} {camera_name}: {status_label} ({size_str}, start: {time_str})")
+                print(f"    {recording_date} Case{case_no} {camera_name}: {status_label} ({size_str})")
             if len(new_entries) > 10:
                 print(f"    ... and {len(new_entries) - 10} more")
 
         if changed_entries:
             print(f"\n  [CHANGED] {len(changed_entries)} changed entries:")
-            for recording_date, case_no, camera_name, status, old_size, new_size, old_path, new_path, old_start_time, new_start_time in changed_entries[:10]:
+            for recording_date, case_no, camera_name, status, old_size, new_size, old_path, new_path in changed_entries[:10]:
                 status_label = {1: ">=200MB", 2: "<200MB", 3: "Missing"}.get(status, str(status))
                 old_str = f"{old_size}MB" if old_size is not None else "NULL"
                 new_str = f"{new_size}MB" if new_size is not None else "NULL"
-                old_time = old_start_time if old_start_time else "N/A"
-                new_time = new_start_time if new_start_time else "N/A"
                 print(f"    {recording_date} Case{case_no} {camera_name}: {status_label} ({old_str} -> {new_str})")
-                if old_time != new_time:
-                    print(f"      start_time: {old_time} -> {new_time}")
             if len(changed_entries) > 10:
                 print(f"    ... and {len(changed_entries) - 10} more")
 
@@ -348,7 +270,7 @@ def update_seq_status(db_path: str, seq_root: Path, threshold_mb: int, dry_run: 
             'changed': len(changed_entries),
             'updates': updates,
             'new_entries': new_entries,
-            'changed_entries': changed_entries
+            'changed_entries': changed_entries,
         }
     finally:
         conn.close()
@@ -771,23 +693,18 @@ Examples:
         # Show some changes
         if seq_stats.get('new_entries'):
             print(f"\n  Recent new SEQ entries:")
-            for recording_date, case_no, camera_name, status, size_mb, file_path, start_time_val in seq_stats['new_entries']:
+            for recording_date, case_no, camera_name, status, size_mb, file_path in seq_stats['new_entries']:
                 status_label = {1: ">=200MB", 2: "<200MB", 3: "Missing"}.get(status, str(status))
                 size_str = f"{size_mb}MB" if size_mb is not None else "NULL"
-                time_str = start_time_val if start_time_val else "N/A"
-                print(f"    + {recording_date} Case{case_no} {camera_name}: {status_label} ({size_str}, start: {time_str})")
+                print(f"    + {recording_date} Case{case_no} {camera_name}: {status_label} ({size_str})")
 
         if seq_stats.get('changed_entries'):
             print(f"\n  Recent changed SEQ entries: ")
-            for recording_date, case_no, camera_name, status, old_size, new_size, old_path, new_path, old_start_time, new_start_time in seq_stats['changed_entries']:
+            for recording_date, case_no, camera_name, status, old_size, new_size, old_path, new_path in seq_stats['changed_entries']:
                 status_label = {1: ">=200MB", 2: "<200MB", 3: "Missing"}.get(status, str(status))
                 old_str = f"{old_size}MB" if old_size is not None else "NULL"
                 new_str = f"{new_size}MB" if new_size is not None else "NULL"
                 print(f"    ~ {recording_date} Case{case_no} {camera_name}: {old_str} -> {new_str}")
-                if old_start_time != new_start_time:
-                    old_time = old_start_time if old_start_time else "N/A"
-                    new_time = new_start_time if new_start_time else "N/A"
-                    print(f"      start_time: {old_time} -> {new_time}")
 
     if mp4_stats:
         print(f"\nMP4 Status:")
@@ -842,19 +759,18 @@ Examples:
             ensure_mp4_table_exists(conn)
             cur = conn.cursor()
 
-            # Write SEQ updates (only updates managed columns: size_mb, path, start_time)
+            # Write SEQ updates (only updates managed columns: size_mb, path)
             if seq_stats and 'updates' in seq_stats:
-                for (recording_date, case_no, camera_name), (status, size_mb, file_path, start_time_val) in seq_stats['updates'].items():
+                for (recording_date, case_no, camera_name), (status, size_mb, file_path) in seq_stats['updates'].items():
                     cur.execute('''
                         INSERT INTO "seq_status"
-                        (recording_date, case_no, camera_name, size_mb, path, start_time)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        (recording_date, case_no, camera_name, size_mb, path)
+                        VALUES (?, ?, ?, ?, ?)
                         ON CONFLICT(recording_date, case_no, camera_name)
                         DO UPDATE SET
                             size_mb = excluded.size_mb,
-                            path = excluded.path,
-                            start_time = excluded.start_time
-                    ''', (recording_date, case_no, camera_name, size_mb, file_path, start_time_val))
+                            path = excluded.path
+                    ''', (recording_date, case_no, camera_name, size_mb, file_path))
 
             # Write MP4 updates (only updates managed columns: size_mb, duration_minutes, path)
             if mp4_stats and 'updates' in mp4_stats:
