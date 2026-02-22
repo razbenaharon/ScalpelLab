@@ -168,7 +168,7 @@ Security:
 
 See Also:
     - config.py: Configuration and default paths
-    - scripts/2_4_update_db.py: Database synchronization after export
+    - scripts/2_update_db.py: Database synchronization after export
     - docs/DATABASE_SCHEMA.md: Database schema for tracking files
 
 Warning:
