@@ -91,6 +91,10 @@ MKVMERGE_PATHS = [
 MIN_VALID_FILE_SIZE_MB = 1.0
 LOG_FILE = Path(OUT_ROOT) / "conversion_log.txt"
 
+# Valid recording epoch for timestamp sanity checks (Unix timestamps)
+EPOCH_MIN = 1420070400  # 2015-01-01 00:00:00 UTC
+EPOCH_MAX = 1924905600  # 2030-12-31 00:00:00 UTC
+
 # H.264 Annex B start code
 ANNEX_B_START = b'\x00\x00\x00\x01'
 
@@ -489,6 +493,27 @@ def save_idx_cache(db_path: str, idx_path: Path, metadata: dict):
     conn.close()
 
 
+def get_seq_field_analysis(db_path: str, recording_date: str, case_no: int, camera_name: str) -> Optional[dict]:
+    """Query seq_field_analysis for width, height, and frame timestamps."""
+    conn = connect_db(db_path)
+    row = conn.execute(
+        """SELECT width, height, first_frame_time, last_frame_time
+           FROM seq_field_analysis
+           WHERE recording_date = ? AND case_no = ? AND camera_name = ?""",
+        (recording_date, case_no, camera_name),
+    ).fetchone()
+    conn.close()
+
+    if row is None:
+        return None
+    return {
+        'width': row[0],
+        'height': row[1],
+        'first_frame_time': row[2],
+        'last_frame_time': row[3],
+    }
+
+
 def get_all_sessions(db_path: str, cameras: Optional[List[str]] = None) -> List[Dict]:
     """Get all SEQ files that need MP4 conversion."""
     if cameras is None:
@@ -648,6 +673,21 @@ def build_session_groups(files: List[Dict], ffprobe_path: str) -> List[SessionGr
             print(f"  ⚠️  IDX not found for: {seq_path.name} — skipping camera")
             continue
 
+        # Query seq_field_analysis for resolution + optional timestamp pre-check
+        sfa = get_seq_field_analysis(DB_PATH, date, case, camera)
+
+        # Optional early epoch check using seq_field_analysis frame timestamps
+        # (avoids IDX parse entirely for obviously corrupt cameras)
+        if sfa and sfa['first_frame_time'] and sfa['last_frame_time']:
+            ft, lt = sfa['first_frame_time'], sfa['last_frame_time']
+            if ft < EPOCH_MIN or ft > EPOCH_MAX or lt < EPOCH_MIN or lt > EPOCH_MAX:
+                bad_ts = ft if (ft < EPOCH_MIN or ft > EPOCH_MAX) else lt
+                bad_year = datetime.utcfromtimestamp(bad_ts).year
+                print(f"  ⚠️  CORRUPT TIMESTAMPS: {camera} — "
+                      f"first/last_frame_time decodes to year {bad_year}, "
+                      f"valid range is 2015–2030 — skipping (would poison group timeline)")
+                continue
+
         # Parse IDX — try cache first, then fast scan (first+last record only)
         meta = get_cached_idx_metadata(DB_PATH, idx_path)
         if meta:
@@ -661,8 +701,29 @@ def build_session_groups(files: List[Dict], ffprobe_path: str) -> List[SessionGr
             print(f" {meta['frame_count']} frames")
             save_idx_cache(DB_PATH, idx_path, meta)
 
-        # Detect resolution
-        w, h, pix_fmt = detect_resolution(seq_path, ffprobe_path)
+        t_start = meta['t_start']
+        t_end = meta['t_end']
+
+        # Epoch validation: reject cameras with IDX timestamps outside 2015–2030
+        # This prevents a corrupt camera from poisoning the shared global timeline.
+        if t_start < EPOCH_MIN or t_start > EPOCH_MAX:
+            bad_year = datetime.utcfromtimestamp(t_start).year
+            print(f"  ⚠️  CORRUPT TIMESTAMPS: {camera} — t_start decodes to year {bad_year}, "
+                  f"valid range is 2015–2030 — skipping (would poison group timeline)")
+            continue
+        if t_end < EPOCH_MIN or t_end > EPOCH_MAX:
+            bad_year = datetime.utcfromtimestamp(t_end).year
+            print(f"  ⚠️  CORRUPT TIMESTAMPS: {camera} — t_end decodes to year {bad_year}, "
+                  f"valid range is 2015–2030 — skipping (would poison group timeline)")
+            continue
+
+        # Resolution: prefer seq_field_analysis (no subprocess), fall back to ffprobe
+        if sfa and sfa['width'] and sfa['height'] and sfa['width'] > 0 and sfa['height'] > 0:
+            w, h, pix_fmt = sfa['width'], sfa['height'], "yuv420p"
+            print(f"  Resolution: {camera} — {w}x{h} (from seq_field_analysis)")
+        else:
+            print(f"  Resolution: {camera} — querying via ffprobe ...")
+            w, h, pix_fmt = detect_resolution(seq_path, ffprobe_path)
 
         cam_timeline = CameraTimeline(
             camera_name=camera,
@@ -672,8 +733,8 @@ def build_session_groups(files: List[Dict], ffprobe_path: str) -> List[SessionGr
             width=w,
             height=h,
             pix_fmt=pix_fmt,
-            t_start=meta['t_start'],
-            t_end=meta['t_end'],
+            t_start=t_start,
+            t_end=t_end,
             _cached_frame_count=meta['frame_count'],
         )
 
