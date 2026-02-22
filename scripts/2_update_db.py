@@ -46,6 +46,15 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import get_db_path, get_seq_root, get_mp4_root, DEFAULT_CAMERAS
 
+# SEQ field analysis (optional — skipped gracefully if unavailable)
+try:
+    from analyze_seq_fields import analyze_directory as _analyze_seq_dir
+    from analyze_seq_fields import write_to_db as _write_seq_analysis
+    from analyze_seq_fields import _load_existing_keys as _seq_existing_keys
+    _SEQ_ANALYSIS_AVAILABLE = True
+except ImportError:
+    _SEQ_ANALYSIS_AVAILABLE = False
+
 # ============================================
 # Defaults (from config.py)
 # ============================================
@@ -606,17 +615,17 @@ def main():
         epilog="""
 Examples:
   # Update both SEQ and MP4 status (with duration)
-  python 2_4_update_db.py
+  python 2_update_db.py
 
   # Skip duration calculation (faster)
-  python 2_4_update_db.py --skip-duration
+  python 2_update_db.py --skip-duration
 
   # Dry run to see what would change
-  python 2_4_update_db.py --dry-run
+  python 2_update_db.py --dry-run
 
   # Skip SEQ or MP4 update
-  python 2_4_update_db.py --skip-seq
-  python 2_4_update_db.py --skip-mp4
+  python 2_update_db.py --skip-seq
+  python 2_update_db.py --skip-mp4
         """
     )
 
@@ -629,6 +638,7 @@ Examples:
     ap.add_argument("--skip-mp4", action="store_true", help="Skip MP4 status update")
     ap.add_argument("--skip-duration", action="store_true", help="Skip duration calculation (faster)")
     ap.add_argument("--skip-delete", action="store_true", help="Skip deleting small MP4 files")
+    ap.add_argument("--skip-analysis", action="store_true", help="Skip SEQ field analysis (analyze_seq_fields)")
     ap.add_argument("--dry-run", action="store_true", help="Scan and print changes without writing to DB")
     ap.add_argument("--auto-confirm", action="store_true", help="Skip confirmation prompt")
 
@@ -805,6 +815,27 @@ Examples:
             print("="*60)
         finally:
             conn.close()
+
+    # ------------------------------------------------------------------
+    # SEQ field analysis (incremental — only new files)
+    # ------------------------------------------------------------------
+    if not args.dry_run and not args.skip_analysis:
+        print("\n" + "="*60)
+        print("SEQ FIELD ANALYSIS")
+        print("="*60)
+        if not _SEQ_ANALYSIS_AVAILABLE:
+            print("[SKIP] analyze_seq_fields not found — skipping")
+        else:
+            seq_root_path = Path(args.seq_root)
+            if not seq_root_path.exists():
+                print(f"[SKIP] SEQ root not found: {seq_root_path}")
+            else:
+                skip_keys = _seq_existing_keys(args.db)
+                if skip_keys:
+                    print(f"[INFO] {len(skip_keys)} entries already in DB — scanning only new files")
+                df = _analyze_seq_dir(seq_root_path, skip_keys=skip_keys)
+                if not df.empty:
+                    _write_seq_analysis(df, args.db)
 
 
 if __name__ == "__main__":

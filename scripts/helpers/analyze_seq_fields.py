@@ -8,7 +8,7 @@ serve as indicators of recording anomalies such as frame drops or ring-buffer
 overruns.
 
 Usage:
-    python analyze_seq_unknown_fields.py [directory]
+    python analyze_seq_fields.py [directory]
 
     If directory is omitted, SEQ_ROOT from config.py is used.
     Recursively finds all *.seq files under the given root.
@@ -98,7 +98,7 @@ IDX_U32_TS_SUB   = 4   # offset 16
 # Database
 SEQ_ANALYSIS_TABLE = "seq_field_analysis"
 
-# Path-key regexes (same convention as 2_4_update_db.py)
+# Path-key regexes (same convention as 2_update_db.py)
 _RE_DATA = re.compile(r"^DATA_(\d{2})-(\d{2})-(\d{2})$")
 _RE_CASE = re.compile(r"^Case(\d+)$")
 
@@ -328,13 +328,40 @@ def parse_idx(idx_path: Path, fps: float | None = None) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Database helpers
+# ---------------------------------------------------------------------------
+def _load_existing_keys(db_path: str) -> set[tuple[str, int, str]]:
+    """
+    Return the set of (recording_date, case_no, camera_name) tuples already
+    present in seq_field_analysis.  Returns an empty set if the table does not
+    exist or the DB is unreachable.
+    """
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            rows = conn.execute(
+                f'SELECT recording_date, case_no, camera_name FROM "{SEQ_ANALYSIS_TABLE}"'
+            ).fetchall()
+            return {(r[0], int(r[1]), r[2]) for r in rows}
+        except sqlite3.OperationalError:
+            # Table does not exist yet
+            return set()
+        finally:
+            conn.close()
+    except Exception:
+        return set()
+
+
+# ---------------------------------------------------------------------------
 # Directory scan
 # ---------------------------------------------------------------------------
-def analyze_directory(root: Path) -> pd.DataFrame:
+def analyze_directory(root: Path, skip_keys: set | None = None) -> pd.DataFrame:
     """
     Scan *root* recursively for .seq files; return one-row-per-file DataFrame.
 
     Files whose path contains a 'JUNK' component (case-insensitive) are skipped.
+    Files whose (recording_date, case_no, camera_name) key already appears in
+    *skip_keys* are also skipped (used to avoid re-processing known entries).
     Each row includes recording_date / case_no / camera_name parsed from the
     directory structure, and ISO-format datetime strings for the first and last
     frame timestamps.
@@ -348,13 +375,33 @@ def analyze_directory(root: Path) -> pd.DataFrame:
     ]
     skipped_junk = len(all_seq) - len(seq_files)
 
+    # Filter out files already in the DB
+    if skip_keys:
+        new_seq_files = []
+        for p in seq_files:
+            key = _parse_path_key(p, root)
+            if key is None or key not in skip_keys:
+                new_seq_files.append(p)
+        skipped_db = len(seq_files) - len(new_seq_files)
+        seq_files = new_seq_files
+    else:
+        skipped_db = 0
+
     if not seq_files:
-        print(f"[!] No .seq files found under {root}")
+        msg = "[✓] No new .seq files to process"
+        if skipped_db:
+            msg += f" ({skipped_db} already in DB)"
+        print(msg)
         return pd.DataFrame()
 
     total = len(seq_files)
-    print(f"Found {total} .seq files — scanning …"
-          + (f"  ({skipped_junk} JUNK skipped)" if skipped_junk else ""))
+    suffix_parts = []
+    if skipped_junk:
+        suffix_parts.append(f"{skipped_junk} JUNK skipped")
+    if skipped_db:
+        suffix_parts.append(f"{skipped_db} already in DB")
+    suffix = f"  ({', '.join(suffix_parts)})" if suffix_parts else ""
+    print(f"Found {total} new .seq files — scanning …{suffix}")
 
     rows = []
     for i, seq_path in enumerate(seq_files, 1):
@@ -806,7 +853,7 @@ def main() -> None:
     elif _CFG_SEQ_ROOT:
         root = Path(_CFG_SEQ_ROOT)
     else:
-        print("Usage: python analyze_seq_unknown_fields.py <directory> [db_path]")
+        print("Usage: python analyze_seq_fields.py <directory> [db_path]")
         print("       (or set SEQ_ROOT / DB_PATH in config.py)")
         sys.exit(1)
 
@@ -823,7 +870,12 @@ def main() -> None:
         print(f"[!] Directory not found: {root}")
         sys.exit(1)
 
-    df = analyze_directory(root)
+    print(f"Loading existing DB entries from: {db_path}")
+    skip_keys = _load_existing_keys(db_path)
+    if skip_keys:
+        print(f"  {len(skip_keys)} (recording_date, case_no, camera_name) entries already in DB — will skip")
+
+    df = analyze_directory(root, skip_keys=skip_keys)
     if df.empty:
         sys.exit(0)
 
