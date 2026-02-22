@@ -77,7 +77,11 @@
       "Bash(git add:*)",
       "WebFetch(domain:docs.ultralytics.com)",
       "Bash(/c/ProgramData/anaconda3/python.exe:*)",
-      "Bash(git remote add:*)"
+      "Bash(git remote add:*)",
+      "Bash(python3:*)",
+      "Bash(pip show:*)",
+      "Bash(pip index:*)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ],
     "deny": [],
     "ask": []
