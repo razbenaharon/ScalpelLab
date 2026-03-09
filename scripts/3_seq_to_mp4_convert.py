@@ -246,7 +246,7 @@ def get_video_frame_count(filepath: Path, ffprobe_path: str) -> Optional[int]:
             "-of", "csv=p=0",
             str(filepath),
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode == 0 and result.stdout.strip():
             return int(result.stdout.strip())
     except Exception:
@@ -555,6 +555,22 @@ def get_all_sessions(db_path: str, cameras: Optional[List[str]] = None) -> List[
     return files
 
 
+def get_converted_cameras_for_group(db_path: str, recording_date: str, case_no: int,
+                                     group_cameras: List[str]) -> List[str]:
+    """Get cameras in a group that already have valid MP4 conversions."""
+    conn = connect_db(db_path)
+    placeholders = ','.join(['?'] * len(group_cameras))
+    rows = conn.execute(
+        f"""SELECT camera_name FROM mp4_status
+            WHERE recording_date = ? AND case_no = ?
+            AND camera_name IN ({placeholders})
+            AND size_mb >= 1""",
+        (recording_date, case_no, *group_cameras),
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
 def build_seq_path(recording_date: str, case_no: int, camera_name: str) -> Optional[Path]:
     """Build path to the .seq file and return first match."""
     yy = recording_date[2:4]
@@ -751,6 +767,51 @@ def build_session_groups(files: List[Dict], ffprobe_path: str) -> List[SessionGr
         if cam_timeline.t_end > session.t_global_end:
             session.t_global_end = cam_timeline.t_end
 
+    # Extend global timeline with already-converted cameras from the same group.
+    # This ensures pre/post-roll padding matches cameras that were converted earlier.
+    for key, session in group_map.items():
+        if not session.cameras:
+            continue
+        date, case, grp = key
+        # Only check standard groups (A, B), not solo cameras
+        if grp not in ALL_GROUPS:
+            continue
+        group_members = ALL_GROUPS[grp]
+        converted = get_converted_cameras_for_group(DB_PATH, date, case, group_members)
+        if not converted:
+            continue
+        for cam_name in converted:
+            if cam_name in session.cameras:
+                continue  # already included as pending
+            # Try idx_cache first, then seq_field_analysis for timestamps
+            seq_path = build_seq_path(date, case, cam_name)
+            meta = None
+            if seq_path:
+                idx_path = build_idx_path(seq_path)
+                if idx_path:
+                    meta = get_cached_idx_metadata(DB_PATH, idx_path)
+                    if not meta:
+                        meta = parse_idx_metadata_fast(idx_path)
+                        if meta:
+                            save_idx_cache(DB_PATH, idx_path, meta)
+            if not meta:
+                # Fall back to seq_field_analysis
+                sfa = get_seq_field_analysis(DB_PATH, date, case, cam_name)
+                if sfa and sfa['first_frame_time'] and sfa['last_frame_time']:
+                    meta = {'t_start': sfa['first_frame_time'], 't_end': sfa['last_frame_time']}
+            if meta:
+                t_start = meta['t_start']
+                t_end = meta['t_end']
+                # Validate epoch range
+                if t_start < EPOCH_MIN or t_start > EPOCH_MAX or t_end < EPOCH_MIN or t_end > EPOCH_MAX:
+                    continue
+                if t_start < session.t_global_start:
+                    session.t_global_start = t_start
+                if t_end > session.t_global_end:
+                    session.t_global_end = t_end
+                print(f"  Timeline includes already-converted: {cam_name} "
+                      f"({t_start:.3f} – {t_end:.3f})")
+
     return [sg for sg in group_map.values() if sg.cameras]
 
 
@@ -906,7 +967,7 @@ def step2_mkvmerge_vfr(
             cmd,
             capture_output=True,
             text=True,
-            timeout=600,
+            timeout=1800,
         )
         # mkvmerge returns 0 for success, 1 for warnings, 2 for errors
         if result.returncode >= 2:
