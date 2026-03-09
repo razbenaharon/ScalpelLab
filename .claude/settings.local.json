@@ -81,7 +81,8 @@
       "Bash(python3:*)",
       "Bash(pip show:*)",
       "Bash(pip index:*)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(taskkill:*)"
     ],
     "deny": [],
     "ask": []

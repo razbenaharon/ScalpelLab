@@ -48,9 +48,9 @@ from config import get_db_path, get_seq_root, get_mp4_root, DEFAULT_CAMERAS
 
 # SEQ field analysis (optional — skipped gracefully if unavailable)
 try:
-    from analyze_seq_fields import analyze_directory as _analyze_seq_dir
-    from analyze_seq_fields import write_to_db as _write_seq_analysis
-    from analyze_seq_fields import _load_existing_keys as _seq_existing_keys
+    from helpers.analyze_seq_fields import analyze_directory as _analyze_seq_dir
+    from helpers.analyze_seq_fields import write_to_db as _write_seq_analysis
+    from helpers.analyze_seq_fields import _load_existing_keys as _seq_existing_keys
     _SEQ_ANALYSIS_AVAILABLE = True
 except ImportError:
     _SEQ_ANALYSIS_AVAILABLE = False
