@@ -194,7 +194,7 @@ def format_key_display(key, primary_keys, columns):
 def format_row_display(row, columns):
     """Format row data for display."""
     parts = []
-    for i, col in enumerate(columns[:5]):  # Show first 5 columns
+    for i, col in enumerate(columns):
         if i < len(row):
             value = row[i]
             if value is not None:
@@ -211,9 +211,6 @@ def format_row_display(row, columns):
                         parts.append(f"{col}={value}")
                 except (ValueError, TypeError):
                     parts.append(f"{col}={value}")
-
-    if len(columns) > 5:
-        parts.append(f"... +{len(columns) - 5} more")
 
     return ", ".join(parts)
 
@@ -241,11 +238,9 @@ def print_comparison_results(results, table_name, db1_name, db2_name):
     if results['only_in_db1']:
         print(f"\n📋 Records ONLY in Database 1 ({len(results['only_in_db1'])} records):")
         print("-" * 80)
-        for i, key in enumerate(results['only_in_db1'][:10], 1):  # Show first 10
+        for i, key in enumerate(results['only_in_db1'], 1):
             key_display = format_key_display(key, primary_keys, columns1)
             print(f"  {i}. {key_display}")
-        if len(results['only_in_db1']) > 10:
-            print(f"  ... and {len(results['only_in_db1']) - 10} more")
     else:
         print(f"\n✓ No records unique to Database 1")
 
@@ -253,11 +248,9 @@ def print_comparison_results(results, table_name, db1_name, db2_name):
     if results['only_in_db2']:
         print(f"\n📋 Records ONLY in Database 2 ({len(results['only_in_db2'])} records):")
         print("-" * 80)
-        for i, key in enumerate(results['only_in_db2'][:10], 1):  # Show first 10
+        for i, key in enumerate(results['only_in_db2'], 1):
             key_display = format_key_display(key, primary_keys, columns2)
             print(f"  {i}. {key_display}")
-        if len(results['only_in_db2']) > 10:
-            print(f"  ... and {len(results['only_in_db2']) - 10} more")
     else:
         print(f"\n✓ No records unique to Database 2")
 
@@ -265,7 +258,7 @@ def print_comparison_results(results, table_name, db1_name, db2_name):
     if results['differences']:
         print(f"\n⚠️  Differences in common records ({len(results['differences'])} records):")
         print("-" * 80)
-        for i, (key, row1, row2) in enumerate(results['differences'][:5], 1):  # Show first 5
+        for i, (key, row1, row2) in enumerate(results['differences'], 1):
             key_display = format_key_display(key, primary_keys, columns1)
             print(f"  {i}. {key_display}")
 
@@ -275,9 +268,6 @@ def print_comparison_results(results, table_name, db1_name, db2_name):
 
             print(f"     DB1: {row1_display}")
             print(f"     DB2: {row2_display}")
-
-        if len(results['differences']) > 5:
-            print(f"  ... and {len(results['differences']) - 5} more")
     else:
         print(f"\n✓ No differences in common records")
 
