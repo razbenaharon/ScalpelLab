@@ -967,7 +967,7 @@ def step2_mkvmerge_vfr(
             cmd,
             capture_output=True,
             text=True,
-            timeout=1800,
+            timeout=14400,
         )
         # mkvmerge returns 0 for success, 1 for warnings, 2 for errors
         if result.returncode >= 2:
@@ -982,7 +982,7 @@ def step2_mkvmerge_vfr(
         return True, ""
 
     except subprocess.TimeoutExpired:
-        return False, "mkvmerge timed out after 600s"
+        return False, "mkvmerge timed out after 14400s"
     except Exception as e:
         return False, f"mkvmerge error: {e}"
 
@@ -1019,7 +1019,7 @@ def step3_ffmpeg_cfr_encode(
     target_duration = session.global_duration
 
     # Stall detection: kill FFmpeg if no new frames for this many seconds
-    STALL_TIMEOUT = 600  # 10 minutes with no progress = hung
+    STALL_TIMEOUT = 3600  # 60 minutes with no progress = hung
 
     # Convert pre-roll from seconds to discrete frame count
     pre_roll_frames = int(round(pre_roll_sec * TARGET_FPS))
