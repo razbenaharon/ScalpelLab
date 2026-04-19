@@ -430,75 +430,26 @@ def connect_db(db_path: str) -> sqlite3.Connection:
     return sqlite3.connect(db_path)
 
 
-def ensure_idx_cache_table(db_path: str):
-    """Create idx_cache table if it doesn't exist."""
-    conn = connect_db(db_path)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS idx_cache (
-            idx_path      TEXT PRIMARY KEY,
-            idx_file_size INTEGER,
-            frame_count   INTEGER,
-            t_start       REAL,
-            t_end         REAL,
-            cached_at     TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+def get_seq_enriched_metadata(
+    db_path: str,
+    recording_date: str,
+    case_no: int,
+    camera_name: str,
+    idx_path: Optional[Path] = None,
+) -> Optional[dict]:
+    """Read per-camera metadata from seq_enriched in a single query.
 
-
-def get_cached_idx_metadata(db_path: str, idx_path: Path) -> Optional[dict]:
-    """Get cached IDX metadata if cache is still valid (same file size)."""
+    Returns a dict with width/height/first_frame_time/last_frame_time plus
+    cached IDX fields (idx_frames, idx_file_size). If `idx_path` is provided,
+    the cached IDX fields are invalidated when the on-disk file size no longer
+    matches `idx_file_size` — callers can check `cache_valid` to decide whether
+    to re-parse the IDX.
+    """
     conn = connect_db(db_path)
     row = conn.execute(
-        "SELECT idx_file_size, frame_count, t_start, t_end FROM idx_cache WHERE idx_path = ?",
-        (str(idx_path),)
-    ).fetchone()
-    conn.close()
-
-    if row is None:
-        return None
-
-    # Validate: file size must match (if IDX changed, invalidate)
-    try:
-        current_size = idx_path.stat().st_size
-    except OSError:
-        return None
-    if current_size != row[0]:
-        return None
-
-    return {
-        'frame_count': row[1],
-        't_start': row[2],
-        't_end': row[3],
-        'idx_file_size': row[0],
-    }
-
-
-def save_idx_cache(db_path: str, idx_path: Path, metadata: dict):
-    """Save parsed IDX metadata to cache."""
-    conn = connect_db(db_path)
-    conn.execute("""
-        INSERT OR REPLACE INTO idx_cache (idx_path, idx_file_size, frame_count, t_start, t_end, cached_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (
-        str(idx_path),
-        metadata['idx_file_size'],
-        metadata['frame_count'],
-        metadata['t_start'],
-        metadata['t_end'],
-        datetime.now().isoformat(),
-    ))
-    conn.commit()
-    conn.close()
-
-
-def get_seq_field_analysis(db_path: str, recording_date: str, case_no: int, camera_name: str) -> Optional[dict]:
-    """Query seq_field_analysis for width, height, and frame timestamps."""
-    conn = connect_db(db_path)
-    row = conn.execute(
-        """SELECT width, height, first_frame_time, last_frame_time
-           FROM seq_field_analysis
+        """SELECT width, height, first_frame_time, last_frame_time,
+                  idx_frames, idx_file_size
+           FROM seq_enriched
            WHERE recording_date = ? AND case_no = ? AND camera_name = ?""",
         (recording_date, case_no, camera_name),
     ).fetchone()
@@ -506,12 +457,68 @@ def get_seq_field_analysis(db_path: str, recording_date: str, case_no: int, came
 
     if row is None:
         return None
+
+    cached_size = row[5]
+    cache_valid = False
+    if idx_path is not None and cached_size is not None:
+        try:
+            cache_valid = idx_path.stat().st_size == cached_size
+        except OSError:
+            cache_valid = False
+
     return {
         'width': row[0],
         'height': row[1],
         'first_frame_time': row[2],
         'last_frame_time': row[3],
+        'frame_count': row[4],
+        'idx_file_size': cached_size,
+        'cache_valid': cache_valid,
     }
+
+
+def save_idx_cache(
+    db_path: str,
+    recording_date: str,
+    case_no: int,
+    camera_name: str,
+    metadata: dict,
+):
+    """Upsert IDX-parse results into seq_enriched.
+
+    Only the cache-related columns (idx_frames, first_frame_time,
+    last_frame_time, idx_file_size, idx_cached_at) are written. If the row
+    does not yet exist (analyze_seq_fields.py hasn't seen this file), a
+    partial row is inserted; analyze_seq_fields will fill header columns later.
+    """
+    conn = connect_db(db_path)
+    conn.execute(
+        """
+        INSERT INTO seq_enriched
+            (recording_date, case_no, camera_name,
+             idx_frames, first_frame_time, last_frame_time,
+             idx_file_size, idx_cached_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(recording_date, case_no, camera_name) DO UPDATE SET
+            idx_frames       = excluded.idx_frames,
+            first_frame_time = excluded.first_frame_time,
+            last_frame_time  = excluded.last_frame_time,
+            idx_file_size    = excluded.idx_file_size,
+            idx_cached_at    = excluded.idx_cached_at
+        """,
+        (
+            recording_date,
+            case_no,
+            camera_name,
+            metadata['frame_count'],
+            metadata['t_start'],
+            metadata['t_end'],
+            metadata['idx_file_size'],
+            datetime.now().isoformat(),
+        ),
+    )
+    conn.commit()
+    conn.close()
 
 
 def get_all_sessions(db_path: str, cameras: Optional[List[str]] = None) -> List[Dict]:
@@ -689,10 +696,10 @@ def build_session_groups(files: List[Dict], ffprobe_path: str) -> List[SessionGr
             print(f"  ⚠️  IDX not found for: {seq_path.name} — skipping camera")
             continue
 
-        # Query seq_field_analysis for resolution + optional timestamp pre-check
-        sfa = get_seq_field_analysis(DB_PATH, date, case, camera)
+        # Single read of seq_enriched: resolution, header timestamps, and IDX cache.
+        sfa = get_seq_enriched_metadata(DB_PATH, date, case, camera, idx_path)
 
-        # Optional early epoch check using seq_field_analysis frame timestamps
+        # Optional early epoch check using seq_enriched frame timestamps
         # (avoids IDX parse entirely for obviously corrupt cameras)
         if sfa and sfa['first_frame_time'] and sfa['last_frame_time']:
             ft, lt = sfa['first_frame_time'], sfa['last_frame_time']
@@ -704,9 +711,14 @@ def build_session_groups(files: List[Dict], ffprobe_path: str) -> List[SessionGr
                       f"valid range is 2015–2030 — skipping (would poison group timeline)")
                 continue
 
-        # Parse IDX — try cache first, then fast scan (first+last record only)
-        meta = get_cached_idx_metadata(DB_PATH, idx_path)
-        if meta:
+        # Parse IDX — use cached values if seq_enriched has a valid cache, else fast scan
+        if sfa and sfa['cache_valid'] and sfa['frame_count']:
+            meta = {
+                'frame_count': sfa['frame_count'],
+                't_start': sfa['first_frame_time'],
+                't_end': sfa['last_frame_time'],
+                'idx_file_size': sfa['idx_file_size'],
+            }
             print(f"  IDX (cached): {camera} ... {meta['frame_count']} frames")
         else:
             print(f"  Parsing IDX: {camera} ...", end="", flush=True)
@@ -715,7 +727,7 @@ def build_session_groups(files: List[Dict], ffprobe_path: str) -> List[SessionGr
                 print(f" ⚠️  0 records, skipping")
                 continue
             print(f" {meta['frame_count']} frames")
-            save_idx_cache(DB_PATH, idx_path, meta)
+            save_idx_cache(DB_PATH, date, case, camera, meta)
 
         t_start = meta['t_start']
         t_end = meta['t_end']
@@ -733,10 +745,10 @@ def build_session_groups(files: List[Dict], ffprobe_path: str) -> List[SessionGr
                   f"valid range is 2015–2030 — skipping (would poison group timeline)")
             continue
 
-        # Resolution: prefer seq_field_analysis (no subprocess), fall back to ffprobe
+        # Resolution: prefer seq_enriched (no subprocess), fall back to ffprobe
         if sfa and sfa['width'] and sfa['height'] and sfa['width'] > 0 and sfa['height'] > 0:
             w, h, pix_fmt = sfa['width'], sfa['height'], "yuv420p"
-            print(f"  Resolution: {camera} — {w}x{h} (from seq_field_analysis)")
+            print(f"  Resolution: {camera} — {w}x{h} (from seq_enriched)")
         else:
             print(f"  Resolution: {camera} — querying via ffprobe ...")
             w, h, pix_fmt = detect_resolution(seq_path, ffprobe_path)
@@ -783,22 +795,24 @@ def build_session_groups(files: List[Dict], ffprobe_path: str) -> List[SessionGr
         for cam_name in converted:
             if cam_name in session.cameras:
                 continue  # already included as pending
-            # Try idx_cache first, then seq_field_analysis for timestamps
+            # Single read from seq_enriched; re-parse IDX only if cache is stale
             seq_path = build_seq_path(date, case, cam_name)
+            idx_path = build_idx_path(seq_path) if seq_path else None
+            sfa = get_seq_enriched_metadata(DB_PATH, date, case, cam_name, idx_path)
             meta = None
-            if seq_path:
-                idx_path = build_idx_path(seq_path)
-                if idx_path:
-                    meta = get_cached_idx_metadata(DB_PATH, idx_path)
-                    if not meta:
-                        meta = parse_idx_metadata_fast(idx_path)
-                        if meta:
-                            save_idx_cache(DB_PATH, idx_path, meta)
-            if not meta:
-                # Fall back to seq_field_analysis
-                sfa = get_seq_field_analysis(DB_PATH, date, case, cam_name)
-                if sfa and sfa['first_frame_time'] and sfa['last_frame_time']:
-                    meta = {'t_start': sfa['first_frame_time'], 't_end': sfa['last_frame_time']}
+            if sfa and sfa['cache_valid'] and sfa['frame_count']:
+                meta = {
+                    't_start': sfa['first_frame_time'],
+                    't_end': sfa['last_frame_time'],
+                }
+            elif idx_path:
+                parsed = parse_idx_metadata_fast(idx_path)
+                if parsed:
+                    save_idx_cache(DB_PATH, date, case, cam_name, parsed)
+                    meta = {'t_start': parsed['t_start'], 't_end': parsed['t_end']}
+            if meta is None and sfa and sfa['first_frame_time'] and sfa['last_frame_time']:
+                # Fall back to header timestamps if no IDX available
+                meta = {'t_start': sfa['first_frame_time'], 't_end': sfa['last_frame_time']}
             if meta:
                 t_start = meta['t_start']
                 t_end = meta['t_end']
@@ -1334,7 +1348,6 @@ def main():
     print()
 
     print("Querying database for pending conversions...")
-    ensure_idx_cache_table(DB_PATH)
     files = get_all_sessions(DB_PATH, cameras=all_cameras)
 
     if not files:

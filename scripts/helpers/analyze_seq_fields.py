@@ -1,11 +1,6 @@
 """
-Analyze SEQ header unknown fields (offsets 640, 656, 660, 664) and correlate
-them with frame-drop data and timing/synchronization metrics parsed from
-companion IDX files.
-
-Hypothesis: unknown_640 and/or delta_664 (= unknown_664 - allocated_frames)
-serve as indicators of recording anomalies such as frame drops or ring-buffer
-overruns.
+Analyze SEQ header fields and correlate them with frame-drop data and
+timing/synchronization metrics parsed from companion IDX files.
 
 Usage:
     python analyze_seq_fields.py [directory]
@@ -14,9 +9,7 @@ Usage:
     Recursively finds all *.seq files under the given root.
 
 Output:
-    - Console report with field distributions, correlation tables, and
-      timing / synchronization analysis
-    - seq_field_analysis.csv  written next to this script
+    - Console report with frame-drop and timing/synchronization analysis
 
 SEQ header fields extracted (all little-endian):
     offset 36  : UTF-16 LE  description (512 bytes, null-terminated)
@@ -27,10 +20,6 @@ SEQ header fields extracted (all little-endian):
     offset 620 : uint32     compression_fmt
     offset 624 : uint32     rec_timestamp  (Unix epoch, recording start)
     offset 636 : uint32     exposure_ns
-    offset 640 : uint32     unknown_640
-    offset 656 : uint32     unknown_656
-    offset 660 : uint32     unknown_660
-    offset 664 : uint32     unknown_664
 
 IDX record layout (32 bytes, little-endian):
     offset 0  : uint64  file byte offset of frame
@@ -86,17 +75,13 @@ OFF_FPS              = 584    # float64
 OFF_COMPRESSION_FMT  = 620
 OFF_REC_TIMESTAMP    = 624    # uint32, Unix epoch seconds (recording start)
 OFF_EXPOSURE_NS      = 636
-OFF_UNK_640          = 640
-OFF_UNK_656          = 656
-OFF_UNK_660          = 660
-OFF_UNK_664          = 664
 
 # IDX uint32 indices within each 8-uint32 record
 IDX_U32_TS_SEC   = 3   # offset 12
 IDX_U32_TS_SUB   = 4   # offset 16
 
 # Database
-SEQ_ANALYSIS_TABLE = "seq_field_analysis"
+SEQ_ANALYSIS_TABLE = "seq_enriched"
 
 # Path-key regexes (same convention as 2_update_db.py)
 _RE_DATA = re.compile(r"^DATA_(\d{2})-(\d{2})-(\d{2})$")
@@ -177,13 +162,6 @@ def parse_seq_header(seq_path: Path) -> dict | None:
     compression_fmt   = struct.unpack_from("<I", hdr, OFF_COMPRESSION_FMT)[0]
     rec_timestamp     = struct.unpack_from("<I", hdr, OFF_REC_TIMESTAMP)[0]
     exposure_ns       = struct.unpack_from("<I", hdr, OFF_EXPOSURE_NS)[0]
-    unk_640           = struct.unpack_from("<I", hdr, OFF_UNK_640)[0]
-    unk_656           = struct.unpack_from("<I", hdr, OFF_UNK_656)[0]
-    unk_660           = struct.unpack_from("<I", hdr, OFF_UNK_660)[0]
-    unk_664           = struct.unpack_from("<I", hdr, OFF_UNK_664)[0]
-
-    # Treat as signed difference (usually +5 or +1; never seen negative)
-    delta_664 = int(unk_664) - int(allocated_frames)
 
     return {
         "description":      description,
@@ -194,11 +172,6 @@ def parse_seq_header(seq_path: Path) -> dict | None:
         "compression_fmt":  compression_fmt,
         "rec_timestamp":    rec_timestamp,
         "exposure_ns":      exposure_ns,
-        "unk_640":          unk_640,
-        "unk_656":          unk_656,
-        "unk_660":          unk_660,
-        "unk_664":          unk_664,
-        "delta_664":        delta_664,
     }
 
 
@@ -333,7 +306,7 @@ def parse_idx(idx_path: Path, fps: float | None = None) -> dict | None:
 def _load_existing_keys(db_path: str) -> set[tuple[str, int, str]]:
     """
     Return the set of (recording_date, case_no, camera_name) tuples already
-    present in seq_field_analysis.  Returns an empty set if the table does not
+    present in seq_enriched.  Returns an empty set if the table does not
     exist or the DB is unreachable.
     """
     try:
@@ -434,8 +407,7 @@ def analyze_directory(root: Path, skip_keys: set | None = None) -> pd.DataFrame:
         # Header fields (None when corrupt/unreadable)
         for field in ("description", "width", "height",
                       "allocated_frames", "fps", "compression_fmt",
-                      "rec_timestamp", "exposure_ns",
-                      "unk_640", "unk_656", "unk_660", "unk_664", "delta_664"):
+                      "rec_timestamp", "exposure_ns"):
             row[field] = hdr[field] if hdr else None
 
         # IDX fields (None when IDX absent)
@@ -448,6 +420,18 @@ def analyze_directory(root: Path, skip_keys: set | None = None) -> pd.DataFrame:
         # Human-readable datetime strings derived from first/last frame timestamps
         row["first_frame_datetime"] = _unix_to_iso(row["first_frame_time"])
         row["last_frame_datetime"]  = _unix_to_iso(row["last_frame_time"])
+
+        # IDX cache provenance (used by 3_seq_to_mp4_convert.py for staleness check)
+        if idx_path.exists():
+            try:
+                row["idx_file_size"] = idx_path.stat().st_size
+                row["idx_cached_at"] = datetime.now(timezone.utc).isoformat() if idx else None
+            except OSError:
+                row["idx_file_size"] = None
+                row["idx_cached_at"] = None
+        else:
+            row["idx_file_size"] = None
+            row["idx_cached_at"] = None
 
         rows.append(row)
 
@@ -474,11 +458,6 @@ _DB_COLUMNS: list[tuple[str, str]] = [
     ("compression_fmt",      "INTEGER"),
     ("rec_timestamp",        "INTEGER"),
     ("exposure_ns",          "INTEGER"),
-    ("unk_640",              "INTEGER"),
-    ("unk_656",              "INTEGER"),
-    ("unk_660",              "INTEGER"),
-    ("unk_664",              "INTEGER"),
-    ("delta_664",            "INTEGER"),
     ("idx_frames",           "INTEGER"),
     ("dropped_frames",       "INTEGER"),
     ("drop_rate",            "REAL"),
@@ -495,11 +474,13 @@ _DB_COLUMNS: list[tuple[str, str]] = [
     ("expected_duration",    "REAL"),
     ("time_drift_ms",        "REAL"),
     ("max_time_gap_ms",      "REAL"),
+    ("idx_file_size",        "INTEGER"),
+    ("idx_cached_at",        "TEXT"),
 ]
 
 
 def _ensure_analysis_table(conn: sqlite3.Connection) -> None:
-    """Create seq_field_analysis if absent, then add any missing columns."""
+    """Create seq_enriched if absent, then add any missing columns."""
     cur = conn.cursor()
     cur.execute(f"""
         CREATE TABLE IF NOT EXISTS "{SEQ_ANALYSIS_TABLE}" (
@@ -515,6 +496,10 @@ def _ensure_analysis_table(conn: sqlite3.Connection) -> None:
     for row in cur.execute(f'PRAGMA table_info("{SEQ_ANALYSIS_TABLE}")'):
         existing_cols.add(row[1])
 
+    _DROPPED_COLS = {"unk_640", "unk_656", "unk_660", "unk_664", "delta_664"}
+    for col in _DROPPED_COLS & existing_cols:
+        cur.execute(f'ALTER TABLE "{SEQ_ANALYSIS_TABLE}" DROP COLUMN {col}')
+
     for col_name, col_type in _DB_COLUMNS:
         if col_name not in existing_cols:
             cur.execute(
@@ -524,7 +509,7 @@ def _ensure_analysis_table(conn: sqlite3.Connection) -> None:
 
 
 def write_to_db(df: pd.DataFrame, db_path: str) -> None:
-    """Upsert all rows from *df* into seq_field_analysis in ScalpelDatabase."""
+    """Upsert all rows from *df* into seq_enriched in ScalpelDatabase."""
     # Only write rows where we have a valid primary key
     writable = df[df["recording_date"].notna() & df["case_no"].notna() & df["camera_name"].notna()].copy()
     skipped  = len(df) - len(writable)
@@ -645,7 +630,7 @@ def print_report(df: pd.DataFrame) -> None:
     with_idx = valid[valid["has_idx"] & valid["dropped_frames"].notna()].copy()
 
     print("\n" + "=" * 80)
-    print("SEQ UNKNOWN FIELDS  ×  IDX FRAME DROPS — ANALYSIS REPORT")
+    print("SEQ FIELD ANALYSIS — FRAME DROPS & TIMING REPORT")
     print("=" * 80)
     print(f"\n  Total .seq files scanned  : {len(df)}")
     print(f"  Valid headers             : {len(valid)}")
@@ -659,22 +644,9 @@ def print_report(df: pd.DataFrame) -> None:
             print(f"    {r['file']}")
 
     # ------------------------------------------------------------------
-    # 1. Field distributions
+    # 1. Frame-drop summary
     # ------------------------------------------------------------------
-    _section("1. DISTRIBUTION OF UNKNOWN HEADER FIELDS (valid headers only)")
-
-    for col, label in [
-        ("unk_640",   "unknown_640  (offset 640)"),
-        ("unk_656",   "unknown_656  (offset 656)"),
-        ("unk_660",   "unknown_660  (offset 660)"),
-        ("delta_664", "delta_664  = unknown_664 − allocated_frames"),
-    ]:
-        _print_distribution(valid[col].dropna().astype(int), label)
-
-    # ------------------------------------------------------------------
-    # 2. Frame-drop summary
-    # ------------------------------------------------------------------
-    _section("2. FRAME DROP SUMMARY (files with IDX)")
+    _section("1. FRAME DROP SUMMARY (files with IDX)")
 
     if len(with_idx) == 0:
         print("  No IDX files found — cannot compute drop statistics.")
@@ -701,33 +673,9 @@ def print_report(df: pd.DataFrame) -> None:
                 print(f"    resets={r['n_counter_resets']}  {r['file']}")
 
     # ------------------------------------------------------------------
-    # 3. Correlation analysis
+    # 2. Anomaly table
     # ------------------------------------------------------------------
-    _section("3. CORRELATION: UNKNOWN FIELDS  ×  FRAME DROPS")
-
-    if len(with_idx) == 0:
-        print("  No IDX data — skipping.")
-    else:
-        for col, label in [
-            ("unk_640",   "unknown_640  ×  dropped_frames"),
-            ("delta_664", "delta_664   ×  dropped_frames"),
-        ]:
-            _print_correlation_table(with_idx, col, label)
-
-        # Point-biserial / Spearman correlation (numeric summary)
-        print()
-        for col in ("unk_640", "delta_664"):
-            non_null = with_idx[[col, "dropped_frames"]].dropna()
-            if len(non_null) > 1 and non_null[col].nunique() > 1:
-                corr = non_null[col].astype(float).corr(
-                    non_null["dropped_frames"].astype(float), method="spearman"
-                )
-                print(f"  Spearman r({col}, dropped_frames) = {corr:+.4f}")
-
-    # ------------------------------------------------------------------
-    # 4. Anomaly table
-    # ------------------------------------------------------------------
-    _section("4. ANOMALY FILES (dropped_frames > 0 OR counter resets > 0)")
+    _section("2. ANOMALY FILES (dropped_frames > 0 OR counter resets > 0)")
 
     if len(with_idx) == 0:
         print("  No IDX data.")
@@ -742,14 +690,10 @@ def print_report(df: pd.DataFrame) -> None:
         else:
             show_cols = [
                 "file", "allocated_frames", "idx_frames",
-                "dropped_frames", "drop_rate",
-                "unk_640", "delta_664", "n_counter_resets",
+                "dropped_frames", "drop_rate", "n_counter_resets",
             ]
             display = anomalies[show_cols].copy()
             display["drop_rate"] = display["drop_rate"].map("{:.4%}".format)
-            display["unk_640"]   = display["unk_640"].apply(
-                lambda v: f"{int(v):#010x}" if pd.notna(v) else ""
-            )
             # Truncate long file paths for readability
             display["file"] = display["file"].str[-60:]
             pd.set_option("display.max_colwidth", 62)
@@ -757,9 +701,9 @@ def print_report(df: pd.DataFrame) -> None:
             print(display.to_string(index=False))
 
     # ------------------------------------------------------------------
-    # 5. Timing & synchronization analysis
+    # 3. Timing & synchronization analysis
     # ------------------------------------------------------------------
-    _section("5. TIMING & SYNCHRONIZATION ANALYSIS (files with IDX)")
+    _section("3. TIMING & SYNCHRONIZATION ANALYSIS (files with IDX)")
 
     timing_cols = ["time_drift_ms", "max_time_gap_ms", "actual_duration", "expected_duration"]
     has_timing  = with_idx[with_idx["time_drift_ms"].notna()] if len(with_idx) > 0 else pd.DataFrame()
@@ -817,29 +761,6 @@ def print_report(df: pd.DataFrame) -> None:
             show = show.copy()
             show["file"] = show["file"].str[-55:]
             print(show.to_string(index=False, float_format="{:.3f}".format))
-
-    # ------------------------------------------------------------------
-    # 6. Header-field outliers (non-modal values)
-    # ------------------------------------------------------------------
-    _section("6. HEADER FIELD OUTLIERS (non-modal values, max 30 shown)")
-
-    for col, fmt in [("unk_640", "#010x"), ("delta_664", "d")]:
-        mode_vals = valid[col].dropna().astype(int).mode()
-        if len(mode_vals) == 0:
-            continue
-        modal = int(mode_vals.iloc[0])
-        outliers = valid[valid[col].notna() & (valid[col].astype(int) != modal)]
-        print(f"\n  {col}: modal = {modal:{fmt}}  ({len(valid) - len(outliers)} files)")
-        print(f"  Outliers: {len(outliers)} file(s)")
-        shown = outliers.head(30)
-        for _, r in shown.iterrows():
-            val = int(r[col])
-            drop_info = ""
-            if pd.notna(r.get("dropped_frames")):
-                drop_info = f"  drops={int(r['dropped_frames'])}"
-            print(f"    {col}={val:{fmt}}  {r['file']}{drop_info}")
-        if len(outliers) > 30:
-            print(f"    … and {len(outliers) - 30} more (see CSV for full list)")
 
     print("\n" + "=" * 80)
 

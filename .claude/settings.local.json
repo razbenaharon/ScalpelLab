@@ -82,7 +82,11 @@
       "Bash(pip show:*)",
       "Bash(pip index:*)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(taskkill:*)"
+      "Bash(taskkill:*)",
+      "Bash(winget upgrade:*)",
+      "Read(//mnt/f/Projects/**)",
+      "Bash(sqlite3 ScalpelDatabase.sqlite \".schema seq_field_analysis\")",
+      "Bash(sqlite3 ScalpelDatabase.sqlite \".schema recordings_enriched\")"
     ],
     "deny": [],
     "ask": []
