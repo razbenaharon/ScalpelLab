@@ -60,10 +60,13 @@ OUT_ROOT = get_mp4_root()
 
 TARGET_FPS = 30
 MAX_PARALLEL = 2           # concurrent FFmpeg processes
+MIN_PENDING_SEQ_SIZE_MB = 50
+MAX_VALID_DURATION_SECONDS = 250000
 
 # Camera synchronization groups
 GROUP_A = ["Cart_Center_2", "Cart_LT_4", "Cart_RT_1", "General_3"]
 GROUP_B = ["Monitor", "Patient_Monitor", "Ventilator_Monitor"]
+SOLO_CAMERAS = ["Injection_Port"]
 ALL_GROUPS = {"A": GROUP_A, "B": GROUP_B}
 
 # Executable search paths
@@ -542,12 +545,12 @@ def get_all_sessions(db_path: str, cameras: Optional[List[str]] = None) -> List[
         AND s.camera_name = m.camera_name
     WHERE
         s.camera_name IN ({})
-        AND s.size_mb >= 200
+        AND s.size_mb >= ?
         AND (m.size_mb IS NULL OR m.size_mb < 1)
     ORDER BY s.recording_date DESC, s.case_no, s.camera_name
     """.format(','.join(['?'] * len(cameras)))
 
-    cursor.execute(query, cameras)
+    cursor.execute(query, (*cameras, MIN_PENDING_SEQ_SIZE_MB))
 
     files = []
     for row in cursor.fetchall():
@@ -767,7 +770,7 @@ def build_session_groups(files: List[Dict], ffprobe_path: str) -> List[SessionGr
         )
 
         # Sanity check: skip cameras with corrupted IDX timestamps
-        if cam_timeline.duration > 200000:  # > ~2.3 days = definitely corrupted
+        if cam_timeline.duration > MAX_VALID_DURATION_SECONDS:
             print(f"  ⚠️  CORRUPTED timestamps: {camera} "
                   f"(duration={cam_timeline.duration:.0f}s / {cam_timeline.duration/86400:.1f} days) — skipping")
             continue
@@ -1317,6 +1320,8 @@ def main():
     print(f"Output Root: {OUT_ROOT}")
     print(f"Target FPS:  {TARGET_FPS}")
     print(f"Parallel:    {MAX_PARALLEL} cameras")
+    print(f"Min SEQ size:{MIN_PENDING_SEQ_SIZE_MB} MB")
+    print(f"Max duration sanity cap: {MAX_VALID_DURATION_SECONDS}s")
     print(f"Encoder:     hevc_nvenc (H.265)")
     print(f"Pipeline:    SEQ→H.264+timecodes→mkvmerge(VFR MKV)→FFmpeg fps={TARGET_FPS}(CFR)→MP4")
     print()
@@ -1341,10 +1346,11 @@ def main():
         return
     print(f"✓ mkvmerge:  {mkvmerge_path}")
 
-    all_cameras = list(set(GROUP_A + GROUP_B))
+    all_cameras = DEFAULT_CAMERAS
     print(f"\nCamera groups:")
     print(f"  Group A: {', '.join(GROUP_A)}")
     print(f"  Group B: {', '.join(GROUP_B)}")
+    print(f"  Solo: {', '.join(SOLO_CAMERAS)}")
     print()
 
     print("Querying database for pending conversions...")

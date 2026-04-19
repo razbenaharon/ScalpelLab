@@ -87,9 +87,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python copy_with_structure.py -d D:\\backup file1.txt file2.txt
-  python copy_with_structure.py --destination /mnt/backup /home/user/docs/*.txt
-  python copy_with_structure.py -d "C:\\My Backup" "C:\\folder\\file.mp4"
+  python backup_dir.py -d D:\\backup file1.txt file2.txt
+  python backup_dir.py --destination /mnt/backup /home/user/docs/*.txt
+  python backup_dir.py -d "C:\\My Backup" "C:\\folder\\file.mp4"
         """
     )
 
