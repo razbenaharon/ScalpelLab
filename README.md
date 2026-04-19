@@ -216,7 +216,7 @@ Copies a list of files to a destination directory. Creates directory if needed.
 
 #### `copy_with_structure.py` - Structured File Copier
 ```bash
-python scripts/helpers/copy_with_structure.py -d D:\backup file1.mp4 file2.mp4
+python scripts/helpers/backup_dir.py -d D:\backup file1.mp4 file2.mp4
 ```
 Copies files while preserving directory structure from "Recordings" folder onward.
 
