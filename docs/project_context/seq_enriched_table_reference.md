@@ -17,6 +17,11 @@ The definitions below are based on:
 - `case_no`
 - `camera_name`
 
+The same triple is a foreign key into `seq_status(recording_date, case_no, camera_name)`
+with `ON DELETE CASCADE`, so every enriched row corresponds to a recorded
+camera tracked in `seq_status`, and removing a `seq_status` row drops its
+enrichment cache.
+
 In practice this corresponds to one `.seq` file discovered under a path shaped like:
 
 ```text

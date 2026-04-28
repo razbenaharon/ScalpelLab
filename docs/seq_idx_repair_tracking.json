@@ -14541,16 +14541,576 @@
       },
       "status": "ok",
       "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-24\\case1\\cart_center_2\\2024-12-24_12-33-16.seq": {
+      "detail": "idx_pack_error:frame_number_out_of_range:4294967296@5435886116",
+      "dry_run": false,
+      "finished_at": "2026-04-28T08:55:25+00:00",
+      "frames": 1966080,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-24\\Case1\\Cart_Center_2\\2024-12-24_12-33-16.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1771248329340916900,
+        "size": 66014464
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-24\\Case1\\Cart_Center_2\\2024-12-24_12-33-16.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752763141939613600,
+        "size": 5802639204
+      },
+      "status": "skipped_unsupported",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-24\\case1\\cart_lt_4\\2024-12-24_12-33-16.seq": {
+      "detail": "idx_pack_error:frame_number_out_of_range:4294967296@5917794253",
+      "dry_run": false,
+      "finished_at": "2026-04-28T09:28:30+00:00",
+      "frames": 1966080,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-24\\Case1\\Cart_LT_4\\2024-12-24_12-33-16.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1771248374335865000,
+        "size": 66022784
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-24\\Case1\\Cart_LT_4\\2024-12-24_12-33-16.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752763223895414200,
+        "size": 6277924693
+      },
+      "status": "skipped_unsupported",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-24\\case1\\cart_rt_1\\2024-12-24_12-33-16.seq": {
+      "detail": "idx_pack_error:frame_number_out_of_range:4294967296@6991925559",
+      "dry_run": false,
+      "finished_at": "2026-04-28T10:00:09+00:00",
+      "frames": 1966080,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-24\\Case1\\Cart_RT_1\\2024-12-24_12-33-16.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1771248426195985200,
+        "size": 65997024
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-24\\Case1\\Cart_RT_1\\2024-12-24_12-33-16.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752763594872230500,
+        "size": 7428622319
+      },
+      "status": "skipped_unsupported",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-24\\case1\\general_3\\2024-12-24_12-33-16.seq": {
+      "detail": "idx_pack_error:frame_number_out_of_range:4294967296@5747697165",
+      "dry_run": false,
+      "finished_at": "2026-04-28T10:31:51+00:00",
+      "frames": 1966080,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-24\\Case1\\General_3\\2024-12-24_12-33-16.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1771248469581702600,
+        "size": 65609792
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-24\\Case1\\General_3\\2024-12-24_12-33-16.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752763131705377300,
+        "size": 6111583673
+      },
+      "status": "skipped_unsupported",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-24\\case1\\monitor\\2024-12-24_12-40-56.seq": {
+      "detail": "idx_pack_error:frame_number_out_of_range:4294967296@3302350618",
+      "dry_run": false,
+      "finished_at": "2026-04-28T11:16:04+00:00",
+      "frames": 1966080,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-24\\Case1\\Monitor\\2024-12-24_12-40-56.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1771248500833408100,
+        "size": 133331520
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-24\\Case1\\Monitor\\2024-12-24_12-40-56.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752706754000000000,
+        "size": 5298315000
+      },
+      "status": "skipped_unsupported",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-24\\case1\\patient_monitor\\2024-12-24_12-40-56.seq": {
+      "detail": "",
+      "dry_run": false,
+      "finished_at": "2026-04-28T11:48:18+00:00",
+      "frames": 1959149,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-24\\Case1\\Patient_Monitor\\2024-12-24_12-40-56.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1777376898888869000,
+        "size": 62692768
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-24\\Case1\\Patient_Monitor\\2024-12-24_12-40-56.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752706750000000000,
+        "size": 6164546882
+      },
+      "status": "replaced",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-24\\case1\\ventilator_monitor\\2024-12-24_12-40-56.seq": {
+      "detail": "idx_pack_error:frame_number_out_of_range:4294967296@7049011777",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:20:36+00:00",
+      "frames": 1966080,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-24\\Case1\\Ventilator_Monitor\\2024-12-24_12-40-56.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1771248576125864200,
+        "size": 66017856
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-24\\Case1\\Ventilator_Monitor\\2024-12-24_12-40-56.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752706802000000000,
+        "size": 7550624939
+      },
+      "status": "skipped_unsupported",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-25\\case1\\cart_center_2\\2024-12-25_12-24-59.seq": {
+      "detail": "",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:21:18+00:00",
+      "frames": 304883,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-25\\Case1\\Cart_Center_2\\2024-12-25_12-24-59.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1777378878646465200,
+        "size": 9756256
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-25\\Case1\\Cart_Center_2\\2024-12-25_12-24-59.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752762562485992500,
+        "size": 987776241
+      },
+      "status": "replaced",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-25\\case1\\cart_lt_4\\2024-12-25_12-24-59.seq": {
+      "detail": "",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:22:00+00:00",
+      "frames": 305035,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-25\\Case1\\Cart_LT_4\\2024-12-25_12-24-59.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1777378920835464800,
+        "size": 9761120
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-25\\Case1\\Cart_LT_4\\2024-12-25_12-24-59.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752762679975367900,
+        "size": 1074349505
+      },
+      "status": "replaced",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-25\\case1\\cart_rt_1\\2024-12-25_12-24-59.seq": {
+      "detail": "",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:22:43+00:00",
+      "frames": 305040,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-25\\Case1\\Cart_RT_1\\2024-12-25_12-24-59.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1777378963125699500,
+        "size": 9761280
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-25\\Case1\\Cart_RT_1\\2024-12-25_12-24-59.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752762846970315400,
+        "size": 1312385752
+      },
+      "status": "replaced",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-25\\case1\\general_3\\2024-12-25_12-24-59.seq": {
+      "detail": "",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:23:25+00:00",
+      "frames": 303166,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-25\\Case1\\General_3\\2024-12-25_12-24-59.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1777379005188877200,
+        "size": 9701312
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-25\\Case1\\General_3\\2024-12-25_12-24-59.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752762909271656800,
+        "size": 1067785206
+      },
+      "status": "replaced",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-25\\case1\\monitor\\2024-12-25_12-27-23.seq": {
+      "detail": "",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:26:14+00:00",
+      "frames": 616959,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-25\\Case1\\Monitor\\2024-12-25_12-27-23.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1777379174045843800,
+        "size": 19742688
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-25\\Case1\\Monitor\\2024-12-25_12-27-23.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752706638000000000,
+        "size": 1506466025
+      },
+      "status": "replaced",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-25\\case1\\patient_monitor\\2024-12-25_12-27-23.seq": {
+      "detail": "",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:26:54+00:00",
+      "frames": 290191,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-25\\Case1\\Patient_Monitor\\2024-12-25_12-27-23.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1777379214896369900,
+        "size": 9286112
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-25\\Case1\\Patient_Monitor\\2024-12-25_12-27-23.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752706626000000000,
+        "size": 1359790388
+      },
+      "status": "replaced",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-25\\case1\\ventilator_monitor\\2024-12-25_12-27-23.seq": {
+      "detail": "",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:27:39+00:00",
+      "frames": 305138,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-25\\Case1\\Ventilator_Monitor\\2024-12-25_12-27-23.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1777379259049715600,
+        "size": 9764416
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-25\\Case1\\Ventilator_Monitor\\2024-12-25_12-27-23.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752706626000000000,
+        "size": 1289951532
+      },
+      "status": "replaced",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-30\\case1\\cart_center_2\\2024-12-30_08-04-29.seq": {
+      "detail": "",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:27:40+00:00",
+      "frames": 41020,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case1\\Cart_Center_2\\2024-12-30_08-04-29.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1777379260238151300,
+        "size": 1312640
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case1\\Cart_Center_2\\2024-12-30_08-04-29.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1735540042890812500,
+        "size": 140635524
+      },
+      "status": "replaced",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-30\\case1\\cart_center_2_junk\\2024-12-30_08-04-29.seq": {
+      "detail": "excluded:junk",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:27:40+00:00",
+      "frames": 0,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case1\\Cart_Center_2_JUNK\\2024-12-30_08-04-29.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1752765202784748100,
+        "size": 1305216
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case1\\Cart_Center_2_JUNK\\2024-12-30_08-04-29.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752762878562058400,
+        "size": 140635524
+      },
+      "status": "skipped_excluded",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-30\\case1\\cart_lt_4\\2024-12-30_08-04-29.seq": {
+      "detail": "",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:27:41+00:00",
+      "frames": 41039,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case1\\Cart_LT_4\\2024-12-30_08-04-29.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1777379261495397200,
+        "size": 1313248
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case1\\Cart_LT_4\\2024-12-30_08-04-29.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1735540043024456800,
+        "size": 154702307
+      },
+      "status": "replaced",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-30\\case1\\cart_lt_4_junk\\2024-12-30_08-04-29.seq": {
+      "detail": "excluded:junk",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:27:41+00:00",
+      "frames": 0,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case1\\Cart_LT_4_JUNK\\2024-12-30_08-04-29.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1752762909514753700,
+        "size": 1313248
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case1\\Cart_LT_4_JUNK\\2024-12-30_08-04-29.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752762910914546800,
+        "size": 154702307
+      },
+      "status": "skipped_excluded",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-30\\case1\\cart_rt_1\\2024-12-30_08-04-29.seq": {
+      "detail": "",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:27:43+00:00",
+      "frames": 41033,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case1\\Cart_RT_1\\2024-12-30_08-04-29.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1777379263158794300,
+        "size": 1313056
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case1\\Cart_RT_1\\2024-12-30_08-04-29.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752762958462758400,
+        "size": 224579636
+      },
+      "status": "replaced",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-30\\case1\\general_3\\2024-12-30_08-04-29.seq": {
+      "detail": "",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:27:44+00:00",
+      "frames": 40788,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case1\\General_3\\2024-12-30_08-04-29.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1777379264582329000,
+        "size": 1305216
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case1\\General_3\\2024-12-30_08-04-29.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1735540042890812500,
+        "size": 193776312
+      },
+      "status": "replaced",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-30\\case1\\general_3_junk\\2024-12-30_08-04-29.seq": {
+      "detail": "excluded:junk",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:27:44+00:00",
+      "frames": 0,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case1\\General_3_JUNK\\2024-12-30_08-04-29.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1752762958071693100,
+        "size": 1305216
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case1\\General_3_JUNK\\2024-12-30_08-04-29.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752762957838203800,
+        "size": 193776312
+      },
+      "status": "skipped_excluded",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-30\\case1\\patient_monitor\\2024-12-30_08-14-45.seq": {
+      "detail": "",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:27:45+00:00",
+      "frames": 26578,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case1\\Patient_Monitor\\2024-12-30_08-14-45.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1777379265572854000,
+        "size": 850496
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case1\\Patient_Monitor\\2024-12-30_08-14-45.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1735540174000000000,
+        "size": 152287199
+      },
+      "status": "replaced",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-30\\case1\\patient_monitor_junk\\2024-12-30_08-14-45.seq": {
+      "detail": "excluded:junk",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:27:45+00:00",
+      "frames": 0,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case1\\Patient_Monitor_JUNK\\2024-12-30_08-14-45.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1752707946000000000,
+        "size": 850496
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case1\\Patient_Monitor_JUNK\\2024-12-30_08-14-45.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752706622000000000,
+        "size": 152287199
+      },
+      "status": "skipped_excluded",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-30\\case2\\cart_center_2\\2024-12-30_09-19-14.seq": {
+      "detail": "",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:29:51+00:00",
+      "frames": 528187,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case2\\Cart_Center_2\\2024-12-30_09-19-14.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1777379391024815400,
+        "size": 16901984
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case2\\Cart_Center_2\\2024-12-30_09-19-14.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752763240265637600,
+        "size": 1875372408
+      },
+      "status": "replaced",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-30\\case2\\cart_lt_4\\2024-12-30_09-19-14.seq": {
+      "detail": "",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:31:56+00:00",
+      "frames": 528309,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case2\\Cart_LT_4\\2024-12-30_09-19-14.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1777379516849171400,
+        "size": 16905888
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case2\\Cart_LT_4\\2024-12-30_09-19-14.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752763298412952900,
+        "size": 1998733298
+      },
+      "status": "replaced",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-30\\case2\\cart_rt_1\\2024-12-30_09-19-14.seq": {
+      "detail": "",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:34:03+00:00",
+      "frames": 528204,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case2\\Cart_RT_1\\2024-12-30_09-19-14.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1777379643871972500,
+        "size": 16902528
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case2\\Cart_RT_1\\2024-12-30_09-19-14.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752763449300578600,
+        "size": 2534213578
+      },
+      "status": "replaced",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-30\\case2\\general_3\\2024-12-30_09-19-14.seq": {
+      "detail": "",
+      "dry_run": false,
+      "finished_at": "2026-04-28T12:36:14+00:00",
+      "frames": 526348,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case2\\General_3\\2024-12-30_09-19-14.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1777379774821581800,
+        "size": 16843136
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case2\\General_3\\2024-12-30_09-19-14.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752763505307967700,
+        "size": 2610992410
+      },
+      "status": "replaced",
+      "verify_existing": true
+    },
+    "f:\\room_8_data\\sequence_backup\\data_24-12-30\\case2\\patient_monitor\\2024-12-30_09-19-26.seq": {
+      "detail": "idx_pack_error:frame_number_out_of_range:4294967296@12171155945",
+      "dry_run": false,
+      "finished_at": "2026-04-28T13:10:06+00:00",
+      "frames": 1966080,
+      "idx_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case2\\Patient_Monitor\\2024-12-30_09-19-26.seq.idx",
+      "idx_stat": {
+        "exists": true,
+        "mtime_ns": 1771253451099161100,
+        "size": 173745984
+      },
+      "seq_path": "F:\\Room_8_Data\\Sequence_Backup\\DATA_24-12-30\\Case2\\Patient_Monitor\\2024-12-30_09-19-26.seq",
+      "seq_stat": {
+        "exists": true,
+        "mtime_ns": 1752707590000000000,
+        "size": 33765126673
+      },
+      "status": "skipped_unsupported",
+      "verify_existing": true
     }
   },
-  "entry_count": 727,
+  "entry_count": 755,
   "last_mode": {
     "dry_run": false,
     "verify_existing": true
   },
   "last_root": "F:\\Room_8_Data\\Sequence_Backup",
-  "last_started_at": "2026-04-28T07:54:44+00:00",
-  "last_updated_at": "2026-04-28T07:54:56+00:00",
+  "last_started_at": "2026-04-28T10:43:58+00:00",
+  "last_updated_at": "2026-04-28T13:10:06+00:00",
   "schema_version": 1,
   "script": "scripts/helpers/repair_seq_idx.py"
 }
