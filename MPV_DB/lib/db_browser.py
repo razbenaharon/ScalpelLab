@@ -231,8 +231,9 @@ class DatabaseBrowser:
             raise FileNotFoundError(f"Database not found at {self.db_path}")
             
         conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
         cursor = conn.cursor()
-        
+
         query = """
             SELECT
                 ms.recording_date,
@@ -272,6 +273,7 @@ class DatabaseBrowser:
 
     def _load_cameras_for_case(self, date: str, case_no: int) -> List[CameraMetadata]:
         conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
         cursor = conn.cursor()
         
         try:

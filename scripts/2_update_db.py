@@ -225,6 +225,7 @@ def update_seq_status(db_path: str, seq_root: Path, threshold_mb: int, dry_run: 
 
     # Check for changes
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys = ON")
     try:
         ensure_seq_table_exists(conn)
         cur = conn.cursor()
@@ -465,6 +466,7 @@ def update_mp4_status(db_path: str, mp4_root: Path, threshold_mb: int,
     existing_all = {}
     if not dry_run and not skip_duration:
         conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
         try:
             ensure_mp4_table_exists(conn)
             cur = conn.cursor()
@@ -541,6 +543,7 @@ def update_mp4_status(db_path: str, mp4_root: Path, threshold_mb: int,
 
     # Check for changes (only read managed columns)
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys = ON")
     try:
         if not existing_all:
             ensure_mp4_table_exists(conn)
@@ -764,6 +767,7 @@ Examples:
 
         # Write to database
         conn = sqlite3.connect(args.db)
+        conn.execute("PRAGMA foreign_keys = ON")
         try:
             ensure_seq_table_exists(conn)
             ensure_mp4_table_exists(conn)

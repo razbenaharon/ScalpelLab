@@ -53,6 +53,7 @@ def load_data_from_database(db_path=None):
 
     try:
         conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
 
         # Query to get all relevant data
         # We join mp4_times with mp4_status to get the video paths
@@ -732,6 +733,7 @@ def update_mp4_status_black_segments(video_path, case_ranges, video_duration, db
 
     try:
         conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
         cur = conn.cursor()
 
         for case_no, segments in black_segments.items():

@@ -18,7 +18,9 @@ def connect_db(db_path):
     """Connect to SQLite database."""
     if not os.path.exists(db_path):
         raise FileNotFoundError(f"Database not found: {db_path}")
-    return sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
 
 
 def get_table_list(conn):
