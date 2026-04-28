@@ -249,6 +249,59 @@ class RepairSeqIdxTests(unittest.TestCase):
         self.assertEqual(Path(str(empty_seq) + ".idx").read_bytes(), empty_expected)
         self.assertEqual(Path(str(bad_seq) + ".idx").read_bytes(), bad_expected)
 
+    def test_write_error_is_reported_without_crashing_scan(self) -> None:
+        seq_path = self.root / "DATA_25-07-22" / "Case1" / "Monitor" / "write_error.seq"
+        build_seq_file(
+            seq_path,
+            [
+                {
+                    "payload": b"\x00\x00\x00\x01\x67",
+                    "flags": 30,
+                    "frame_no_lo16": 1,
+                    "ts_seconds": 1702500000,
+                    "ts_ms": 1,
+                    "ts_us": 2,
+                }
+            ],
+        )
+
+        with mock.patch.object(
+            repair,
+            "write_idx_atomically",
+            side_effect=PermissionError("simulated denied write"),
+        ):
+            results = repair.scan_and_repair(self.root)
+
+        self.assertEqual(results[0].status, "write_error")
+        self.assertIn("simulated denied write", results[0].detail)
+        self.assertFalse(Path(str(seq_path) + ".idx").exists())
+
+    def test_unexpected_per_file_error_is_reported_without_crashing_scan(self) -> None:
+        seq_path = self.root / "DATA_25-07-22" / "Case1" / "Monitor" / "boom.seq"
+        build_seq_file(
+            seq_path,
+            [
+                {
+                    "payload": b"\x00\x00\x00\x01\x67",
+                    "flags": 30,
+                    "frame_no_lo16": 1,
+                    "ts_seconds": 1702600000,
+                    "ts_ms": 1,
+                    "ts_us": 2,
+                }
+            ],
+        )
+
+        with mock.patch.object(
+            repair,
+            "repair_seq_file",
+            side_effect=RuntimeError("simulated unexpected error"),
+        ):
+            results = repair.scan_and_repair(self.root)
+
+        self.assertEqual(results[0].status, "unexpected_error")
+        self.assertIn("RuntimeError:simulated unexpected error", results[0].detail)
+
     def test_excluded_paths_are_skipped(self) -> None:
         junk_seq = self.root / "DATA_25-02-27" / "Case1" / "Monitor_JUNK" / "junk.seq"
         build_seq_file(
