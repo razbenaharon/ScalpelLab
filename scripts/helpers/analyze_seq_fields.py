@@ -326,14 +326,42 @@ def _load_existing_keys(db_path: str) -> set[tuple[str, int, str]]:
         return set()
 
 
+def _load_camera_canonical_map(db_path: str) -> dict[tuple[str, int, str], str]:
+    """
+    Build {(recording_date, case_no, lower(camera_name)): canonical_camera_name}
+    from seq_status, used to case-fold path-derived camera names against the
+    canonical names enforced by the FK on seq_enriched.
+
+    Returns an empty dict if seq_status is unreadable.
+    """
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            rows = conn.execute(
+                "SELECT recording_date, case_no, camera_name FROM seq_status"
+            ).fetchall()
+            return {(r[0], int(r[1]), r[2].lower()): r[2] for r in rows}
+        except sqlite3.OperationalError:
+            return {}
+        finally:
+            conn.close()
+    except Exception:
+        return {}
+
+
 # ---------------------------------------------------------------------------
 # Directory scan
 # ---------------------------------------------------------------------------
-def analyze_directory(root: Path, skip_keys: set | None = None) -> pd.DataFrame:
+def analyze_directory(
+    root: Path,
+    skip_keys: set | None = None,
+    canonical_camera_map: dict[tuple[str, int, str], str] | None = None,
+) -> pd.DataFrame:
     """
     Scan *root* recursively for .seq files; return one-row-per-file DataFrame.
 
-    Files whose path contains a 'JUNK' component (case-insensitive) are skipped.
+    Files under a 'seq_not_for_research' directory or whose path contains a
+    segment ending in '_JUNK' are skipped (matches the repair-pass exclusions).
     Files whose (recording_date, case_no, camera_name) key already appears in
     *skip_keys* are also skipped (used to avoid re-processing known entries).
     Each row includes recording_date / case_no / camera_name parsed from the
@@ -342,18 +370,37 @@ def analyze_directory(root: Path, skip_keys: set | None = None) -> pd.DataFrame:
     """
     all_seq = sorted(root.rglob("*.seq"))
 
-    # Filter out JUNK paths before counting
-    seq_files = [
-        p for p in all_seq
-        if "JUNK" not in (part.upper() for part in p.parts)
-    ]
+    # Filter out paths excluded from the repair pass (case-insensitive,
+    # matching repair_seq_idx.is_excluded_seq_path):
+    #   - any file under a `seq_not_for_research` directory
+    #   - any file whose path contains a segment ending with `_JUNK`
+    def _is_excluded(p: Path) -> bool:
+        for part in p.parts:
+            lowered = part.lower()
+            if lowered == "seq_not_for_research":
+                return True
+            if lowered.endswith("_junk"):
+                return True
+        return False
+
+    seq_files = [p for p in all_seq if not _is_excluded(p)]
     skipped_junk = len(all_seq) - len(seq_files)
 
-    # Filter out files already in the DB
+    canonical_map = canonical_camera_map or {}
+
+    def _canonical_key(p: Path) -> tuple[str, int, str] | None:
+        """Parse the path key and case-fold camera_name against seq_status."""
+        k = _parse_path_key(p, root)
+        if k is None:
+            return None
+        canon = canonical_map.get((k[0], k[1], k[2].lower()))
+        return (k[0], k[1], canon) if canon else k
+
+    # Filter out files already in the DB (compare against canonical keys)
     if skip_keys:
         new_seq_files = []
         for p in seq_files:
-            key = _parse_path_key(p, root)
+            key = _canonical_key(p)
             if key is None or key not in skip_keys:
                 new_seq_files.append(p)
         skipped_db = len(seq_files) - len(new_seq_files)
@@ -378,6 +425,7 @@ def analyze_directory(root: Path, skip_keys: set | None = None) -> pd.DataFrame:
     print(f"Found {total} new .seq files — scanning …{suffix}")
 
     rows = []
+    substitutions: list[tuple[str, str, str, str]] = []  # (date, case_no, raw_cam, canon_cam)
     for i, seq_path in enumerate(seq_files, 1):
         if i % 50 == 0 or i == total:
             print(f"  {i}/{total}\r", end="", flush=True)
@@ -387,8 +435,18 @@ def analyze_directory(root: Path, skip_keys: set | None = None) -> pd.DataFrame:
         fps      = hdr["fps"] if hdr else None
         idx      = parse_idx(idx_path, fps=fps)
 
-        # Extract (recording_date, case_no, camera_name) from path
-        key = _parse_path_key(seq_path, root)
+        # Extract (recording_date, case_no, camera_name) from path, then
+        # case-fold camera_name against the canonical names in seq_status.
+        raw_key = _parse_path_key(seq_path, root)
+        if raw_key is not None:
+            canon = canonical_map.get((raw_key[0], raw_key[1], raw_key[2].lower()))
+            if canon and canon != raw_key[2]:
+                substitutions.append((raw_key[0], str(raw_key[1]), raw_key[2], canon))
+                key = (raw_key[0], raw_key[1], canon)
+            else:
+                key = raw_key
+        else:
+            key = None
 
         try:
             rel = seq_path.relative_to(root)
@@ -437,6 +495,12 @@ def analyze_directory(root: Path, skip_keys: set | None = None) -> pd.DataFrame:
         rows.append(row)
 
     print()  # clear \r progress line
+
+    if substitutions:
+        print(f"  [INFO] Case-folded {len(substitutions)} camera name(s) to match seq_status:")
+        for date, case_no, raw_cam, canon_cam in substitutions:
+            print(f"    {date}  Case{case_no}  {raw_cam!r} -> {canon_cam!r}")
+
     return pd.DataFrame(rows)
 
 
@@ -538,9 +602,34 @@ def write_to_db(df: pd.DataFrame, db_path: str) -> None:
     conn.execute("PRAGMA foreign_keys = ON")
     try:
         _ensure_analysis_table(conn)
+
+        # Pre-load parent keys (FK target) and existing seq_enriched keys so we
+        # can validate writes up front: skip rows missing a seq_status parent,
+        # and warn — but still upsert — when a key already exists in seq_enriched.
+        seq_status_keys: set[tuple[str, int, str]] = {
+            (r[0], int(r[1]), r[2]) for r in conn.execute(
+                "SELECT recording_date, case_no, camera_name FROM seq_status"
+            )
+        }
+        existing_enriched_keys: set[tuple[str, int, str]] = {
+            (r[0], int(r[1]), r[2]) for r in conn.execute(
+                f'SELECT recording_date, case_no, camera_name FROM "{SEQ_ANALYSIS_TABLE}"'
+            )
+        }
+
         cur = conn.cursor()
         rows_written = 0
+        rows_missing_parent: list[tuple[tuple[str, int, str], str]] = []
+        rows_collided:       list[tuple[str, int, str]] = []
         for _, row in writable.iterrows():
+            key = (row["recording_date"], int(row["case_no"]), row["camera_name"])
+
+            if key not in seq_status_keys:
+                rows_missing_parent.append((key, str(row.get("file", ""))))
+                continue
+            if key in existing_enriched_keys:
+                rows_collided.append(key)
+
             values = [row.get("recording_date"), row.get("case_no"), row.get("camera_name")]
             for col in col_names:
                 val = row.get(col)
@@ -558,6 +647,15 @@ def write_to_db(df: pd.DataFrame, db_path: str) -> None:
             rows_written += 1
         conn.commit()
         print(f"  Wrote {rows_written} rows → {SEQ_ANALYSIS_TABLE} in {db_path}")
+
+        if rows_collided:
+            print(f"  [WARN] {len(rows_collided)} row(s) overwrote existing seq_enriched entries:")
+            for k in rows_collided:
+                print(f"    {k}")
+        if rows_missing_parent:
+            print(f"  [WARN] {len(rows_missing_parent)} row(s) skipped — no matching seq_status parent:")
+            for k, f in rows_missing_parent:
+                print(f"    {k}  file={f}")
     finally:
         conn.close()
 
@@ -798,7 +896,15 @@ def main() -> None:
     if skip_keys:
         print(f"  {len(skip_keys)} (recording_date, case_no, camera_name) entries already in DB — will skip")
 
-    df = analyze_directory(root, skip_keys=skip_keys)
+    canonical_map = _load_camera_canonical_map(db_path)
+    if canonical_map:
+        print(f"  Loaded {len(canonical_map)} canonical camera names from seq_status")
+
+    df = analyze_directory(
+        root,
+        skip_keys=skip_keys,
+        canonical_camera_map=canonical_map,
+    )
     if df.empty:
         sys.exit(0)
 

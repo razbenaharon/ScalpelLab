@@ -104,6 +104,19 @@ def sqlite_to_dbdiagram(db_path: str, output_path: str):
         else:
             return "varchar"
 
+    def format_default_value(default_val) -> str:
+        """Format SQLite default values for dbdiagram.io constraints."""
+        value = str(default_val).strip()
+        upper_value = value.upper()
+
+        if (
+            upper_value in {"CURRENT_DATE", "CURRENT_TIME", "CURRENT_TIMESTAMP"}
+            or (value.startswith("(") and value.endswith(")"))
+        ):
+            return f"`{value}`"
+
+        return value
+
     def generate_table_definition(table_name: str, columns: list, foreign_keys: list) -> list:
         """Generate dbdiagram.io table definition lines"""
         lines = []
@@ -132,7 +145,7 @@ def sqlite_to_dbdiagram(db_path: str, output_path: str):
             if not_null and not is_pk:
                 constraints.append("not null")
             if default_val is not None:
-                constraints.append(f"default: {default_val}")
+                constraints.append(f"default: {format_default_value(default_val)}")
 
             if constraints:
                 col_def += f" [{', '.join(constraints)}]"

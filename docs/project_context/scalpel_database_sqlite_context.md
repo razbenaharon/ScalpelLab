@@ -28,11 +28,11 @@ Inspected on 2026-04-28.
 | Property | Value |
 |---|---:|
 | File path | `F:\Projects\ScalpelLab\ScalpelDatabase.sqlite` |
-| File size | 1,437,696 bytes |
-| Last modified | 2026-04-26 10:44:47 |
+| File size | 6,680,576 bytes |
+| Last modified | 2026-04-28 16:06:13 |
 | Integrity check | `ok` |
-| User tables | 7 |
-| User views | 4 |
+| User tables | 8 |
+| User views | 5 |
 | Recording date range | 2022-12-04 to 2025-09-09 |
 | Distinct recording dates | 126 |
 | Distinct recording cases | 176 |
@@ -52,12 +52,13 @@ keys as useful schema intent, not as proof that all existing rows are clean.
 | Table | Rows | Primary key | Purpose |
 |---|---:|---|---|
 | `recording_details` | 176 | `recording_date`, `case_no` | Case-level metadata, signature time, code, anesthesiology link, seniority snapshot. |
-| `analysis_information` | 82 | `recording_date`, `case_no` | Labeling / tagging metadata for analyzed cases. |
+| `analysis_information` | 82 | `recording_date`, `case_no` | Labeling / tagging metadata for analyzed cases, with optional link to a BORIS event. |
 | `anesthesiology` | 73 | `anesthesiology_key` | Anesthesiology roster and career milestone dates. |
+| `boris_events` | 18,321 | `event_id` | BORIS behavioral event tags. Case linkage is through `analysis_information.event_id`. |
 | `seq_status` | 1,440 | `recording_date`, `case_no`, `camera_name` | SEQ file presence, size, and relative path. |
 | `mp4_status` | 1,444 | `recording_date`, `case_no`, `camera_name` | MP4 file presence, size, duration, redaction segment metadata, offset, and relative path. |
 | `mp4_times` | 125 | `case_no`, `recording_date` | Manual or curated case timing ranges used by redaction workflows. |
-| `seq_enriched` | 985 | `recording_date`, `case_no`, `camera_name` | Parsed SEQ header and IDX metadata cache. See [`seq_enriched_table_reference.md`](./seq_enriched_table_reference.md). |
+| `seq_enriched` | 812 | `recording_date`, `case_no`, `camera_name` | Parsed SEQ header and IDX metadata cache. Foreign-keyed to `seq_status` (`ON DELETE CASCADE`). See [`seq_enriched_table_reference.md`](./seq_enriched_table_reference.md). |
 
 ## Views
 
@@ -67,6 +68,7 @@ keys as useful schema intent, not as proof that all existing rows are clean.
 | `cur_seq_missing` | 0 | Camera rows where an MP4 exists but the matching SEQ status row has no size. |
 | `cur_seniority` | 73 | Current anesthesiology seniority and attending/resident status derived from dates. |
 | `cur_mp4_status_statistics` | 162 | Recording-level camera counts used by the MP4 statistics dashboard. |
+| `cur_boris_intervals` | 43 | START/STOP BORIS event pairs expanded through `analysis_information.event_id`; current linked rows are all `MISSING_STOP`. |
 
 ## Core Relationships
 
@@ -78,8 +80,13 @@ Intended relationships:
 - `recording_details(recording_date, case_no)` is the case metadata anchor.
 - `analysis_information(recording_date, case_no)` stores analysis labels for a
   subset of cases.
+- `analysis_information.event_id` optionally foreign-keys to
+  `boris_events.event_id`.
 - `seq_status`, `mp4_status`, `mp4_times`, and `seq_enriched` are keyed by the
   same date/case pattern.
+- `seq_enriched(recording_date, case_no, camera_name)` foreign-keys to
+  `seq_status(recording_date, case_no, camera_name)` with `ON DELETE CASCADE`,
+  so removing a SEQ status row also drops its enrichment cache.
 - `recording_details.anesthesiology_key` points to
   `anesthesiology.anesthesiology_key`.
 
@@ -101,6 +108,15 @@ validity.
 | `anesthesiology_key` | `INTEGER` | Optional link to `anesthesiology`. |
 | `months_anesthetic_recording` | `INTEGER` | Seniority at recording time. |
 | `anesthetic_attending` | `TEXT` | Stored attending/resident-style classification. |
+
+### `analysis_information`
+
+| Column | Type | Notes |
+|---|---|---|
+| `recording_date` | `TEXT` | Normalized date, primary key part. |
+| `case_no` | `INTEGER` | Case number for the date, primary key part. |
+| `label_by` | `TEXT` | Labeling / tagging attribution. |
+| `event_id` | `INTEGER` | Optional foreign key to `boris_events.event_id`; currently populated for 57 rows. |
 
 ### `seq_status`
 
@@ -130,6 +146,20 @@ validity.
 - `start_3`, `end_3`
 
 Current rows: 125 total, 24 with a second segment, and 3 with a third segment.
+
+### `boris_events`
+
+| Column | Type | Notes |
+|---|---|---|
+| `event_id` | `INTEGER` | Autoincrement primary key. |
+| `subject` | `TEXT` | BORIS subject value. |
+| `behavior` | `TEXT` | BORIS behavior label. |
+| `behavior_type` | `TEXT` | Event type, usually `START`, `STOP`, or `POINT`. |
+| `modifier_1`, `modifier_2`, `modifier_3` | `TEXT` | Optional BORIS modifiers. |
+| `time_s` | `REAL` | Event time in seconds. |
+| `source_file` | `TEXT` | Imported BORIS TSV filename. |
+| `source_row_number` | `INTEGER` | Row number in the source TSV. |
+| `imported_at` | `TEXT` | Import timestamp. |
 
 ## Camera Coverage
 
@@ -173,19 +203,34 @@ Default camera names are defined in `config.py`:
 ## `seq_enriched` Notes
 
 `seq_enriched` is a richer cache built from SEQ headers and companion IDX files.
-It stores one row per camera recording when enrichment has been run. The table
-contains standard cameras plus junk/variant camera-name rows such as
-`*_JUNK`, `*_Junk`, and uppercase `CART_LT_4`.
+It stores one row per camera recording when enrichment has been run. Every row
+references an existing `seq_status` row through the
+`(recording_date, case_no, camera_name)` foreign key, so the table is restricted
+to the canonical 8-camera set; the prior `*_JUNK`, `*_Junk`, and uppercase
+`CART_LT_4` variants have been pruned or recased.
 
 Current high-level state:
 
 | Metric | Value |
 |---|---:|
-| Rows | 985 |
-| Rows with `has_idx = 1` | 949 |
-| Rows with `header_ok = 1` | 975 |
-| Rows with parsed `idx_frames` | 951 |
-| Average `drop_rate` | 0.001739 |
+| Rows | 812 |
+| Rows with `has_idx = 1` | 783 |
+| Rows with `header_ok = 1` | 811 |
+| Rows with parsed `idx_frames` | 783 |
+| Average `drop_rate` | 0.000044 |
+
+Per-camera row counts:
+
+| Camera | Rows |
+|---|---:|
+| `Cart_Center_2` | 116 |
+| `Cart_LT_4` | 113 |
+| `Cart_RT_1` | 118 |
+| `General_3` | 117 |
+| `Injection_Port` | 11 |
+| `Monitor` | 101 |
+| `Patient_Monitor` | 118 |
+| `Ventilator_Monitor` | 118 |
 
 For column-by-column definitions, use
 [`seq_enriched_table_reference.md`](./seq_enriched_table_reference.md).
