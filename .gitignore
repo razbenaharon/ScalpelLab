@@ -21,6 +21,7 @@ coverage.xml
 *.log
 .pytest_cache/
 .mypy_cache/
+.tmp_tests/
 
 # Temporary Claude Code files
 tmpclaude-*-cwd
