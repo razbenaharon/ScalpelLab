@@ -49,8 +49,8 @@ Table mp4_status {
 }
 
 Table mp4_times {
-  recording_date varchar [pk] // FK to recording_details.recording_date
-  case_no        int [pk] // FK to recording_details.case_no
+  recording_date varchar [pk] // FK to mp4_status.recording_date
+  case_no        int [pk] // FK to mp4_status.case_no
   start_1        int
   end_1          int
   start_2        int
@@ -113,7 +113,7 @@ Table seq_status {
   path           varchar
 }
 
-// Relationships detected from database:
+// Relationships detected from database, with documented diagram overrides:
 Ref: boris_events.event_id > analysis_information.event_id
 Ref: analysis_information.recording_date > recording_details.recording_date
 Ref: analysis_information.case_no > recording_details.case_no
@@ -125,5 +125,5 @@ Ref: recording_details.recording_date > mp4_status.recording_date
 Ref: seq_status.recording_date > seq_enriched.recording_date
 Ref: seq_status.case_no > seq_enriched.case_no
 Ref: seq_status.camera_name > seq_enriched.camera_name
-Ref: recording_details.recording_date > mp4_times.recording_date
-Ref: recording_details.case_no > mp4_times.case_no
+Ref: mp4_status.recording_date > mp4_times.recording_date
+Ref: mp4_status.case_no > mp4_times.case_no

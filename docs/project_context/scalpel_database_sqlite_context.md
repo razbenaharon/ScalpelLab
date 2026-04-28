@@ -84,6 +84,10 @@ Intended relationships:
   `boris_events.event_id`.
 - `seq_status`, `mp4_status`, `mp4_times`, and `seq_enriched` are keyed by the
   same date/case pattern.
+- `mp4_times(recording_date, case_no)` is the case-level timing companion for
+  `mp4_status(recording_date, case_no, camera_name)`. Diagram exports show this
+  relationship on the shared date/case columns; `mp4_status` remains
+  camera-level through `camera_name`.
 - `seq_enriched(recording_date, case_no, camera_name)` foreign-keys to
   `seq_status(recording_date, case_no, camera_name)` with `ON DELETE CASCADE`,
   so removing a SEQ status row also drops its enrichment cache.
@@ -146,6 +150,8 @@ validity.
 - `start_3`, `end_3`
 
 Current rows: 125 total, 24 with a second segment, and 3 with a third segment.
+These timings are consumed by joining to `mp4_status` on `recording_date` and
+`case_no`, then applying the same timing ranges to each matching camera row.
 
 ### `boris_events`
 
