@@ -652,10 +652,39 @@ def repair_seq_file(
         return RepairResult(str(seq_path), str(idx_path), "ok", "", frame_count)
 
     if not dry_run:
-        write_idx_atomically(idx_path, regenerated)
+        try:
+            write_idx_atomically(idx_path, regenerated)
+        except OSError as exc:
+            return RepairResult(
+                str(seq_path),
+                str(idx_path),
+                "write_error",
+                str(exc),
+                frame_count,
+            )
 
     status = "created" if action == "create" else "replaced"
     return RepairResult(str(seq_path), str(idx_path), status, "", frame_count)
+
+
+def safe_repair_seq_file(
+    seq_path: Path, dry_run: bool = False, verify_existing: bool = True
+) -> RepairResult:
+    """Repair one SEQ file without letting file-specific errors stop the scan."""
+    try:
+        return repair_seq_file(
+            seq_path,
+            dry_run=dry_run,
+            verify_existing=verify_existing,
+        )
+    except Exception as exc:  # pragma: no cover - defensive batch guard
+        idx_path = Path(str(seq_path) + ".idx")
+        return RepairResult(
+            str(seq_path),
+            str(idx_path),
+            "unexpected_error",
+            f"{type(exc).__name__}:{exc}",
+        )
 
 
 class RepairTracker:
@@ -806,7 +835,7 @@ def scan_and_repair(
             return
         try:
             tracker.record(result)
-        except OSError as exc:
+        except Exception as exc:
             print(f"\n[WARNING] Could not update tracking file {tracker.path}: {exc}")
             tracker = None
 
@@ -828,9 +857,12 @@ def scan_and_repair(
             processed_count += 1
             progress.update(processed_count, "tracked")
 
+        if processed_count:
+            progress.update(processed_count, "tracked", force=True)
+
         if worker_count == 1:
             for index, seq_path in pending:
-                result = repair_seq_file(
+                result = safe_repair_seq_file(
                     seq_path,
                     dry_run=dry_run,
                     verify_existing=verify_existing,
@@ -844,7 +876,7 @@ def scan_and_repair(
             with ThreadPoolExecutor(max_workers=pending_worker_count) as executor:
                 futures = {
                     executor.submit(
-                        repair_seq_file,
+                        safe_repair_seq_file,
                         seq_path,
                         dry_run,
                         verify_existing,
@@ -853,7 +885,16 @@ def scan_and_repair(
                 }
                 for future in as_completed(futures):
                     index = futures[future]
-                    result = future.result()
+                    try:
+                        result = future.result()
+                    except Exception as exc:  # pragma: no cover - defensive guard
+                        seq_path = seq_paths[index]
+                        result = RepairResult(
+                            str(seq_path),
+                            str(Path(str(seq_path) + ".idx")),
+                            "unexpected_error",
+                            f"{type(exc).__name__}:{exc}",
+                        )
                     ordered_results[index] = result
                     record_result(result)
                     processed_count += 1
@@ -1033,7 +1074,12 @@ def main(argv: list[str] | None = None) -> int:
         write_report(Path(args.report), summary)
 
     counts = summary["counts"]
-    failures = counts.get("skipped_invalid_seq", 0) + counts.get("skipped_unsupported", 0)
+    failures = (
+        counts.get("skipped_invalid_seq", 0)
+        + counts.get("skipped_unsupported", 0)
+        + counts.get("write_error", 0)
+        + counts.get("unexpected_error", 0)
+    )
     return 0 if failures == 0 else 1
 
 
