@@ -11,6 +11,14 @@ import os
 from datetime import date
 from typing import List, Dict, Tuple
 
+DIAGRAM_FK_OVERRIDES = {
+    # mp4_times is case-level timing data consumed through mp4_status. The
+    # live SQLite schema still points at recording_details, but the project
+    # diagram treats mp4_status as the operational parent on the shared case key.
+    ("mp4_times", "recording_date"): ("mp4_status", "recording_date"),
+    ("mp4_times", "case_no"): ("mp4_status", "case_no"),
+}
+
 def parse_foreign_keys_from_sql(create_sql: str) -> List[Tuple[str, str, str]]:
     """Extract foreign key relationships from CREATE TABLE SQL"""
     fk_pattern = r'FOREIGN KEY\s*\(\s*([^)]+)\s*\)\s*REFERENCES\s*["\']?([^"\'(\s]+)["\']?\s*(?:\(\s*([^)]+)\s*\))?'
@@ -163,6 +171,16 @@ def sqlite_to_dbdiagram(db_path: str, output_path: str):
         lines.append("}")
         return lines
 
+    def apply_diagram_fk_overrides(table_name: str, foreign_keys: list) -> list:
+        """Return foreign keys adjusted for project-level diagram intent."""
+        adjusted = []
+        for local_col, ref_table, ref_col in foreign_keys:
+            adjusted.append((
+                local_col,
+                *DIAGRAM_FK_OVERRIDES.get((table_name, local_col), (ref_table, ref_col)),
+            ))
+        return adjusted
+
     # Handle sqlite_sequence first if it exists
     if 'sqlite_sequence' in table_schemas:
         output_lines.append("//// System table from SQLite. Usually not modeled, included here for completeness.")
@@ -177,7 +195,7 @@ def sqlite_to_dbdiagram(db_path: str, output_path: str):
     regular_tables = sorted([t for t in table_schemas.keys() if t not in system_tables])
 
     for table in regular_tables:
-        table_fks = all_foreign_keys.get(table, [])
+        table_fks = apply_diagram_fk_overrides(table, all_foreign_keys.get(table, []))
         output_lines.extend(generate_table_definition(
             table,
             table_schemas[table],
@@ -187,11 +205,11 @@ def sqlite_to_dbdiagram(db_path: str, output_path: str):
 
     # Generate relationships dynamically from detected foreign keys
     if all_foreign_keys:
-        output_lines.append("// Relationships detected from database:")
+        output_lines.append("// Relationships detected from database, with documented diagram overrides:")
         seen_refs = set()  # Track seen relationships to avoid duplicates
 
         for table, foreign_keys in all_foreign_keys.items():
-            for local_col, ref_table, ref_col in foreign_keys:
+            for local_col, ref_table, ref_col in apply_diagram_fk_overrides(table, foreign_keys):
                 # Default to primary key if ref_col is not specified
                 if not ref_col:
                     # Find primary key of referenced table
