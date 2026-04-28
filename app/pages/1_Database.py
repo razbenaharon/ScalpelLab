@@ -129,7 +129,7 @@ else:
                     input_values[col_name] = date_str
 
                 # Handle code field - auto-generate but allow editing
-                elif col_name == "code":
+                elif col_name == "staff_code":
                     # Generate code from current name and date
                     date_str = st.session_state.anes_start_date.strftime("%Y-%m-%d") if st.session_state.anes_start_date else None
                     auto_code = generate_anesthesiology_code(st.session_state.anes_name, date_str)

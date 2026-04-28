@@ -29,6 +29,7 @@ def sqlite_to_dbdiagram(db_path: str, output_path: str):
     """Convert SQLite database to dbdiagram.io format"""
 
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys = ON")
     cursor = conn.cursor()
 
     # Get all tables including sqlite_sequence

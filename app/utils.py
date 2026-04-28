@@ -36,6 +36,7 @@ def connect(db_path: str) -> Generator[sqlite3.Connection, None, None]:
         ...     results = cursor.fetchall()
     """
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
     finally:

@@ -568,8 +568,9 @@ class SyncPanel:
                         db_path = configured_path
 
             conn = sqlite3.connect(db_path)
+            conn.execute("PRAGMA foreign_keys = ON")
             cursor = conn.cursor()
-            
+
             for cam in cameras_to_save:
                 recording_date, case_no = cam.case_id
                 

@@ -311,6 +311,7 @@ def _load_existing_keys(db_path: str) -> set[tuple[str, int, str]]:
     """
     try:
         conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
         try:
             rows = conn.execute(
                 f'SELECT recording_date, case_no, camera_name FROM "{SEQ_ANALYSIS_TABLE}"'
@@ -534,6 +535,7 @@ def write_to_db(df: pd.DataFrame, db_path: str) -> None:
     """
 
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys = ON")
     try:
         _ensure_analysis_table(conn)
         cur = conn.cursor()

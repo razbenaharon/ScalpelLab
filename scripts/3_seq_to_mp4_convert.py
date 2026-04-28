@@ -430,7 +430,9 @@ def detect_resolution(seq_path: Path, ffprobe_path: str) -> Tuple[int, int, str]
 # Database Functions
 # =========================
 def connect_db(db_path: str) -> sqlite3.Connection:
-    return sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
 
 
 def get_seq_enriched_metadata(
