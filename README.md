@@ -49,29 +49,29 @@ Sequence_Backup/                    Recordings/
 python config.py
 ```
 
-### 4. Launch the Streamlit app
+### 4. Launch the desktop app
 
 ```bash
 python run_app.py
 ```
 
-`run_app.py` starts Streamlit with `streamlit run app/app.py`.
+`run_app.py` starts the NiceGUI app via `python -m app.app`, which opens a
+native pywebview window.
 
 ## Main Components
 
-### Streamlit App
+### NiceGUI App
 
 The dashboard lives under [`app/`](app/) and currently includes:
 
-- [`app/app.py`](app/app.py): landing page, DB selector, and ERD preview from
-  `docs/ERD.pdf`.
-- [`app/pages/1_Database.py`](app/pages/1_Database.py): browse tables, inspect
+- [`app/app.py`](app/app.py): entry point, landing page, DB selector, and ERD
+  preview from `docs/ERD.pdf`.
+- [`app/pages/database.py`](app/pages/database.py): browse tables, inspect
   schema, insert rows, delete rows.
-- [`app/pages/2_Status_Summary.py`](app/pages/2_Status_Summary.py): per-camera
+- [`app/pages/status_summary.py`](app/pages/status_summary.py): per-camera
   MP4 / SEQ presence summaries.
-- [`app/pages/3_Views.py`](app/pages/3_Views.py): browse database views and
-  export results.
-- [`app/pages/4_MP4_Statistics.py`](app/pages/4_MP4_Statistics.py): interactive
+- [`app/pages/views.py`](app/pages/views.py): browse database views.
+- [`app/pages/mp4_statistics.py`](app/pages/mp4_statistics.py): interactive
   analytics for `cur_mp4_status_statistics`.
 
 ### Database And Migrations
