@@ -23,11 +23,22 @@ NAV_LINKS = [
 
 @contextmanager
 def page_frame(title: str):
-    with ui.header().classes("items-center justify-between"):
-        ui.label("ScalpelLab DB").classes("text-h6")
-        ui.label(title).classes("text-subtitle1")
+    dark = ui.dark_mode(value=state.is_dark())
+    dark.on_value_change(lambda e: state.set_dark(e.value))
 
-    with ui.left_drawer(value=True, fixed=False).classes("bg-grey-2"):
+    with ui.header().classes("items-center justify-between"):
+        with ui.row().classes("items-center q-gutter-md"):
+            ui.label("ScalpelLab DB").classes("text-h6")
+            ui.label(title).classes("text-subtitle1")
+        toggle = ui.button(
+            icon="dark_mode" if dark.value else "light_mode",
+            on_click=dark.toggle,
+        ).props("flat round color=white").tooltip("Toggle dark mode")
+        dark.on_value_change(
+            lambda e, b=toggle: b.props(f'icon={"dark_mode" if e.value else "light_mode"}')
+        )
+
+    with ui.left_drawer(value=True, fixed=False):
         ui.label("Database").classes("text-bold q-mt-sm")
         db_input = ui.input("SQLite DB Path", value=state.get()).classes("w-full")
         db_input.on_value_change(lambda e: state.set_(e.value))

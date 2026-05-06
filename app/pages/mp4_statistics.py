@@ -24,15 +24,19 @@ C_PURPLE = "#8B5CC2"
 C_PINK = "#D94F8F"
 BAR_COLORS = [C_RED, C_ORANGE, C_TEAL, C_BLUE, C_PURPLE, "#3A7DD8", C_PINK]
 
-LAYOUT_COMMON = dict(
-    paper_bgcolor="rgba(0,0,0,0)",
-    plot_bgcolor="rgba(0,0,0,0)",
-    font=dict(color="white"),
-)
-TEXT_STYLE = dict(
-    textfont=dict(size=14, color="white"),
-    textposition="outside",
-)
+def _theme_colors() -> tuple[str, dict, dict]:
+    """Return (axis_color, layout_common, text_style) for the active theme."""
+    axis_color = "#e5e7eb" if state.is_dark() else "#1f2937"
+    layout_common = dict(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color=axis_color),
+    )
+    text_style = dict(
+        textfont=dict(size=14, color=axis_color),
+        textposition="outside",
+    )
+    return axis_color, layout_common, text_style
 
 
 def kpi(label: str, value, hint: str | None = None) -> None:
@@ -51,6 +55,7 @@ def run_query(db_path: str, sql: str) -> pd.DataFrame:
 @ui.page("/mp4-stats")
 def mp4_statistics_page() -> None:
     with page_frame("MP4 Statistics"):
+        AXIS_COLOR, LAYOUT_COMMON, TEXT_STYLE = _theme_colors()
         db_path = state.get()
         ui.label("MP4 Statistics Dashboard").classes("text-h5")
 
@@ -132,12 +137,12 @@ def mp4_statistics_page() -> None:
                 fig_yr.add_trace(go.Bar(
                     x=yearly["year"], y=yearly["Recordings"], name="Recordings",
                     marker_color=C_BLUE, text=yearly["Recordings"],
-                    textfont=dict(size=14, color="white"), textposition="outside",
+                    textfont=dict(size=14, color=AXIS_COLOR), textposition="outside",
                 ))
                 fig_yr.add_trace(go.Bar(
                     x=yearly["year"], y=yearly["Surgery Days"], name="Surgery Days",
                     marker_color=C_TEAL, text=yearly["Surgery Days"],
-                    textfont=dict(size=14, color="white"), textposition="outside",
+                    textfont=dict(size=14, color=AXIS_COLOR), textposition="outside",
                 ))
                 fig_yr.update_layout(
                     **LAYOUT_COMMON, title="Yearly Overview", barmode="group",

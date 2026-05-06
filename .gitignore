@@ -25,3 +25,6 @@ coverage.xml
 
 # Temporary Claude Code files
 tmpclaude-*-cwd
+
+# NiceGUI runtime storage (app.storage.general etc.)
+.nicegui/

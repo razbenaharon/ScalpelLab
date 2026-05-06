@@ -13,6 +13,7 @@ from config import get_db_path
 
 
 DB_PATH_KEY = "db_path"
+DARK_MODE_KEY = "dark_mode"
 
 
 def default_db_path() -> str:
@@ -25,3 +26,11 @@ def get() -> str:
 
 def set_(value: str) -> None:
     app.storage.general[DB_PATH_KEY] = value
+
+
+def is_dark() -> bool:
+    return bool(app.storage.general.get(DARK_MODE_KEY, False))
+
+
+def set_dark(value: bool) -> None:
+    app.storage.general[DARK_MODE_KEY] = bool(value)
