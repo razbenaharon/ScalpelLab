@@ -104,7 +104,13 @@
       "Bash(C:/ProgramData/anaconda3/python.exe -c \"import numpy, pandas; print\\('base ok'\\)\")",
       "Bash(C:/ProgramData/anaconda3/python.exe scripts/helpers/analyze_seq_fields.py)",
       "Bash(PYTHONIOENCODING=utf-8 C:/ProgramData/anaconda3/python.exe scripts/helpers/analyze_seq_fields.py)",
-      "Bash(C:/ProgramData/anaconda3/python.exe -c ' *)"
+      "Bash(C:/ProgramData/anaconda3/python.exe -c ' *)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\User\\\\Desktop\\\\Python\\\\ScalpelLab\" -Recurse -Name)",
+      "Bash(git rev-list *)",
+      "Bash(py -3 -c \"import nicegui; print\\(nicegui.__version__\\)\")",
+      "Bash(py -3.13 -c \"import nicegui; print\\('313 ok', nicegui.__version__\\)\")",
+      "Bash(py -3.14 -c \"import nicegui; print\\('314 ok', nicegui.__version__\\)\")",
+      "Bash(git check-ignore *)"
     ],
     "deny": [],
     "ask": []
