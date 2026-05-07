@@ -66,7 +66,7 @@ def _column_classifier(col_name: str, ctype: str) -> str:
 def database_page() -> None:
     with page_frame("Database Management"):
         db_path = state.get()
-        ui.label("Database Management").classes("text-h5")
+        ui.label("Database Management").classes("section-h text-h5 text-weight-medium")
 
         try:
             tables = list_tables(db_path)
@@ -98,7 +98,7 @@ def database_page() -> None:
             schema_df = get_table_schema(db_path, table)
             cols_meta = schema_df.to_dict(orient="records")
 
-            ui.label(f"Insert into {table}").classes("text-h6 q-mt-md")
+            ui.label(f"Insert into {table}").classes("text-subtitle1 text-weight-medium")
 
             anes = ctx["anes"]
             is_anes = table == "anesthesiology"
@@ -269,18 +269,26 @@ def database_page() -> None:
 
         @ui.refreshable
         def data_grid() -> None:
-            ui.separator().classes("q-my-md")
-            ui.label(f"{ctx['table']} Data").classes("text-h6")
+            ui.label(f"{ctx['table']} — rows").classes("text-subtitle1 text-weight-medium")
             df = load_table(db_path, ctx["table"])
             if df.empty:
                 ui.label("Table is empty.").classes("text-warning")
                 return
-            ui.aggrid.from_pandas(df).classes("w-full").style("height: 400px")
+            ui.aggrid({
+                "defaultColDef": {
+                    "sortable": True, "filter": True,
+                    "resizable": True, "floatingFilter": True,
+                },
+                "columnDefs": [{"field": c} for c in df.columns],
+                "rowData": df.to_dict("records"),
+                "pagination": True,
+                "paginationPageSize": 25,
+                "animateRows": True,
+            }).classes("ag-theme-balham w-full").style("height: 540px")
 
         @ui.refreshable
         def delete_section() -> None:
-            ui.separator().classes("q-my-md")
-            ui.label("Delete Row").classes("text-h6")
+            ui.label("Delete row").classes("text-subtitle1 text-weight-medium")
 
             table = ctx["table"]
             df = load_table(db_path, table)
@@ -372,13 +380,23 @@ def database_page() -> None:
             data_grid.refresh()
             delete_section.refresh()
 
-        ui.select(
-            options=tables,
-            value=ctx["table"],
-            label="Target table",
-            on_change=on_table_change,
-        ).classes("w-full")
+        with ui.card().classes("surface-1 w-full q-pa-md"):
+            ui.label("Target table").classes("text-caption muted")
+            ui.select(
+                options=tables,
+                value=ctx["table"],
+                on_change=on_table_change,
+            ).props("outlined dense options-dense").classes("w-full")
 
-        form_section()
-        data_grid()
-        delete_section()
+        with ui.tabs().classes("w-full") as table_tabs:
+            t_browse = ui.tab("Browse",  icon="table_view")
+            t_insert = ui.tab("Insert",  icon="add_circle")
+            t_delete = ui.tab("Delete",  icon="delete_outline")
+
+        with ui.tab_panels(table_tabs, value=t_browse).classes("w-full surface-1"):
+            with ui.tab_panel(t_browse):
+                data_grid()
+            with ui.tab_panel(t_insert):
+                form_section()
+            with ui.tab_panel(t_delete):
+                delete_section()

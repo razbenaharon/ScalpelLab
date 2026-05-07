@@ -14,7 +14,7 @@ from app.utils import list_views, load_table
 def views_page() -> None:
     with page_frame("Database Views"):
         db_path = state.get()
-        ui.label("Database Views").classes("text-h5")
+        ui.label("Database Views").classes("section-h text-h5 text-weight-medium")
 
         try:
             views = list_views(db_path)
