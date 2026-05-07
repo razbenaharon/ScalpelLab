@@ -110,7 +110,10 @@
       "Bash(py -3 -c \"import nicegui; print\\(nicegui.__version__\\)\")",
       "Bash(py -3.13 -c \"import nicegui; print\\('313 ok', nicegui.__version__\\)\")",
       "Bash(py -3.14 -c \"import nicegui; print\\('314 ok', nicegui.__version__\\)\")",
-      "Bash(git check-ignore *)"
+      "Bash(git check-ignore *)",
+      "Bash(git-crypt unlock *)",
+      "Bash(git stash *)",
+      "Bash(git-crypt status *)"
     ],
     "deny": [],
     "ask": []
