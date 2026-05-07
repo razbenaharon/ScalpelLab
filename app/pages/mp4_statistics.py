@@ -57,7 +57,7 @@ def mp4_statistics_page() -> None:
     with page_frame("MP4 Statistics"):
         AXIS_COLOR, LAYOUT_COMMON, TEXT_STYLE = _theme_colors()
         db_path = state.get()
-        ui.label("MP4 Statistics Dashboard").classes("text-h5")
+        ui.label("MP4 Statistics Dashboard").classes("section-h text-h5 text-weight-medium")
 
         try:
             df = run_query(

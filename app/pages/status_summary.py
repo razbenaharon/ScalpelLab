@@ -67,7 +67,7 @@ def stats_to_dataframe(camera_stats: dict, labels: dict, status_order) -> pd.Dat
 def status_summary_page() -> None:
     with page_frame("Status Summary"):
         db_path = state.get()
-        ui.label("Status Summary (mp4_status & seq_status)").classes("text-h5")
+        ui.label("Status Summary (mp4_status & seq_status)").classes("section-h text-h5 text-weight-medium")
 
         opts = {
             "mp4_table": "mp4_status",

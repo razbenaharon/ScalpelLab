@@ -10,43 +10,69 @@ from contextlib import contextmanager
 from nicegui import ui
 
 from . import state
+from .theme import apply_global_theme
 
 
+# (label, href, icon, page_title)
 NAV_LINKS = [
-    ("Home", "/"),
-    ("Database", "/database"),
-    ("Status Summary", "/status"),
-    ("Views", "/views"),
-    ("MP4 Statistics", "/mp4-stats"),
+    ("Home",          "/",          "dashboard",   "Home"),
+    ("Database",      "/database",  "table_view",  "Database Management"),
+    ("Status",        "/status",    "rule",        "Status Summary"),
+    ("Views",         "/views",     "visibility",  "Database Views"),
+    ("MP4 Stats",     "/mp4-stats", "insights",    "MP4 Statistics"),
 ]
 
 
 @contextmanager
 def page_frame(title: str):
+    apply_global_theme()
     dark = ui.dark_mode(value=state.is_dark())
     dark.on_value_change(lambda e: state.set_dark(e.value))
 
-    with ui.header().classes("items-center justify-between"):
-        with ui.row().classes("items-center q-gutter-md"):
-            ui.label("ScalpelLab DB").classes("text-h6")
-            ui.label(title).classes("text-subtitle1")
-        toggle = ui.button(
-            icon="dark_mode" if dark.value else "light_mode",
-            on_click=dark.toggle,
-        ).props("flat round color=white").tooltip("Toggle dark mode")
-        dark.on_value_change(
-            lambda e, b=toggle: b.props(f'icon={"dark_mode" if e.value else "light_mode"}')
-        )
+    # ── Header ───────────────────────────────────────────────────────────
+    with ui.header().classes("items-center justify-between q-px-md").style(
+        "background: linear-gradient(90deg, #4F46E5 0%, #6366F1 100%);"
+    ):
+        with ui.row().classes("items-center gap-3"):
+            ui.icon("biotech").classes("text-2xl text-white")
+            ui.label("ScalpelLab DB").classes("text-white text-weight-bold").style("font-size: 16px;")
+            ui.label("/").classes("text-white opacity-50")
+            ui.label(title).classes("text-white opacity-90").style("font-size: 14px;")
 
-    with ui.left_drawer(value=True, fixed=False):
-        ui.label("Database").classes("text-bold q-mt-sm")
-        db_input = ui.input("SQLite DB Path", value=state.get()).classes("w-full")
-        db_input.on_value_change(lambda e: state.set_(e.value))
+        with ui.row().classes("items-center gap-2"):
+            toggle = ui.button(
+                icon="dark_mode" if dark.value else "light_mode",
+                on_click=dark.toggle,
+            ).props("flat round color=white").tooltip("Toggle dark mode")
+            dark.on_value_change(
+                lambda e, b=toggle: b.props(f'icon={"dark_mode" if e.value else "light_mode"}')
+            )
 
-        ui.separator().classes("q-my-md")
-        ui.label("Navigation").classes("text-bold")
-        for label, href in NAV_LINKS:
-            ui.link(label, href).classes("block q-py-xs")
+    # ── Left drawer ──────────────────────────────────────────────────────
+    with ui.left_drawer(value=True, fixed=False).classes("q-pa-none").style("min-width: 240px;"):
+        with ui.column().classes("w-full q-pt-md gap-1"):
+            ui.label("DATABASE").classes("text-caption muted q-px-md").style("letter-spacing: 1px;")
+            with ui.row().classes("items-center w-full no-wrap q-px-md q-mt-xs"):
+                db_input = (
+                    ui.input(value=state.get(), placeholder="path/to/file.sqlite")
+                    .props('outlined dense clearable')
+                    .classes("flex-grow")
+                )
+                with db_input.add_slot("prepend"):
+                    ui.icon("storage").classes("muted")
+                db_input.on_value_change(lambda e: state.set_(e.value))
 
-    with ui.column().classes("w-full q-pa-md"):
+            ui.separator().classes("q-my-md")
+
+            ui.label("NAVIGATION").classes("text-caption muted q-px-md").style("letter-spacing: 1px;")
+            with ui.column().classes("w-full gap-0 q-mt-xs"):
+                for label, href, icon, page_title in NAV_LINKS:
+                    is_active = (page_title == title)
+                    cls = "nav-link active" if is_active else "nav-link"
+                    with ui.link(target=href).classes(cls):
+                        ui.icon(icon)
+                        ui.label(label)
+
+    # ── Page body ────────────────────────────────────────────────────────
+    with ui.column().classes("w-full q-pa-lg gap-4"):
         yield
