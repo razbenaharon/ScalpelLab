@@ -18,6 +18,94 @@ from app.utils import connect, get_table_schema, list_tables, load_table
 
 SKIP_COLUMNS = {"date_case", "months_anesthetic_recording", "anesthetic_attending"}
 
+GROUP_ORDER = ["Anesthesiologist", "Identity", "Dates & Times", "Numeric", "Notes", "Other"]
+
+
+def _bucket_for(col_name: str, kind: str) -> str:
+    if kind in ("date", "time", "signature_time"):
+        return "Dates & Times"
+    if kind in ("int", "float"):
+        return "Numeric"
+    if kind == "textarea":
+        return "Notes"
+    lc = col_name.lower()
+    if lc == "name" or lc.endswith(("_key", "_code", "_id")):
+        return "Identity"
+    return "Other"
+
+
+def _humanize(name: str) -> str:
+    return name.replace("_", " ").strip().title()
+
+
+def _date_picker(label: str, default: str, classes: str = "w-full") -> "ui.input":
+    el = ui.input(label, value=default).props("outlined dense readonly").classes(classes)
+    with el:
+        with ui.menu().props("no-parent-event") as menu:
+            with ui.date().bind_value(el):
+                with ui.row().classes("justify-end"):
+                    ui.button("Close", on_click=menu.close).props("flat")
+        with el.add_slot("append"):
+            ui.icon("event").on("click", menu.open).classes("cursor-pointer")
+    return el
+
+
+def _time_picker(label: str, default: str, classes: str = "w-full") -> "ui.input":
+    el = ui.input(label, value=default).props("outlined dense readonly").classes(classes)
+    with el:
+        with ui.menu().props("no-parent-event") as menu:
+            with ui.time().bind_value(el):
+                with ui.row().classes("justify-end"):
+                    ui.button("Close", on_click=menu.close).props("flat")
+        with el.add_slot("append"):
+            ui.icon("schedule").on("click", menu.open).classes("cursor-pointer")
+    return el
+
+
+def _render_generic_field(col: dict, kind: str, ctx: dict) -> None:
+    """Render a non-anesthesiology field into the current container."""
+    name = col["name"]
+    not_null = bool(col.get("notnull", 0))
+    label = _humanize(name) + (" *" if not_null else "")
+    required_text = {"Required": lambda v: v not in (None, "")}
+
+    if kind == "date":
+        el = _date_picker(label, dt_date.today().strftime("%Y-%m-%d"))
+        ctx["inputs"][name] = el
+    elif kind == "time":
+        el = _time_picker(label, "00:00:00")
+        ctx["inputs"][name] = el
+    elif kind == "signature_time":
+        with ui.element("div").classes("md:col-span-2 w-full"):
+            with ui.row().classes("w-full no-wrap gap-2"):
+                d_el = _date_picker(f"{label} (date)", dt_date.today().strftime("%Y-%m-%d"), "flex-grow")
+                t_el = _time_picker(f"{label} (time)", "00:00:00", "flex-grow")
+        ctx["inputs"][name] = ("signature_time", d_el, t_el)
+    elif kind == "int":
+        el = ui.number(label, value=None, format="%d", step=1).props(
+            "outlined dense clearable"
+        ).classes("w-full")
+        if not_null:
+            el.validation = required_text
+        ctx["inputs"][name] = el
+    elif kind == "float":
+        el = ui.number(label, value=None).props("outlined dense clearable").classes("w-full")
+        if not_null:
+            el.validation = required_text
+        ctx["inputs"][name] = el
+    elif kind == "textarea":
+        el = ui.textarea(label).props(
+            "outlined autogrow counter maxlength=1000"
+        ).classes("w-full md:col-span-2")
+        if not_null:
+            el.validation = required_text
+        ctx["inputs"][name] = el
+    else:
+        el = ui.input(label).props("outlined dense clearable").classes("w-full")
+        if not_null:
+            el.validation = required_text
+        ctx["inputs"][name] = el
+
 
 def get_next_anesthesiology_key(db_path: str) -> int:
     try:
@@ -98,18 +186,19 @@ def database_page() -> None:
             schema_df = get_table_schema(db_path, table)
             cols_meta = schema_df.to_dict(orient="records")
 
-            ui.label(f"Insert into {table}").classes("text-subtitle1 text-weight-medium")
-
             anes = ctx["anes"]
             is_anes = table == "anesthesiology"
             next_key = get_next_anesthesiology_key(db_path) if is_anes else None
             if is_anes:
-                ui.label(f"Next available anesthesiology key: {next_key}").classes(
-                    "text-info"
-                )
                 ctx["inputs"]["anesthesiology_key"] = next_key
 
-            # Anesthesiology code-generation glue.
+            ui.label(f"Insert into {table}").classes("text-subtitle1 text-weight-medium")
+            if is_anes:
+                ui.label(
+                    f"Next anesthesiology_key: {next_key} (auto-assigned)"
+                ).classes("text-caption muted")
+
+            # Anesthesiology code-generation glue (re-bound below as fields render).
             name_input: ui.input | None = None
             date_input: ui.input | None = None
             code_input: ui.input | None = None
@@ -121,110 +210,92 @@ def database_page() -> None:
                 if not anes["code_manual"]:
                     code_input.value = auto
 
+            anes_special = {"name", "anesthesiology_start_date", "staff_code"}
+            buckets: dict[str, list[tuple[dict, str, str]]] = {g: [] for g in GROUP_ORDER}
+
             for col in cols_meta:
                 col_name = col["name"]
                 ctype = (col["type"] or "").upper()
-
                 if is_anes and col_name == "anesthesiology_key":
                     continue
                 if col_name.lower() in SKIP_COLUMNS:
                     continue
 
                 kind = _column_classifier(col_name, ctype)
-
-                if is_anes and col_name == "name":
-                    name_input = ui.input(col_name, value=anes["name"]).classes("w-full")
-                    name_input.on_value_change(lambda e: (anes.__setitem__("name", e.value), recompute_code()))
-                    ctx["inputs"][col_name] = name_input
-                    continue
-
-                if is_anes and col_name == "anesthesiology_start_date":
-                    default = anes["start_date"] or dt_date.today().strftime("%Y-%m-%d")
-                    with ui.input(col_name, value=default).classes("w-full") as date_input:
-                        with ui.menu().props("no-parent-event") as menu:
-                            with ui.date().bind_value(date_input):
-                                with ui.row().classes("justify-end"):
-                                    ui.button("Close", on_click=menu.close).props("flat")
-                        with date_input.add_slot("append"):
-                            ui.icon("event").on("click", menu.open).classes("cursor-pointer")
-                    date_input.on_value_change(
-                        lambda e: (anes.__setitem__("start_date", e.value), recompute_code())
-                    )
-                    ctx["inputs"][col_name] = date_input
-                    continue
-
-                if is_anes and col_name == "staff_code":
-                    auto = generate_anesthesiology_code(anes["name"], anes["start_date"])
-                    initial = anes["code_value"] if anes["code_manual"] else auto
-                    code_input = ui.input(
-                        col_name,
-                        value=initial or "",
-                    ).classes("w-full")
-                    code_input.props('hint="Auto-generated from name + start date; edit to override"')
-
-                    def on_code_change(e, ci=code_input):
-                        auto_now = generate_anesthesiology_code(anes["name"], anes["start_date"])
-                        if e.value != auto_now:
-                            anes["code_manual"] = True
-                            anes["code_value"] = e.value
-                        else:
-                            anes["code_manual"] = False
-                            anes["code_value"] = ""
-
-                    code_input.on_value_change(on_code_change)
-                    ctx["inputs"][col_name] = code_input
-                    continue
-
-                # Generic fields.
-                if kind == "date":
-                    el = ui.input(col_name, value=dt_date.today().strftime("%Y-%m-%d")).classes("w-full")
-                    with el:
-                        with ui.menu().props("no-parent-event") as menu:
-                            with ui.date().bind_value(el):
-                                with ui.row().classes("justify-end"):
-                                    ui.button("Close", on_click=menu.close).props("flat")
-                        with el.add_slot("append"):
-                            ui.icon("event").on("click", menu.open).classes("cursor-pointer")
-                    ctx["inputs"][col_name] = el
-                elif kind == "signature_time":
-                    with ui.row().classes("w-full no-wrap"):
-                        d_el = ui.input(f"{col_name} (date)", value=dt_date.today().strftime("%Y-%m-%d")).classes("flex-grow")
-                        with d_el:
-                            with ui.menu().props("no-parent-event") as d_menu:
-                                with ui.date().bind_value(d_el):
-                                    with ui.row().classes("justify-end"):
-                                        ui.button("Close", on_click=d_menu.close).props("flat")
-                            with d_el.add_slot("append"):
-                                ui.icon("event").on("click", d_menu.open).classes("cursor-pointer")
-                        t_el = ui.input(f"{col_name} (time)", value="00:00:00").classes("flex-grow")
-                        with t_el:
-                            with ui.menu().props("no-parent-event") as t_menu:
-                                with ui.time().bind_value(t_el):
-                                    with ui.row().classes("justify-end"):
-                                        ui.button("Close", on_click=t_menu.close).props("flat")
-                            with t_el.add_slot("append"):
-                                ui.icon("schedule").on("click", t_menu.open).classes("cursor-pointer")
-                    ctx["inputs"][col_name] = ("signature_time", d_el, t_el)
-                elif kind == "time":
-                    el = ui.input(col_name, value="00:00:00").classes("w-full")
-                    with el:
-                        with ui.menu().props("no-parent-event") as menu:
-                            with ui.time().bind_value(el):
-                                with ui.row().classes("justify-end"):
-                                    ui.button("Close", on_click=menu.close).props("flat")
-                        with el.add_slot("append"):
-                            ui.icon("schedule").on("click", menu.open).classes("cursor-pointer")
-                    ctx["inputs"][col_name] = el
-                elif kind == "int":
-                    ctx["inputs"][col_name] = ui.number(col_name, value=0, format="%d", step=1).classes("w-full")
-                elif kind == "float":
-                    ctx["inputs"][col_name] = ui.number(col_name, value=0).classes("w-full")
-                elif kind == "textarea":
-                    ctx["inputs"][col_name] = ui.textarea(col_name).classes("w-full")
+                if is_anes and col_name in anes_special:
+                    buckets["Anesthesiologist"].append((col, kind, "anes"))
                 else:
-                    ctx["inputs"][col_name] = ui.input(col_name).classes("w-full")
+                    buckets[_bucket_for(col_name, kind)].append((col, kind, "generic"))
 
-            ui.button("Insert Row", on_click=do_insert).props("color=primary").classes("q-mt-md")
+            non_empty = [g for g in GROUP_ORDER if buckets[g]]
+
+            with ui.stepper().props("vertical header-nav animated").classes("w-full surface-1") as stepper:
+                for group_name in non_empty:
+                    with ui.step(group_name):
+                        with ui.element("div").classes(
+                            "grid grid-cols-1 md:grid-cols-2 gap-4 w-full"
+                        ):
+                            for col, kind, mode in buckets[group_name]:
+                                if mode == "anes":
+                                    cn = col["name"]
+                                    not_null = bool(col.get("notnull", 0))
+                                    if cn == "name":
+                                        el = ui.input(
+                                            "Name" + (" *" if not_null else ""),
+                                            value=anes["name"],
+                                        ).props("outlined dense clearable").classes("w-full")
+                                        if not_null:
+                                            el.validation = {"Required": lambda v: bool(v)}
+                                        el.on_value_change(
+                                            lambda e: (anes.__setitem__("name", e.value), recompute_code())
+                                        )
+                                        name_input = el
+                                        ctx["inputs"][cn] = el
+                                    elif cn == "anesthesiology_start_date":
+                                        default = anes["start_date"] or dt_date.today().strftime("%Y-%m-%d")
+                                        el = _date_picker("Start date *", default)
+                                        el.on_value_change(
+                                            lambda e: (anes.__setitem__("start_date", e.value), recompute_code())
+                                        )
+                                        date_input = el
+                                        ctx["inputs"][cn] = el
+                                    elif cn == "staff_code":
+                                        auto = generate_anesthesiology_code(anes["name"], anes["start_date"])
+                                        initial = anes["code_value"] if anes["code_manual"] else auto
+                                        el = ui.input(
+                                            "Staff code", value=initial or ""
+                                        ).props(
+                                            'outlined dense clearable hint="Auto-generated from name + start date; edit to override"'
+                                        ).classes("w-full")
+
+                                        def on_code_change(e, ci=el):
+                                            auto_now = generate_anesthesiology_code(anes["name"], anes["start_date"])
+                                            if e.value != auto_now:
+                                                anes["code_manual"] = True
+                                                anes["code_value"] = e.value
+                                            else:
+                                                anes["code_manual"] = False
+                                                anes["code_value"] = ""
+
+                                        el.on_value_change(on_code_change)
+                                        code_input = el
+                                        ctx["inputs"][cn] = el
+                                else:
+                                    _render_generic_field(col, kind, ctx)
+
+                        with ui.stepper_navigation():
+                            ui.button("Next", on_click=stepper.next).props("color=primary unelevated")
+                            ui.button("Back", on_click=stepper.previous).props("flat")
+
+                with ui.step("Review & Insert"):
+                    ui.label(
+                        "Review your inputs in the previous steps, then commit the row."
+                    ).classes("muted")
+                    with ui.row().classes("gap-2 q-mt-sm"):
+                        ui.button("Insert row", on_click=do_insert).props(
+                            "color=primary unelevated icon=save"
+                        )
+                        ui.button("Back", on_click=stepper.previous).props("flat")
 
         def collect_values() -> dict:
             values: dict = {}
