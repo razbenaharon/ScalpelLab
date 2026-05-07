@@ -6,6 +6,7 @@ for the ``anesthesiology`` table (auto-incremented key, auto-generated
 ``staff_code`` from name + start date).
 """
 
+import os
 from datetime import date as dt_date
 
 import pandas as pd
@@ -14,6 +15,112 @@ from nicegui import ui
 from app import state
 from app.layout import page_frame
 from app.utils import connect, get_table_schema, list_tables, load_table
+
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ERD_PDF_PATH = os.path.join(PROJECT_ROOT, "docs", "ERD.pdf")
+
+
+def _render_erd_image(dpi: int = 150):
+    """Lazy-import fitz/PIL so the rest of the page loads even if PyMuPDF is missing."""
+    if not os.path.exists(ERD_PDF_PATH):
+        return None
+    try:
+        import fitz  # PyMuPDF
+        from PIL import Image
+    except ImportError:
+        return None
+    doc = fitz.open(ERD_PDF_PATH)
+    try:
+        if len(doc) == 0:
+            return None
+        page = doc.load_page(0)
+        pix = page.get_pixmap(dpi=dpi)
+        return Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    finally:
+        doc.close()
+
+
+def _open_erd_dialog() -> None:
+    img = _render_erd_image(dpi=300)
+    if img is None:
+        ui.notify("ERD could not be rendered.", type="negative")
+        return
+
+    img_el: ui.image | None = None
+    scale = {"v": 1.0}
+
+    def apply_scale() -> None:
+        if img_el is None:
+            return
+        img_el.style(f"transform: scale({scale['v']}); transform-origin: top left;")
+
+    def zoom_in() -> None:
+        scale["v"] = min(4.0, scale["v"] + 0.25)
+        apply_scale()
+
+    def zoom_out() -> None:
+        scale["v"] = max(0.4, scale["v"] - 0.25)
+        apply_scale()
+
+    def reset() -> None:
+        scale["v"] = 1.0
+        apply_scale()
+
+    with ui.dialog().props("maximized") as dialog, \
+         ui.card().classes("w-full h-full q-pa-none column no-wrap"):
+        with ui.row().classes(
+            "items-center justify-between q-px-md q-py-sm "
+            "bg-grey-2 dark:bg-slate-800 w-full"
+        ):
+            ui.label("Database schema (ERD)").classes("text-subtitle1 text-weight-medium")
+            with ui.row().classes("gap-1 items-center"):
+                ui.button(icon="zoom_out", on_click=zoom_out) \
+                    .props("flat dense round").tooltip("Zoom out")
+                ui.button(icon="fit_screen", on_click=reset) \
+                    .props("flat dense round").tooltip("Reset zoom (100%)")
+                ui.button(icon="zoom_in", on_click=zoom_in) \
+                    .props("flat dense round").tooltip("Zoom in")
+                ui.separator().props("vertical").classes("q-mx-sm")
+                ui.button(
+                    icon="download",
+                    on_click=lambda: ui.download(ERD_PDF_PATH, filename="ERD.pdf"),
+                ).props("flat dense round").tooltip("Download PDF")
+                ui.button(icon="close", on_click=dialog.close) \
+                    .props("flat dense round").tooltip("Close")
+        with ui.scroll_area().classes("w-full flex-grow"):
+            img_el = ui.image(img).style(
+                "transform-origin: top left; transition: transform .15s ease;"
+            )
+    dialog.open()
+
+
+def _render_schema_panel() -> None:
+    if not os.path.exists(ERD_PDF_PATH):
+        ui.label(
+            f"ERD.pdf not found at: {ERD_PDF_PATH}. Place it in the docs/ folder to enable the preview."
+        ).classes("text-warning")
+        return
+    with ui.row().classes("gap-2 q-mb-md"):
+        ui.button("Zoom", on_click=_open_erd_dialog) \
+            .props("unelevated icon=zoom_in color=primary") \
+            .tooltip("Open ERD fullscreen with zoom controls")
+        ui.button(
+            "Download PDF",
+            on_click=lambda: ui.download(ERD_PDF_PATH, filename="ERD.pdf"),
+        ).props("outline icon=download color=primary")
+    try:
+        img = _render_erd_image()
+        if img is not None:
+            ui.image(img).classes("w-full cursor-pointer") \
+                .on("click", _open_erd_dialog) \
+                .tooltip("Click to zoom")
+            ui.label("Database schema (ERD) — click image to zoom").classes("text-caption muted")
+        else:
+            ui.label("PyMuPDF (fitz) not installed — install it to render the ERD inline.") \
+                .classes("muted")
+    except Exception as exc:
+        ui.label(f"Error displaying ERD PDF: {exc}").classes("text-negative")
 
 
 SKIP_COLUMNS = {"date_case", "months_anesthetic_recording", "anesthetic_attending"}
@@ -471,3 +578,6 @@ def database_page() -> None:
                 form_section()
             with ui.tab_panel(t_delete):
                 delete_section()
+
+        with ui.expansion("Schema (ERD)", icon="schema").classes("w-full surface-1 q-mt-md"):
+            _render_schema_panel()
