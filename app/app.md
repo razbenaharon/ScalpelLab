@@ -15,8 +15,6 @@ app/
 ├── utils.py            # connect(), list_tables(), list_views(), load_table()
 ├── charts.py           # query_df, kpi_card, kpi_with_spark, echart helpers
 └── pages/
-    ├── quality.py         — /quality   (seq_enriched: drop rate, drift, gaps)
-    ├── behavior.py        — /behavior  (cur_boris_intervals: BORIS labels)
     ├── anesthesiology.py  — /anesthesiology (cur_seniority + recording_details)
     ├── database.py        — /database  (table CRUD + ERD viewer)
     ├── views.py           — /views     (raw view browser, kept for ad-hoc)

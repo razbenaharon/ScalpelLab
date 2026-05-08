@@ -17,8 +17,6 @@ from .theme import apply_global_theme
 NAV_LINKS = [
     ("Home",            "/",                "dashboard",      "Home"),
     ("Database",        "/database",        "table_view",     "Database Management"),
-    ("Quality",         "/quality",         "monitor_heart",  "Quality"),
-    ("Behavior",        "/behavior",        "timeline",       "Behavior"),
     ("Anesthesiology",  "/anesthesiology",  "medical_services", "Anesthesiology"),
     ("Views",           "/views",           "visibility",     "Database Views"),
     ("MP4",             "/mp4",             "movie",          "MP4"),
