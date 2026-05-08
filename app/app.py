@@ -8,45 +8,36 @@ Database page (Schema expansion). Run with ``python run_app.py``.
 import os
 import sys
 from datetime import date as dt_date
+from pathlib import Path
 
 import pandas as pd
-from nicegui import ui
+from nicegui import app as ng_app, native, ui
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+
+def _docs_dir() -> Path:
+    """Location of the bundled docs/ folder (dev tree or PyInstaller _MEIPASS)."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / "docs"
+    return Path(__file__).resolve().parent.parent / "docs"
+
+
+ng_app.add_static_files("/static", str(_docs_dir()))
+
 from app import state  # noqa: E402
+from app.charts import kpi_with_spark as _kpi_with_spark, query_df as _query  # noqa: E402
 from app.layout import page_frame  # noqa: E402
-from app.pages import database, status_summary, views, mp4_statistics  # noqa: F401,E402
-from app.utils import connect  # noqa: E402
-
-
-def _query(db_path: str, sql: str) -> pd.DataFrame:
-    try:
-        with connect(db_path) as conn:
-            return pd.read_sql_query(sql, conn)
-    except Exception:
-        return pd.DataFrame()
-
-
-def _kpi_with_spark(label: str, value, hint: str, series: list[float], color: str) -> None:
-    with ui.card().classes("kpi-card surface-1 q-pa-md flex-grow").style("min-width: 200px;"):
-        ui.label(label).classes("text-caption muted").style("letter-spacing: 1px;")
-        with ui.row().classes("items-baseline gap-2"):
-            ui.label(str(value)).classes("text-h4 text-weight-bold")
-            ui.label(hint).classes("text-caption muted")
-        if series:
-            ui.echart({
-                "grid":   {"left": 0, "right": 0, "top": 4, "bottom": 0},
-                "xAxis":  {"show": False, "type": "category", "data": list(range(len(series)))},
-                "yAxis":  {"show": False, "type": "value"},
-                "tooltip": {"show": False},
-                "series": [{
-                    "type": "line", "data": series, "smooth": True, "showSymbol": False,
-                    "areaStyle": {"opacity": 0.20},
-                    "lineStyle": {"width": 2, "color": color},
-                    "itemStyle": {"color": color},
-                }],
-            }).style("height: 48px;")
+from app.pages import (  # noqa: F401,E402
+    anesthesiology,
+    behavior,
+    database,
+    mp4,
+    quality,
+    seq,
+    seq_advanced,
+    views,
+)
 
 
 def _calendar_heatmap(mp4: pd.DataFrame) -> None:
@@ -261,6 +252,7 @@ def main() -> None:
         native=True,
         title="ScalpelLab DB",
         reload=False,
+        port=native.find_open_port(),
         storage_secret="scalpel-lab",
         window_size=(1400, 900),
     )
