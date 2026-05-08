@@ -1,0 +1,107 @@
+# app/ — NiceGUI Dashboard
+
+Native-window NiceGUI app for browsing and visualizing the ScalpelLab SQLite
+database. Entry point is `run_app.py` at the project root, which spawns
+`python -m app.app`.
+
+## Layout
+
+```
+app/
+├── app.py              # entry; defines Home dashboard + main()
+├── layout.py           # page_frame() — header, drawer, NAV_LINKS
+├── state.py            # DB path + dark-mode persisted in app.storage.general
+├── theme.py            # PALETTE, CHART_SEQ, global CSS (surface-1, kpi-card…)
+├── utils.py            # connect(), list_tables(), list_views(), load_table()
+├── charts.py           # query_df, kpi_card, kpi_with_spark, echart helpers
+└── pages/
+    ├── coverage.py        — /coverage  (mp4_status + seq_status + cur_*_missing)
+    ├── quality.py         — /quality   (seq_enriched: drop rate, drift, gaps)
+    ├── behavior.py        — /behavior  (cur_boris_intervals: BORIS labels)
+    ├── anesthesiology.py  — /anesthesiology (cur_seniority + recording_details)
+    ├── database.py        — /database  (table CRUD + ERD viewer)
+    ├── views.py           — /views     (raw view browser, kept for ad-hoc)
+    └── mp4_statistics.py  — /mp4-stats (Plotly — pre-existing)
+```
+
+## Page contract
+
+Every page follows the same shape — copy this when adding a new page:
+
+```python
+from nicegui import ui
+from app import state
+from app.charts import kpi_card, query_df, echart_axis_color, base_grid, base_tooltip
+from app.layout import page_frame
+
+@ui.page("/my-route")
+def my_page() -> None:
+    with page_frame("My Page"):
+        db_path = state.get()
+        ui.label("My Dashboard").classes("section-h text-h5 text-weight-medium")
+        ui.label("subtitle").classes("text-caption muted")
+
+        df = query_df(db_path, "SELECT ...")
+        if df.empty:
+            ui.label("No data.").classes("text-warning")
+            return
+
+        with ui.row().classes("w-full no-wrap gap-4"):
+            kpi_card("METRIC", f"{value:,}", "hint")
+            # …
+
+        with ui.card().classes("surface-1 w-full q-pa-md"):
+            ui.label("Section").classes("text-subtitle1 text-weight-medium")
+            ui.echart({...}).style("height: 360px;")
+```
+
+After creating the page, register it in two places:
+1. **`app/app.py`** — add to the `from app.pages import (...)` block so `@ui.page`
+   decorators run at startup.
+2. **`app/layout.py`** — add a `(label, href, icon, page_title)` tuple to
+   `NAV_LINKS`. The `page_title` must match what the page passes to
+   `page_frame()` so the drawer's active-link highlight works.
+
+## Conventions
+
+- **DB access:** always go through `app/charts.py::query_df` or
+  `app/utils.py::connect`. Never open `sqlite3.connect()` directly in a page.
+- **Charts:** ECharts via `ui.echart(...)` for new pages (Plotly is only on the
+  legacy `mp4-stats` page). Use `chart_palette()` / `CHART_SEQ` for colors —
+  do not hardcode hex values in pages.
+- **Theme-aware text:** every chart's axis/legend text must use
+  `echart_axis_color()` so dark mode flips correctly.
+- **Layout idioms:** wrap chart blocks in `ui.card().classes("surface-1 ...")`,
+  use `ui.row().classes("w-full no-wrap gap-4 items-stretch")` for side-by-side
+  cards, KPI strips use `kpi_card` or `kpi_with_spark`.
+- **No hand-rolled HTML.** Use Quasar/NiceGUI components (`ui.aggrid`,
+  `ui.echart`, `ui.toggle`, `ui.select`, etc.).
+
+## Data model quick reference
+
+Tables: `mp4_status`, `mp4_times`, `seq_status`, `seq_enriched` (rich
+per-file frame analysis), `boris_events`, `analysis_information`,
+`anesthesiology`, `recording_details`.
+
+Views (read-only — don't write to these):
+- `cur_mp4_missing` — pivot of cameras present per (date, case)
+- `cur_seq_missing` — SEQ files gone but MP4 still exists (actionable issues)
+- `cur_mp4_status_statistics` — MP4 cases with cameras_count
+- `cur_boris_intervals` — paired START/STOP behavior intervals
+- `cur_seniority` — anesthesiology roster with computed seniority + A/R status
+
+Camera names (use `CAMERAS` constant in coverage/quality):
+`Cart_Center_2, Cart_LT_4, Cart_RT_1, General_3, Monitor, Patient_Monitor,
+Ventilator_Monitor, Injection_Port`. Older data sometimes has `_JUNK` /
+`_Junk` suffixes — filter these out for visualizations.
+
+## Pitfalls
+
+- `seq_enriched.time_drift_ms` has corrupt outliers (~2e12 ms). Always clip or
+  filter to ±5–10 s before plotting (see `quality.py::DRIFT_LIMIT_MS`).
+- `cur_boris_intervals.pairing_status` values: `PAIRED`, `MISSING_STOP`,
+  `ERROR_DOUBLE_START`, `IGNORED`. Most charts should filter to `PAIRED`.
+- The Windows console is CP1252; if a script prints UTF-8, set the wrapper
+  shown in `memory/MEMORY.md`. NiceGUI itself doesn't need this.
+- `state.get()` returns the active DB path — call it inside the page handler,
+  not at module import time, so the drawer's path input takes effect.

@@ -1,0 +1,187 @@
+# CLAUDE.md
+
+Guidance for AI coding agents (Claude Code, Codex) working in this repository.
+This file is a **router** — load it always, then pull in the relevant
+`<dirname>.md` for the task at hand.
+
+## 1. Project overview
+
+ScalpelLab is a Windows-focused Python workspace for managing surgical video
+recordings from an 8-camera operating room. Raw NorPix StreamPix `.seq` files
+are organized on disk, catalogued in `ScalpelDatabase.sqlite`, optionally
+converted to MP4, and surfaced through a NiceGUI desktop dashboard. Side
+workflows: BORIS behavioral labeling, batch redaction, multi-camera
+synchronized playback, and CV experiments (YOLO, SimCLR ReID).
+
+The SQLite database at the repo root is the **single source of truth**. Every
+other component is a producer or consumer of it.
+
+## 2. Tech stack and environment
+
+- **Language**: Python 3.10+ (uses `tuple[str, int] | None` syntax).
+- **Env manager**: conda (see `.vscode/settings.json` —
+  `python-envs.defaultEnvManager: ms-python.python:conda`).
+- **Dashboard**: NiceGUI ≥ 2.0 + pywebview (native window). Charts via
+  ECharts; legacy Plotly only on the `mp4-stats` page.
+- **Data**: SQLite (stdlib `sqlite3`), pandas, numpy, pyarrow (Parquet for CV).
+- **Video**: FFmpeg + ffprobe + mkvmerge (must be on PATH); NVIDIA NVENC for
+  GPU encode; NorPix `CLExport` as fallback. `mpv.exe` for the multiviewer.
+- **CV (optional)**: PyTorch, ultralytics (YOLOv8), OpenCV.
+- **OS**: Windows 11. Console codepage is CP1252 — see §9 for the UTF-8
+  stdout snippet required in any script that prints non-ASCII.
+
+Install: `pip install -r requirements.txt`. Validate paths: `python config.py`.
+
+## 3. Important paths and files
+
+| Path                                | Role                                                     |
+|-------------------------------------|----------------------------------------------------------|
+| `ScalpelDatabase.sqlite`            | Source of truth. **Never commit.**                       |
+| `config.py`                         | `DB_PATH`, `SEQ_ROOT`, `MP4_ROOT`, `DEFAULT_CAMERAS`     |
+| `run_app.py`                        | Launches NiceGUI dashboard via `python -m app.app`       |
+| `app/`                              | NiceGUI dashboard — see [app/app.md](app/app.md)         |
+| `scripts/1_…`, `2_…`, `3_…`         | SEQ→DB→MP4 pipeline — see [scripts/scripts.md](scripts/scripts.md) |
+| `scripts/helpers/`                  | SEQ/IDX parsing, redaction, comparison — see [scripts/helpers/helpers.md](scripts/helpers/helpers.md) |
+| `MPV_Multiviewer/`                  | Tkinter+libmpv viewer — see [MPV_Multiviewer/mpv_multiviewer.md](MPV_Multiviewer/mpv_multiviewer.md) |
+| `CV/`                               | YOLO + SimCLR experiments — see [CV/cv.md](CV/cv.md)     |
+| `migrations/`                       | Hand-applied SQL — see [migrations/migrations.md](migrations/migrations.md) |
+| `docs/`                             | Schema/format refs, ERD, tracking JSONs — see [docs/docs.md](docs/docs.md) |
+
+Routing — read the relevant context file before editing:
+
+| Task involves…                                       | Read                                                  |
+|------------------------------------------------------|-------------------------------------------------------|
+| Dashboard pages, charts, theme                       | [app/app.md](app/app.md)                              |
+| `1_…/2_…/3_…` pipeline or BORIS import               | [scripts/scripts.md](scripts/scripts.md)              |
+| SEQ/IDX parsing, redaction, helpers                  | [scripts/helpers/helpers.md](scripts/helpers/helpers.md) |
+| Multi-camera viewer, sync offsets                    | [MPV_Multiviewer/mpv_multiviewer.md](MPV_Multiviewer/mpv_multiviewer.md) |
+| Pose / tracking / ReID                               | [CV/cv.md](CV/cv.md)                                  |
+| Schema migrations                                    | [migrations/migrations.md](migrations/migrations.md)  |
+| NorPix format spec, ERD, schema reference            | [docs/docs.md](docs/docs.md)                          |
+
+## 4. Coding conventions
+
+- **Edit, don't create.** Prefer modifying existing files. New helpers go
+  under `scripts/helpers/`; do not create new top-level scripts unsolicited.
+- **Paths**: use raw strings (`r"…"`) for any new Windows path literals.
+- **Config**: import from `config.py` — never hardcode `F:\Room_8_Data\…`.
+- **Docstrings**: Google style (template in `docs/DOCSTRING_GUIDE.md`).
+  Module-level docstring is expected on every Python file.
+- **Comments**: write only when the *why* is non-obvious. No restating *what*.
+- **DB access from the dashboard**: always go through
+  `app.charts.query_df` or `app.utils.connect`. Never open
+  `sqlite3.connect()` directly inside a page.
+- **Charts**: ECharts via `ui.echart(...)`. Use `chart_palette()` /
+  `CHART_SEQ`; do not hardcode hex. Wrap axis text with
+  `echart_axis_color()` so dark mode flips correctly.
+- **No hand-rolled HTML** in NiceGUI pages — use Quasar components.
+- **Windows console**: scripts that print non-ASCII must reconfigure stdout:
+
+  ```python
+  import io, sys
+  if hasattr(sys.stdout, "buffer") and sys.stdout.encoding.lower() not in ("utf-8","utf8"):
+      sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
+                                    errors="replace", line_buffering=True)
+  ```
+
+## 5. Database / schema rules
+
+- **DB path resolution**: `config.DB_PATH` → overridable by `SCALPEL_DB`
+  env var → overridable per-session via the dashboard's left drawer.
+- **`PRAGMA foreign_keys = ON`** is set inside `app/utils.py::connect`.
+  Preserve this — the schema relies on it.
+- **Managed-columns contract** (`scripts/2_update_db.py`): only the
+  documented columns are updated; everything else (user-added columns like
+  `sync_offset_ms`, redaction flags) must be preserved. Implementation uses
+  `INSERT … ON CONFLICT(pk) DO UPDATE SET <managed>=…`. Never replace this
+  with `INSERT OR REPLACE` or full overwrites.
+- **Views are read-only**: `cur_mp4_missing`, `cur_seq_missing`,
+  `cur_seniority`, `cur_mp4_status_statistics`, `cur_boris_intervals`. Don't
+  write to them; rebuild via the producer script.
+- **JUNK rows**: any `camera_name` ending in `_JUNK` / `_Junk` is a failed or
+  undersized recording. Filter out for stats and visualizations.
+- **Drift outliers**: `seq_enriched.time_drift_ms` has corrupt values (~2e12
+  ms) from broken IDX timestamps. Always clip to ±5–10 s before plotting
+  (see `app/pages/quality.py::DRIFT_LIMIT_MS`).
+- **`n_counter_resets > 0`** is normal ring-buffer behavior, not an overrun
+  signal on its own.
+- **Migrations**: hand-applied, transactional. Back up the DB first. After
+  schema changes, re-run `scripts/helpers/sqlite_to_dbdiagram.py`.
+
+## 6. Security and privacy rules
+
+This repo handles **medical/surgical recordings**. Treat all video and DB
+content as sensitive PHI-equivalent data.
+
+- **Never commit**: `ScalpelDatabase.sqlite`, any `.seq` / `.mp4` /
+  `.idx` / `.aud` files, `docs/*_tracking.json` (may reference patient
+  cases), or anything under `MPV_Multiviewer/` runtime config containing
+  case paths. The `.gitignore` does not currently block all of these — be
+  defensive when staging.
+- **Never paste** patient names, case details, or video frames into web
+  tools (pastebins, diagram renderers, public LLMs).
+- **Redaction workflow** (`scripts/helpers/batch_black_squere.py`) reads
+  timing ranges from `mp4_times`. If you change its output paths, ensure
+  the redacted MP4 is the only artifact that leaves the secure volume.
+- **No telemetry / analytics** dependencies. If a new package wants to
+  phone home, it does not belong here.
+- **Secrets**: there are none in this repo today. If you add an integration
+  that needs credentials, load from environment variables; never hardcode.
+
+## 7. Git and commit guidelines
+
+- **Don't commit unless asked.** When asked, follow the convention shown by
+  recent history (`git log --oneline -n 10`): short imperative subject,
+  occasional one-line body. Examples:
+  `Allow git-crypt unlock in Claude permissions`,
+  `Replace ERD home with dashboard; add ERD zoom dialog`.
+- **One logical change per commit.** Don't bundle unrelated edits.
+- **Never push, force-push, or rewrite history** without explicit user
+  request. Never push to `main` from an agent context.
+- **Never** use `--no-verify`, `--no-gpg-sign`, or otherwise skip hooks.
+- **Stage explicitly** (`git add <file>`) — avoid `git add -A` so the DB,
+  videos, and tracking JSONs don't slip in.
+- **Branch hygiene**: work on a feature branch when the change is
+  non-trivial. The repo's main branch is `main`.
+
+## 8. Testing and validation
+
+There are **no automated tests, linters, or CI**. Validate manually:
+
+- **Path config**: `python config.py` — confirms DB / SEQ_ROOT / MP4_ROOT
+  exist.
+- **Pipeline scripts**: every numbered script supports `--dry-run`. Run it
+  before any write. For `2_update_db.py`, also try `--skip-duration` first
+  for a fast scan.
+- **DB sanity**: `sqlite3 ScalpelDatabase.sqlite` and inspect counts on the
+  affected tables / views before and after a script run.
+- **Dashboard changes**: `python run_app.py` and click through the page —
+  the user wants verification that real data renders, not just that the
+  type checker is happy.
+- **Migrations**: copy the DB to a backup first, then apply, then diff row
+  counts against the backup.
+
+## 9. Agent behavior guidelines
+
+- **Use the router.** Don't preemptively read every `<dirname>.md` —
+  load only the ones the current task touches. When a task spans
+  directories, load the relevant context files in parallel.
+- **Respect contracts.** The "managed columns" contract in
+  `scripts/scripts.md`, the page contract in `app/app.md`, and the import
+  shim in `2_update_db.py` all encode prior bugs. Don't refactor them away.
+- **Trust code over README.** The top-level `README.md` still mentions
+  Streamlit; the dashboard has been migrated to NiceGUI. When the README and
+  the code disagree, the code wins.
+- **Ask before destructive ops.** Confirm before: deleting / overwriting
+  files, applying migrations, running scripts without `--dry-run`,
+  modifying `ScalpelDatabase.sqlite`, force-pushing, or `rm`-ing tracking
+  JSON checkpoint files.
+- **Don't introduce new top-level files** (scripts, modules, docs) unless
+  the user asks. Keep new helpers under `scripts/helpers/`; keep new
+  dashboard pages under `app/pages/` and register them per the page
+  contract.
+- **Don't add features beyond what's asked.** No speculative abstractions,
+  no unrequested error handling, no "while I'm here" cleanups.
+- **Don't add new dependencies** without flagging it. The
+  `requirements.txt` is already heavy with optional ML packages; small
+  changes shouldn't drag in new ones.
