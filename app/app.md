@@ -15,13 +15,14 @@ app/
 ├── utils.py            # connect(), list_tables(), list_views(), load_table()
 ├── charts.py           # query_df, kpi_card, kpi_with_spark, echart helpers
 └── pages/
-    ├── coverage.py        — /coverage  (mp4_status + seq_status + cur_*_missing)
     ├── quality.py         — /quality   (seq_enriched: drop rate, drift, gaps)
     ├── behavior.py        — /behavior  (cur_boris_intervals: BORIS labels)
     ├── anesthesiology.py  — /anesthesiology (cur_seniority + recording_details)
     ├── database.py        — /database  (table CRUD + ERD viewer)
     ├── views.py           — /views     (raw view browser, kept for ad-hoc)
-    └── mp4_statistics.py  — /mp4-stats (Plotly — pre-existing)
+    ├── mp4.py             — /mp4       (mp4_status + cur_mp4_* — stats + coverage)
+    ├── seq.py             — /seq       (seq_status + cur_seq_missing — inventory + coverage)
+    └── seq_advanced.py    — /seq-advanced (seq_field_analysis: header + IDX integrity)
 ```
 
 ## Page contract
@@ -66,9 +67,8 @@ After creating the page, register it in two places:
 
 - **DB access:** always go through `app/charts.py::query_df` or
   `app/utils.py::connect`. Never open `sqlite3.connect()` directly in a page.
-- **Charts:** ECharts via `ui.echart(...)` for new pages (Plotly is only on the
-  legacy `mp4-stats` page). Use `chart_palette()` / `CHART_SEQ` for colors —
-  do not hardcode hex values in pages.
+- **Charts:** ECharts via `ui.echart(...)` for new pages. Use `chart_palette()`
+  / `CHART_SEQ` for colors — do not hardcode hex values in pages.
 - **Theme-aware text:** every chart's axis/legend text must use
   `echart_axis_color()` so dark mode flips correctly.
 - **Layout idioms:** wrap chart blocks in `ui.card().classes("surface-1 ...")`,
@@ -90,7 +90,7 @@ Views (read-only — don't write to these):
 - `cur_boris_intervals` — paired START/STOP behavior intervals
 - `cur_seniority` — anesthesiology roster with computed seniority + A/R status
 
-Camera names (use `CAMERAS` constant in coverage/quality):
+Camera names (use the `CAMERAS` constant defined in mp4/seq/quality):
 `Cart_Center_2, Cart_LT_4, Cart_RT_1, General_3, Monitor, Patient_Monitor,
 Ventilator_Monitor, Injection_Port`. Older data sometimes has `_JUNK` /
 `_Junk` suffixes — filter these out for visualizations.

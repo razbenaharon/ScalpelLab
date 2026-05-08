@@ -15,11 +15,15 @@ from .theme import apply_global_theme
 
 # (label, href, icon, page_title)
 NAV_LINKS = [
-    ("Home",          "/",          "dashboard",   "Home"),
-    ("Database",      "/database",  "table_view",  "Database Management"),
-    ("Status",        "/status",    "rule",        "Status Summary"),
-    ("Views",         "/views",     "visibility",  "Database Views"),
-    ("MP4 Stats",     "/mp4-stats", "insights",    "MP4 Statistics"),
+    ("Home",            "/",                "dashboard",      "Home"),
+    ("Database",        "/database",        "table_view",     "Database Management"),
+    ("Quality",         "/quality",         "monitor_heart",  "Quality"),
+    ("Behavior",        "/behavior",        "timeline",       "Behavior"),
+    ("Anesthesiology",  "/anesthesiology",  "medical_services", "Anesthesiology"),
+    ("Views",           "/views",           "visibility",     "Database Views"),
+    ("MP4",             "/mp4",             "movie",          "MP4"),
+    ("SEQ",             "/seq",             "folder_open",    "SEQ"),
+    ("Advanced SEQ",    "/seq-advanced",    "analytics",      "Advanced SEQ"),
 ]
 
 
@@ -34,8 +38,11 @@ def page_frame(title: str):
         "background: linear-gradient(90deg, #4F46E5 0%, #6366F1 100%);"
     ):
         with ui.row().classes("items-center gap-3"):
-            ui.icon("biotech").classes("text-2xl text-white")
-            ui.label("ScalpelLab DB").classes("text-white text-weight-bold").style("font-size: 16px;")
+            ui.html(
+                '<img src="/static/scalpel_logo_2.png" '
+                'style="height: 32px; width: auto; display: block;" '
+                'alt="ScalpelLab">'
+            )
             ui.label("/").classes("text-white opacity-50")
             ui.label(title).classes("text-white opacity-90").style("font-size: 14px;")
 
