@@ -44,7 +44,6 @@ Install: `pip install -r requirements.txt`. Validate paths: `python config.py`.
 | `scripts/helpers/`                  | SEQ/IDX parsing, redaction, comparison — see [scripts/helpers/helpers.md](scripts/helpers/helpers.md) |
 | `MPV_Multiviewer/`                  | Tkinter+libmpv viewer — see [MPV_Multiviewer/mpv_multiviewer.md](MPV_Multiviewer/mpv_multiviewer.md) |
 | `CV/`                               | YOLO + SimCLR experiments — see [CV/cv.md](CV/cv.md)     |
-| `migrations/`                       | Hand-applied SQL — see [migrations/migrations.md](migrations/migrations.md) |
 | `docs/`                             | Schema/format refs, ERD, tracking JSONs — see [docs/docs.md](docs/docs.md) |
 
 Routing — read the relevant context file before editing:
@@ -56,7 +55,6 @@ Routing — read the relevant context file before editing:
 | SEQ/IDX parsing, redaction, helpers                  | [scripts/helpers/helpers.md](scripts/helpers/helpers.md) |
 | Multi-camera viewer, sync offsets                    | [MPV_Multiviewer/mpv_multiviewer.md](MPV_Multiviewer/mpv_multiviewer.md) |
 | Pose / tracking / ReID                               | [CV/cv.md](CV/cv.md)                                  |
-| Schema migrations                                    | [migrations/migrations.md](migrations/migrations.md)  |
 | NorPix format spec, ERD, schema reference            | [docs/docs.md](docs/docs.md)                          |
 
 ## 4. Coding conventions
@@ -105,8 +103,11 @@ Routing — read the relevant context file before editing:
   (see `app/pages/quality.py::DRIFT_LIMIT_MS`).
 - **`n_counter_resets > 0`** is normal ring-buffer behavior, not an overrun
   signal on its own.
-- **Migrations**: hand-applied, transactional. Back up the DB first. After
-  schema changes, re-run `scripts/helpers/sqlite_to_dbdiagram.py`.
+- **Schema changes**: applied directly with `sqlite3` against the live DB
+  (no migration framework). Back up first. After any change, re-run
+  `scripts/helpers/sqlite_to_dbdiagram.py` to refresh
+  `docs/scalpel_dbdiagram.txt` and update
+  `docs/project_context/scalpel_database_sqlite_context.md`.
 
 ## 6. Security and privacy rules
 
@@ -173,9 +174,9 @@ There are **no automated tests, linters, or CI**. Validate manually:
   Streamlit; the dashboard has been migrated to NiceGUI. When the README and
   the code disagree, the code wins.
 - **Ask before destructive ops.** Confirm before: deleting / overwriting
-  files, applying migrations, running scripts without `--dry-run`,
-  modifying `ScalpelDatabase.sqlite`, force-pushing, or `rm`-ing tracking
-  JSON checkpoint files.
+  files, applying schema changes against `ScalpelDatabase.sqlite`, running
+  scripts without `--dry-run`, force-pushing, or `rm`-ing tracking JSON
+  checkpoint files.
 - **Don't introduce new top-level files** (scripts, modules, docs) unless
   the user asks. Keep new helpers under `scripts/helpers/`; keep new
   dashboard pages under `app/pages/` and register them per the page
