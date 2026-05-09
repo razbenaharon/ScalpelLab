@@ -70,7 +70,6 @@ The dashboard lives under [`app/`](app/) and currently includes:
   schema, insert rows, delete rows.
 - [`app/pages/status_summary.py`](app/pages/status_summary.py): per-camera
   MP4 / SEQ presence summaries.
-- [`app/pages/views.py`](app/pages/views.py): browse database views.
 - [`app/pages/mp4_statistics.py`](app/pages/mp4_statistics.py): interactive
   analytics for `cur_mp4_status_statistics`.
 
@@ -175,7 +174,6 @@ python MPV_Multiviewer/run_viewer.py
 ### Common Views
 
 - `cur_mp4_missing`: cases where SEQ exists but MP4 is missing.
-- `cur_seq_missing`: every `seq_status` slot whose file is not on disk (`size_mb IS NULL`).
 - `cur_sync_status`: per-camera `is_syncable` flag derived from `seq_enriched`,
   encoding the `3_seq_to_mp4_convert.py` planning gates (IDX present, header
   ok, valid frame timestamps, sane duration, ≥ 50 MB SEQ).

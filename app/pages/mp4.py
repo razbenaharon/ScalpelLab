@@ -111,43 +111,6 @@ def _presence_bars(df: pd.DataFrame) -> None:
     }).style("height: 360px;")
 
 
-def _fully_covered_trend(df: pd.DataFrame) -> None:
-    if df.empty:
-        empty_state("No data.")
-        return
-    work = df.copy()
-    work["date"] = pd.to_datetime(work["recording_date"], errors="coerce")
-    work = work.dropna(subset=["date"])
-    work["month"] = work["date"].dt.to_period("M").astype(str)
-    per_case = (
-        work.groupby(["month", "recording_date", "case_no"])["present"]
-        .sum().reset_index()
-    )
-    per_case["full"] = (per_case["present"] >= len(CAMERAS)).astype(int)
-    monthly = per_case.groupby("month").agg(
-        total=("full", "size"), full=("full", "sum"),
-    ).reset_index()
-    monthly["pct"] = (monthly["full"] / monthly["total"] * 100).round(1)
-    monthly = monthly.sort_values("month").tail(24)
-    axis = echart_axis_color()
-    palette = chart_palette()
-    ui.echart({
-        "tooltip": base_tooltip("axis") | {"valueFormatter": "{value}%"},
-        "grid": base_grid(left=50, right=20, top=20, bottom=60),
-        "xAxis": {"type": "category", "data": monthly["month"].tolist(),
-                  "axisLabel": {"rotate": 45, "color": axis}},
-        "yAxis": {"type": "value", "max": 100,
-                  "axisLabel": {"formatter": "{value}%", "color": axis}},
-        "series": [{
-            "type": "line", "smooth": True, "showSymbol": True,
-            "data": monthly["pct"].tolist(),
-            "lineStyle": {"width": 3, "color": palette[2]},
-            "itemStyle": {"color": palette[2]},
-            "areaStyle": {"opacity": 0.18, "color": palette[2]},
-        }],
-    }).style("height: 280px;")
-
-
 def _camera_count_distribution(df: pd.DataFrame) -> None:
     cam_dist = (
         df.groupby("cameras_count").size().reset_index(name="count")
@@ -491,13 +454,12 @@ def mp4_page() -> None:
         presence = _presence_df(db_path)
         sync_df = _sync_df(db_path)
         if presence.empty:
-            full_cases = partial_cases = 0
+            partial_cases = 0
         else:
             per_case = (
                 presence.groupby(["recording_date", "case_no"])["present"]
                 .sum().reset_index()
             )
-            full_cases = int((per_case["present"] >= len(CAMERAS)).sum())
             partial_cases = int(
                 ((per_case["present"] > 0) & (per_case["present"] < len(CAMERAS))).sum()
             )
@@ -505,9 +467,6 @@ def mp4_page() -> None:
         with ui.row().classes("w-full no-wrap gap-4"):
             kpi_card("TOTAL RECORDINGS", f"{total_recordings:,}", "video files")
             kpi_card("SURGERY DAYS",     f"{surgery_days:,}",     "unique dates")
-            kpi_card("FULLY COVERED",    f"{full_cases:,}",
-                     f"{(full_cases / total_recordings * 100):.0f}% of cases"
-                     if total_recordings else "—")
             kpi_card("PARTIAL CASES",    f"{partial_cases:,}",   "missing ≥1 camera")
 
         ui.label(
@@ -550,19 +509,12 @@ def mp4_page() -> None:
                 .classes("text-caption muted")
             _coverage_heatmap(presence)
 
-        # ── Coverage: per-camera presence + fully-covered trend ────────────
-        with ui.row().classes("w-full no-wrap gap-4 items-stretch"):
-            with ui.card().classes("surface-1 q-pa-md flex-grow"):
-                ui.label("Per-camera presence rate").classes("text-subtitle1 text-weight-medium")
-                ui.label("Share of cases where each camera has an MP4.") \
-                    .classes("text-caption muted")
-                _presence_bars(presence)
-
-            with ui.card().classes("surface-1 q-pa-md flex-grow"):
-                ui.label("Fully-covered cases — trend").classes("text-subtitle1 text-weight-medium")
-                ui.label("Monthly % of cases with all 8 cameras (last 24 months).") \
-                    .classes("text-caption muted")
-                _fully_covered_trend(presence)
+        # ── Coverage: per-camera presence ─────────────────────────────────
+        with ui.card().classes("surface-1 w-full q-pa-md"):
+            ui.label("Per-camera presence rate").classes("text-subtitle1 text-weight-medium")
+            ui.label("Share of cases where each camera has an MP4.") \
+                .classes("text-caption muted")
+            _presence_bars(presence)
 
         with ui.card().classes("surface-1 w-full q-pa-md"):
             ui.label("Missing MP4s").classes("text-subtitle1 text-weight-medium")

@@ -1,11 +1,10 @@
 """SEQ inventory dashboard — file presence, size, JUNK summary, and coverage.
 
-Focuses on the raw SEQ side: how many files exist per camera, how much disk
-they occupy, how many were marked as undersized JUNK, which (date, case,
-camera) slots are missing, and the camera×date presence heatmap. For deep
-frame-level analysis see Advanced SEQ.
+Focuses on the raw SEQ side: how much disk each camera occupies, how many
+were marked as undersized JUNK, and the camera×date presence heatmap. For
+deep frame-level analysis see Advanced SEQ.
 
-Sources: ``seq_status``, ``cur_seq_missing``.
+Sources: ``seq_status``.
 """
 
 from __future__ import annotations
@@ -121,52 +120,6 @@ def _presence_bars(clean: pd.DataFrame) -> None:
     }).style("height: 360px;")
 
 
-def _missing_grid(missing: pd.DataFrame) -> None:
-    if missing.empty:
-        ui.label("No missing SEQ entries.").classes("text-positive")
-        return
-    ui.aggrid({
-        "defaultColDef": {"sortable": True, "filter": True, "resizable": True,
-                          "floatingFilter": True},
-        "columnDefs": [
-            {"field": "recording_date", "headerName": "Date"},
-            {"field": "case_no",        "headerName": "Case"},
-            {"field": "camera_name",    "headerName": "Camera"},
-        ],
-        "rowData": missing.sort_values(
-            ["recording_date", "case_no", "camera_name"],
-            ascending=[False, True, True],
-        ).to_dict("records"),
-        "pagination": True, "paginationPageSize": 15,
-    }).classes("ag-theme-balham w-full").style("height: 360px;")
-
-
-def _files_per_camera(clean: pd.DataFrame) -> None:
-    if clean.empty:
-        empty_state("No SEQ rows.")
-        return
-    counts = (
-        clean.groupby("camera_name").size().reset_index(name="files")
-        .sort_values("files", ascending=True)
-    )
-    axis = echart_axis_color()
-    palette = chart_palette()
-    ui.echart({
-        "tooltip": base_tooltip("axis"),
-        "grid": base_grid(left=160, right=40, top=10, bottom=30),
-        "xAxis": {"type": "value", "axisLabel": {"color": axis}},
-        "yAxis": {"type": "category",
-                  "data": counts["camera_name"].tolist(),
-                  "axisLabel": {"color": axis}},
-        "series": [{
-            "type": "bar",
-            "data": counts["files"].astype(int).tolist(),
-            "itemStyle": {"color": palette[0], "borderRadius": [0, 4, 4, 0]},
-            "label": {"show": True, "position": "right", "color": axis},
-        }],
-    }).style("height: 320px;")
-
-
 def _size_per_camera(clean: pd.DataFrame) -> None:
     if clean.empty or "size_mb" not in clean.columns:
         empty_state("No size data.")
@@ -229,32 +182,6 @@ def _junk_breakdown(junk: pd.DataFrame) -> None:
     }).style("height: 320px;")
 
 
-def _missing_per_camera(missing: pd.DataFrame) -> None:
-    if missing.empty:
-        ui.label("No missing SEQ entries.").classes("text-positive")
-        return
-    counts = (
-        missing.groupby("camera_name").size().reset_index(name="missing")
-        .sort_values("missing", ascending=True)
-    )
-    axis = echart_axis_color()
-    palette = chart_palette()
-    ui.echart({
-        "tooltip": base_tooltip("axis"),
-        "grid": base_grid(left=160, right=40, top=10, bottom=30),
-        "xAxis": {"type": "value", "axisLabel": {"color": axis}},
-        "yAxis": {"type": "category",
-                  "data": counts["camera_name"].tolist(),
-                  "axisLabel": {"color": axis}},
-        "series": [{
-            "type": "bar",
-            "data": counts["missing"].astype(int).tolist(),
-            "itemStyle": {"color": palette[2], "borderRadius": [0, 4, 4, 0]},
-            "label": {"show": True, "position": "right", "color": axis},
-        }],
-    }).style("height: 320px;")
-
-
 def _inventory_grid(seq: pd.DataFrame) -> None:
     if seq.empty:
         empty_state("No inventory rows.")
@@ -303,52 +230,28 @@ def seq_page() -> None:
         clean = seq[~junk_mask].copy()
         junk = seq[junk_mask].copy()
 
-        missing = query_df(
-            db_path,
-            "SELECT recording_date, case_no, camera_name FROM cur_seq_missing",
-        )
-
         total_files = len(clean)
         total_size_gb = round(
             (clean["size_mb"].dropna().sum() / 1024) if "size_mb" in clean.columns else 0,
             1,
         )
         junk_count = len(junk)
-        cases_with_gaps = (
-            missing.groupby(["recording_date", "case_no"]).ngroups
-            if not missing.empty else 0
-        )
 
         with ui.row().classes("w-full no-wrap gap-4"):
             kpi_card("SEQ FILES", f"{total_files:,}", "JUNK excluded")
             kpi_card("TOTAL SIZE", f"{total_size_gb:,} GB", "on disk")
             kpi_card("JUNK ROWS", f"{junk_count:,}", "undersized / failed")
-            kpi_card("CASES WITH GAPS", f"{cases_with_gaps:,}",
-                     "≥1 missing camera")
 
-        with ui.row().classes("w-full no-wrap gap-4 items-stretch"):
-            with ui.card().classes("surface-1 q-pa-md flex-grow"):
-                ui.label("Files per camera").classes("text-subtitle1 text-weight-medium")
-                ui.label("Count of SEQ files (JUNK excluded).").classes("text-caption muted")
-                _files_per_camera(clean)
+        with ui.card().classes("surface-1 w-full q-pa-md"):
+            ui.label("Total size per camera").classes("text-subtitle1 text-weight-medium")
+            ui.label("Sum of size_mb, in GB.").classes("text-caption muted")
+            _size_per_camera(clean)
 
-            with ui.card().classes("surface-1 q-pa-md flex-grow"):
-                ui.label("Total size per camera").classes("text-subtitle1 text-weight-medium")
-                ui.label("Sum of size_mb, in GB.").classes("text-caption muted")
-                _size_per_camera(clean)
-
-        with ui.row().classes("w-full no-wrap gap-4 items-stretch"):
-            with ui.card().classes("surface-1 q-pa-md flex-grow"):
-                ui.label("JUNK breakdown").classes("text-subtitle1 text-weight-medium")
-                ui.label("Undersized rows grouped by underlying camera.") \
-                    .classes("text-caption muted")
-                _junk_breakdown(junk)
-
-            with ui.card().classes("surface-1 q-pa-md flex-grow"):
-                ui.label("Missing SEQ per camera").classes("text-subtitle1 text-weight-medium")
-                ui.label("From cur_seq_missing — camera/case slots without a SEQ.") \
-                    .classes("text-caption muted")
-                _missing_per_camera(missing)
+        with ui.card().classes("surface-1 w-full q-pa-md"):
+            ui.label("JUNK breakdown").classes("text-subtitle1 text-weight-medium")
+            ui.label("Undersized rows grouped by underlying camera.") \
+                .classes("text-caption muted")
+            _junk_breakdown(junk)
 
         # ── Coverage: SEQ camera × date heatmap ────────────────────────────
         with ui.card().classes("surface-1 w-full q-pa-md"):
@@ -363,13 +266,6 @@ def seq_page() -> None:
             ui.label("Share of cases where each camera has a SEQ.") \
                 .classes("text-caption muted")
             _presence_bars(clean)
-
-        with ui.card().classes("surface-1 w-full q-pa-md"):
-            ui.label("Missing SEQ — detail").classes("text-subtitle1 text-weight-medium")
-            ui.label("Rows from cur_seq_missing — every camera/case slot whose "
-                     "SEQ file is not on disk.") \
-                .classes("text-caption muted")
-            _missing_grid(missing)
 
         with ui.card().classes("surface-1 w-full q-pa-md"):
             ui.label("Inventory").classes("text-subtitle1 text-weight-medium")

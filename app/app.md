@@ -17,9 +17,8 @@ app/
 └── pages/
     ├── anesthesiology.py  — /anesthesiology (cur_seniority + recording_details)
     ├── database.py        — /database  (table CRUD + ERD viewer)
-    ├── views.py           — /views     (raw view browser, kept for ad-hoc)
     ├── mp4.py             — /mp4       (mp4_status + cur_mp4_* — stats + coverage)
-    ├── seq.py             — /seq       (seq_status + cur_seq_missing — inventory + coverage)
+    ├── seq.py             — /seq       (seq_status — inventory + coverage)
     └── seq_advanced.py    — /seq-advanced (seq_field_analysis: header + IDX integrity)
 ```
 
@@ -83,7 +82,6 @@ per-file frame analysis), `boris_events`, `analysis_information`,
 
 Views (read-only — don't write to these):
 - `cur_mp4_missing` — pivot of cameras present per (date, case)
-- `cur_seq_missing` — every (date, case, camera) slot in `seq_status` with no SEQ file on disk
 - `cur_sync_status` — per-(date, case, camera) `is_syncable` flag from `seq_enriched`, encoding the `3_seq_to_mp4_convert.py` planning gates
 - `cur_mp4_status_statistics` — MP4 cases with cameras_count
 - `cur_boris_intervals` — paired START/STOP behavior intervals

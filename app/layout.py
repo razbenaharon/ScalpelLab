@@ -18,7 +18,6 @@ NAV_LINKS = [
     ("Home",            "/",                "dashboard",      "Home"),
     ("Database",        "/database",        "table_view",     "Database Management"),
     ("Anesthesiology",  "/anesthesiology",  "medical_services", "Anesthesiology"),
-    ("Views",           "/views",           "visibility",     "Database Views"),
     ("MP4",             "/mp4",             "movie",          "MP4"),
     ("SEQ",             "/seq",             "folder_open",    "SEQ"),
     ("Advanced SEQ",    "/seq-advanced",    "analytics",      "Advanced SEQ"),
