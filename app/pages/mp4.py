@@ -10,6 +10,7 @@ Sources: ``cur_mp4_status_statistics``, ``cur_mp4_missing``, ``mp4_status``.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 from nicegui import ui
 
@@ -280,6 +281,182 @@ def _missing_grid(db_path: str) -> None:
     }).classes("ag-theme-balham w-full").style("height: 360px;")
 
 
+# Renders a coloured-dot status cell. Green for Synced, red for Not Syncable,
+# amber for Partial. Used by both the case list and the per-camera list.
+_STATUS_CELL_RENDERER = """
+function(p){
+  const v = p.value || '';
+  let c = '#94a3b8';
+  if (v === 'Synced') c = '#10B981';
+  else if (v === 'Not Syncable') c = '#EF4444';
+  else if (v === 'Partial') c = '#F59E0B';
+  return `<span style="display:inline-flex;align-items:center;gap:6px;">
+            <span style="width:10px;height:10px;border-radius:50%;background:${c};display:inline-block;"></span>
+            <span style="color:${c};font-weight:600;">${v}</span>
+          </span>`;
+}
+"""
+
+
+def _sync_df(db_path: str) -> pd.DataFrame:
+    df = query_df(
+        db_path,
+        "SELECT recording_date, case_no, camera_name, is_syncable "
+        "FROM cur_sync_status",
+    )
+    if not df.empty:
+        df["is_syncable"] = df["is_syncable"].astype(int)
+    return df
+
+
+def _sync_kpis(sync_df: pd.DataFrame) -> tuple[int, int, int, int]:
+    if sync_df.empty:
+        return 0, 0, 0, 0
+    synced_recs = int(sync_df["is_syncable"].sum())
+    not_syncable = int((1 - sync_df["is_syncable"]).sum())
+    case_agg = (
+        sync_df.groupby(["recording_date", "case_no"])["is_syncable"]
+        .agg(["sum", "size"]).reset_index()
+    )
+    synced_cases = int((case_agg["sum"] == case_agg["size"]).sum())
+    partial_cases = int(
+        ((case_agg["sum"] > 0) & (case_agg["sum"] < case_agg["size"])).sum()
+    )
+    return synced_recs, not_syncable, synced_cases, partial_cases
+
+
+def _sync_status_bar(synced: int, not_syncable: int) -> None:
+    if synced == 0 and not_syncable == 0:
+        empty_state("No sync status data.")
+        return
+    axis = echart_axis_color()
+    ui.echart({
+        "tooltip": base_tooltip("axis"),
+        "grid": base_grid(left=60, right=20, top=20, bottom=40),
+        "xAxis": {"type": "category", "data": ["Synced", "Not Syncable"],
+                  "axisLabel": {"color": axis}},
+        "yAxis": {"type": "value", "name": "Recordings",
+                  "axisLabel": {"color": axis},
+                  "nameTextStyle": {"color": axis}},
+        "series": [{
+            "type": "bar",
+            "data": [
+                {"value": synced,       "itemStyle": {"color": "#10B981"}},
+                {"value": not_syncable, "itemStyle": {"color": "#EF4444"}},
+            ],
+            "itemStyle": {"borderRadius": [4, 4, 0, 0]},
+            "label": {"show": True, "position": "top", "color": axis,
+                      "fontWeight": "bold"},
+        }],
+    }).style("height: 280px;")
+
+
+def _avg_cameras_per_month(df: pd.DataFrame) -> None:
+    if df.empty:
+        empty_state("No data.")
+        return
+    monthly = (
+        df.groupby("month")["cameras_count"].mean().reset_index()
+        .sort_values("month")
+    )
+    monthly["avg"] = monthly["cameras_count"].round(2)
+    if monthly.empty:
+        empty_state("No data.")
+        return
+    axis = echart_axis_color()
+    palette = chart_palette()
+    ui.echart({
+        "tooltip": base_tooltip("axis"),
+        "grid": base_grid(left=50, right=20, top=20, bottom=70),
+        "xAxis": {"type": "category", "data": monthly["month"].tolist(),
+                  "axisLabel": {"rotate": 45, "color": axis}},
+        "yAxis": {"type": "value", "min": 0, "max": 9,
+                  "axisLabel": {"color": axis}},
+        "series": [{
+            "type": "line", "smooth": True, "showSymbol": True,
+            "data": monthly["avg"].tolist(),
+            "lineStyle": {"width": 3, "color": palette[3]},
+            "itemStyle": {"color": palette[3]},
+            "areaStyle": {"opacity": 0.18, "color": palette[3]},
+        }],
+    }).style("height: 280px;")
+
+
+def _complete_case_list(sync_df: pd.DataFrame) -> None:
+    if sync_df.empty:
+        empty_state("No sync status data.")
+        return
+    case_agg = (
+        sync_df.groupby(["recording_date", "case_no"])
+        .agg(cameras=("camera_name", "size"),
+             synced=("is_syncable", "sum"))
+        .reset_index()
+    )
+    case_agg["Status"] = np.where(
+        case_agg["synced"] == case_agg["cameras"], "Synced",
+        np.where(case_agg["synced"] == 0, "Not Syncable", "Partial"),
+    )
+    case_agg = case_agg.sort_values(
+        ["recording_date", "case_no"], ascending=[False, True]
+    )
+    rows = case_agg.assign(
+        Date=case_agg["recording_date"],
+        Case=case_agg["case_no"].apply(lambda n: f"Case {n}"),
+        Cameras=case_agg["cameras"].astype(int),
+    )[["Date", "Case", "Cameras", "Status"]]
+    ui.aggrid({
+        "defaultColDef": {"sortable": True, "filter": True, "resizable": True,
+                          "floatingFilter": True},
+        "columnDefs": [
+            {"field": "Date",    "headerName": "Date",     "width": 130},
+            {"field": "Case",    "headerName": "Case No.", "width": 120},
+            {"field": "Cameras", "headerName": "Cameras",  "width": 110,
+             "filter": "agNumberColumnFilter"},
+            {"field": "Status",  "headerName": "Status",
+             ":cellRenderer": _STATUS_CELL_RENDERER},
+        ],
+        "rowData": rows.to_dict("records"),
+        "pagination": True, "paginationPageSize": 25,
+    }).classes("ag-theme-balham w-full").style("height: 520px;")
+
+
+def _detailed_recording_list(sync_df: pd.DataFrame) -> None:
+    if sync_df.empty:
+        empty_state("No sync status data.")
+        return
+    rows = sync_df.copy()
+    rows["Status"] = np.where(rows["is_syncable"] == 1, "Synced", "Not Syncable")
+    rows = rows.sort_values(
+        ["recording_date", "case_no", "camera_name"],
+        ascending=[False, True, True],
+    )
+    rows = rows.assign(
+        Date=rows["recording_date"],
+        Case=rows["case_no"].apply(lambda n: f"Case {n}"),
+        Camera=rows["camera_name"],
+    )[["Date", "Case", "Camera", "Status"]]
+
+    n_recordings = len(rows)
+    n_cases = sync_df.groupby(["recording_date", "case_no"]).ngroups
+    ui.label(
+        f"{n_recordings:,} recordings across {n_cases:,} cases"
+    ).classes("text-caption muted q-mb-sm")
+
+    ui.aggrid({
+        "defaultColDef": {"sortable": True, "filter": True, "resizable": True,
+                          "floatingFilter": True},
+        "columnDefs": [
+            {"field": "Date",   "headerName": "Date",     "width": 130},
+            {"field": "Case",   "headerName": "Case No.", "width": 120},
+            {"field": "Camera", "headerName": "Camera",   "width": 200},
+            {"field": "Status", "headerName": "Status",
+             ":cellRenderer": _STATUS_CELL_RENDERER},
+        ],
+        "rowData": rows.to_dict("records"),
+        "pagination": True, "paginationPageSize": 50,
+    }).classes("ag-theme-balham w-full").style("height: 600px;")
+
+
 @ui.page("/mp4")
 def mp4_page() -> None:
     with page_frame("MP4"):
@@ -312,6 +489,7 @@ def mp4_page() -> None:
 
         # Coverage data (also used for KPIs below).
         presence = _presence_df(db_path)
+        sync_df = _sync_df(db_path)
         if presence.empty:
             full_cases = partial_cases = 0
         else:
@@ -359,6 +537,12 @@ def mp4_page() -> None:
                 ui.label("Cases per month.").classes("text-caption muted")
                 _monthly_timeline(df)
 
+        with ui.card().classes("surface-1 w-full q-pa-md"):
+            ui.label("Average cameras per month").classes("text-subtitle1 text-weight-medium")
+            ui.label("Mean camera count per recording, by month.") \
+                .classes("text-caption muted")
+            _avg_cameras_per_month(df)
+
         # ── Coverage: MP4 camera × date heatmap ────────────────────────────
         with ui.card().classes("surface-1 w-full q-pa-md"):
             ui.label("Camera × date coverage").classes("text-subtitle1 text-weight-medium")
@@ -385,3 +569,37 @@ def mp4_page() -> None:
             ui.label("From cur_mp4_missing — cameras with a SEQ but no MP4 export yet.") \
                 .classes("text-caption muted")
             _missing_grid(db_path)
+
+        # ── Sync status overview (from cur_sync_status) ────────────────────
+        synced_recs, not_syncable_recs, synced_cases, partial_cases = _sync_kpis(sync_df)
+        total_sync = synced_recs + not_syncable_recs
+        synced_pct = round(synced_recs / total_sync * 100, 1) if total_sync else 0.0
+
+        with ui.card().classes("surface-1 w-full q-pa-md"):
+            ui.label("Sync status overview").classes("text-subtitle1 text-weight-medium")
+            ui.label(
+                f"From cur_sync_status — {total_sync:,} recordings  •  "
+                f"{synced_recs:,} synced ({synced_pct}%)  •  "
+                f"{not_syncable_recs:,} not syncable"
+            ).classes("text-caption muted")
+            with ui.row().classes("w-full no-wrap gap-4 q-mt-sm"):
+                kpi_card("SYNCED",         f"{synced_recs:,}",
+                         f"{synced_pct}% of recordings")
+                kpi_card("NOT SYNCABLE",   f"{not_syncable_recs:,}", "unrecoverable")
+                kpi_card("SYNCED CASES",   f"{synced_cases:,}",
+                         "all cameras syncable")
+                kpi_card("PARTIAL CASES",  f"{partial_cases:,}",
+                         "some cameras lost")
+            _sync_status_bar(synced_recs, not_syncable_recs)
+
+        with ui.card().classes("surface-1 w-full q-pa-md"):
+            ui.label("Complete case list").classes("text-subtitle1 text-weight-medium")
+            ui.label("Per-case sync status — Synced, Partial, or Not Syncable.") \
+                .classes("text-caption muted")
+            _complete_case_list(sync_df)
+
+        with ui.card().classes("surface-1 w-full q-pa-md"):
+            ui.label("Detailed recording list").classes("text-subtitle1 text-weight-medium")
+            ui.label("Per-camera sync status from cur_sync_status.") \
+                .classes("text-caption muted")
+            _detailed_recording_list(sync_df)

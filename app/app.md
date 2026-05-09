@@ -84,6 +84,7 @@ per-file frame analysis), `boris_events`, `analysis_information`,
 Views (read-only — don't write to these):
 - `cur_mp4_missing` — pivot of cameras present per (date, case)
 - `cur_seq_missing` — every (date, case, camera) slot in `seq_status` with no SEQ file on disk
+- `cur_sync_status` — per-(date, case, camera) `is_syncable` flag from `seq_enriched`, encoding the `3_seq_to_mp4_convert.py` planning gates
 - `cur_mp4_status_statistics` — MP4 cases with cameras_count
 - `cur_boris_intervals` — paired START/STOP behavior intervals
 - `cur_seniority` — anesthesiology roster with computed seniority + A/R status

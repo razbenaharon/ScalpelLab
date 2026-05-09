@@ -176,6 +176,9 @@ python MPV_Multiviewer/run_viewer.py
 
 - `cur_mp4_missing`: cases where SEQ exists but MP4 is missing.
 - `cur_seq_missing`: every `seq_status` slot whose file is not on disk (`size_mb IS NULL`).
+- `cur_sync_status`: per-camera `is_syncable` flag derived from `seq_enriched`,
+  encoding the `3_seq_to_mp4_convert.py` planning gates (IDX present, header
+  ok, valid frame timestamps, sane duration, ≥ 50 MB SEQ).
 - `cur_seniority`: anesthesiology experience / status summary.
 - `cur_mp4_status_statistics`: aggregated recording statistics used by the MP4
   dashboard.
