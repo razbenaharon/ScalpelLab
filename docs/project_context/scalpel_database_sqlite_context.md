@@ -65,7 +65,7 @@ keys as useful schema intent, not as proof that all existing rows are clean.
 | View | Rows | Meaning |
 |---|---:|---|
 | `cur_mp4_missing` | 185 | Per-case camera matrix showing MP4 rows with both `size_mb` and `duration_minutes`. |
-| `cur_seq_missing` | 0 | Camera rows where an MP4 exists but the matching SEQ status row has no size. |
+| `cur_seq_missing` | 628 | Every (date, case, camera) slot in `seq_status` whose `size_mb IS NULL` — i.e. expected SEQ files that are not on disk. |
 | `cur_seniority` | 73 | Current anesthesiology seniority and attending/resident status derived from dates. |
 | `cur_mp4_status_statistics` | 162 | Recording-level camera counts used by the MP4 statistics dashboard. |
 | `cur_boris_intervals` | 43 | START/STOP BORIS event pairs expanded through `analysis_information.event_id`; current linked rows are all `MISSING_STOP`. |

@@ -175,7 +175,7 @@ python MPV_Multiviewer/run_viewer.py
 ### Common Views
 
 - `cur_mp4_missing`: cases where SEQ exists but MP4 is missing.
-- `cur_seq_missing`: cases where MP4 exists but SEQ is missing.
+- `cur_seq_missing`: every `seq_status` slot whose file is not on disk (`size_mb IS NULL`).
 - `cur_seniority`: anesthesiology experience / status summary.
 - `cur_mp4_status_statistics`: aggregated recording statistics used by the MP4
   dashboard.
