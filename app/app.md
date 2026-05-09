@@ -83,7 +83,7 @@ per-file frame analysis), `boris_events`, `analysis_information`,
 
 Views (read-only — don't write to these):
 - `cur_mp4_missing` — pivot of cameras present per (date, case)
-- `cur_seq_missing` — SEQ files gone but MP4 still exists (actionable issues)
+- `cur_seq_missing` — every (date, case, camera) slot in `seq_status` with no SEQ file on disk
 - `cur_mp4_status_statistics` — MP4 cases with cameras_count
 - `cur_boris_intervals` — paired START/STOP behavior intervals
 - `cur_seniority` — anesthesiology roster with computed seniority + A/R status

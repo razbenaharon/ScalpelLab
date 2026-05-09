@@ -366,8 +366,8 @@ def seq_page() -> None:
 
         with ui.card().classes("surface-1 w-full q-pa-md"):
             ui.label("Missing SEQ — detail").classes("text-subtitle1 text-weight-medium")
-            ui.label("Rows from cur_seq_missing — actionable gaps where the SEQ "
-                     "is gone but an MP4 was already exported.") \
+            ui.label("Rows from cur_seq_missing — every camera/case slot whose "
+                     "SEQ file is not on disk.") \
                 .classes("text-caption muted")
             _missing_grid(missing)
 
