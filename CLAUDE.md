@@ -93,9 +93,9 @@ Routing — read the relevant context file before editing:
   `sync_offset_ms`, redaction flags) must be preserved. Implementation uses
   `INSERT … ON CONFLICT(pk) DO UPDATE SET <managed>=…`. Never replace this
   with `INSERT OR REPLACE` or full overwrites.
-- **Views are read-only**: `cur_mp4_missing`, `cur_seq_missing`,
-  `cur_seniority`, `cur_mp4_status_statistics`, `cur_boris_intervals`. Don't
-  write to them; rebuild via the producer script.
+- **Views are read-only**: `cur_mp4_missing`, `cur_seniority`,
+  `cur_mp4_status_statistics`, `cur_boris_intervals`. Don't write to them;
+  rebuild via the producer script.
 - **JUNK rows**: any `camera_name` ending in `_JUNK` / `_Junk` is a failed or
   undersized recording. Filter out for stats and visualizations.
 - **Drift outliers**: `seq_enriched.time_drift_ms` has corrupt values (~2e12

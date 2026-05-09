@@ -34,7 +34,6 @@ from app.pages import (  # noqa: F401,E402
     mp4,
     seq,
     seq_advanced,
-    views,
 )
 
 
@@ -81,63 +80,6 @@ def _calendar_heatmap(mp4: pd.DataFrame) -> None:
         "calendar": calendars,
         "series":   series,
     }).style(f"height: {30 + 150 * len(cal_range) + 60}px;")
-
-
-def _camera_health(seq: pd.DataFrame) -> None:
-    if seq.empty:
-        ui.label("No seq_field_analysis data.").classes("text-warning q-mt-sm")
-        return
-    cam = (
-        seq.dropna(subset=["drop_rate"])
-        .groupby("camera_name")["drop_rate"]
-        .mean().mul(100).round(2).reset_index()
-        .sort_values("drop_rate", ascending=True)
-    )
-    if cam.empty:
-        ui.label("No drop-rate data available.").classes("muted q-mt-sm")
-        return
-    ui.echart({
-        "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"},
-                    "formatter": "{b}: {c}%"},
-        "grid":    {"left": 150, "right": 40, "top": 10, "bottom": 30},
-        "xAxis":   {"type": "value", "axisLabel": {"formatter": "{value}%"}},
-        "yAxis":   {"type": "category", "data": cam["camera_name"].tolist()},
-        "series": [{
-            "type": "bar", "data": cam["drop_rate"].tolist(),
-            "itemStyle": {
-                "color": {
-                    "type": "linear", "x": 0, "y": 0, "x2": 1, "y2": 0,
-                    "colorStops": [
-                        {"offset": 0, "color": "#10B981"},
-                        {"offset": 1, "color": "#F59E0B"},
-                    ],
-                },
-                "borderRadius": [0, 4, 4, 0],
-            },
-            "label": {"show": True, "position": "right", "formatter": "{c}%"},
-        }],
-    }).style("height: 320px;")
-
-
-def _recent_activity(mp4: pd.DataFrame) -> None:
-    recent = (
-        mp4.groupby("recording_date").size().reset_index(name="cases")
-        .sort_values("recording_date", ascending=False).head(5)
-    )
-    if recent.empty:
-        ui.label("No recordings yet.").classes("muted q-mt-sm")
-        return
-    with ui.list().props("dense bordered separator").classes("w-full q-mt-sm"):
-        for _, row in recent.iterrows():
-            with ui.item():
-                with ui.item_section():
-                    ui.label(str(row["recording_date"])).classes("text-weight-medium")
-                    ui.label(f"{int(row['cases'])} case(s)").classes("text-caption muted")
-                with ui.item_section().props("side"):
-                    ui.button(
-                        icon="open_in_new",
-                        on_click=lambda: ui.navigate.to("/database"),
-                    ).props("flat dense round").tooltip("Open in Database")
 
 
 @ui.page("/")
@@ -232,17 +174,6 @@ def home() -> None:
             ui.label("Recording activity").classes("text-subtitle1 text-weight-medium")
             ui.label("Cases per day — last two years").classes("text-caption muted")
             _calendar_heatmap(mp4)
-
-        with ui.row().classes("w-full no-wrap gap-4 items-stretch"):
-            with ui.card().classes("surface-1 q-pa-md flex-grow"):
-                ui.label("Camera health").classes("text-subtitle1 text-weight-medium")
-                ui.label("Mean drop rate per camera (lower is better)").classes("text-caption muted")
-                _camera_health(seq)
-
-            with ui.card().classes("surface-1 q-pa-md").style("min-width: 360px;"):
-                ui.label("Recent activity").classes("text-subtitle1 text-weight-medium")
-                ui.label("Last 5 surgery days").classes("text-caption muted")
-                _recent_activity(mp4)
 
 
 def main() -> None:

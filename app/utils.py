@@ -84,7 +84,7 @@ def list_views(db_path: str) -> List[str]:
     Example:
         >>> views = list_views("ScalpelDatabase.sqlite")
         >>> print(views)
-        ['cur_mp4_missing', 'cur_seq_missing', 'cur_seniority']
+        ['cur_mp4_missing', 'cur_seniority']
     """
     with connect(db_path) as conn:
         cur = conn.cursor()

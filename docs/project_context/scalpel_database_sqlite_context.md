@@ -65,7 +65,6 @@ keys as useful schema intent, not as proof that all existing rows are clean.
 | View | Rows | Meaning |
 |---|---:|---|
 | `cur_mp4_missing` | 185 | Per-case camera matrix showing MP4 rows with both `size_mb` and `duration_minutes`. |
-| `cur_seq_missing` | 628 | Every (date, case, camera) slot in `seq_status` whose `size_mb IS NULL` — i.e. expected SEQ files that are not on disk. |
 | `cur_sync_status` | 812 | Per-(date, case, camera) `is_syncable` flag derived from `seq_enriched` using the `3_seq_to_mp4_convert.py` planning gates (has_idx, header_ok, idx_frames > 0, frame timestamps in 2015–2030, duration ≤ 250000s, size_mb ≥ 50). Excludes `_JUNK`/`_Junk` cameras. |
 | `cur_seniority` | 73 | Current anesthesiology seniority and attending/resident status derived from dates. |
 | `cur_mp4_status_statistics` | 162 | Recording-level camera counts used by the MP4 statistics dashboard. |
