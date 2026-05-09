@@ -145,8 +145,10 @@ content as sensitive PHI-equivalent data.
   `Allow git-crypt unlock in Claude permissions`,
   `Replace ERD home with dashboard; add ERD zoom dialog`.
 - **One logical change per commit.** Don't bundle unrelated edits.
-- **Never push, force-push, or rewrite history** without explicit user
-  request. Never push to `main` from an agent context.
+- **Don't push, force-push, or rewrite history** without explicit user
+  request. Pushing to `main` is allowed when the user explicitly asks
+  ("commit and push", "push to main", etc.); never force-push or rewrite
+  published history without explicit confirmation.
 - **Never** use `--no-verify`, `--no-gpg-sign`, or otherwise skip hooks.
 - **Stage explicitly** (`git add <file>`) — avoid `git add -A` so videos,
   tracking JSONs, and unencrypted DB backups don't slip in. The main
