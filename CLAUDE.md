@@ -114,11 +114,19 @@ Routing — read the relevant context file before editing:
 This repo handles **medical/surgical recordings**. Treat all video and DB
 content as sensitive PHI-equivalent data.
 
-- **Never commit**: `ScalpelDatabase.sqlite`, any `.seq` / `.mp4` /
-  `.idx` / `.aud` files, `docs/*_tracking.json` (may reference patient
-  cases), or anything under `MPV_Multiviewer/` runtime config containing
-  case paths. The `.gitignore` does not currently block all of these — be
-  defensive when staging.
+- **`ScalpelDatabase.sqlite` IS committed**, but only because it is
+  encrypted in-tree by **git-crypt** (`.gitattributes` maps `*.sqlite` to
+  `filter=git-crypt diff=git-crypt`). Before staging the DB, always run
+  `git crypt status ScalpelDatabase.sqlite` — it must report `encrypted:`.
+  If it reports `not encrypted`, **stop**: the working clone is missing
+  the git-crypt key (`git-crypt unlock` first) and a raw push would leak
+  the DB. Treat any other `*.sqlite` (e.g. backups like
+  `ScalpelDatabase.sqlite.bak_*`) the same way.
+- **Never commit**: any `.seq` / `.mp4` / `.idx` / `.aud` files,
+  `docs/*_tracking.json` (may reference patient cases), or anything under
+  `MPV_Multiviewer/` runtime config containing case paths. The
+  `.gitignore` does not currently block all of these — be defensive when
+  staging.
 - **Never paste** patient names, case details, or video frames into web
   tools (pastebins, diagram renderers, public LLMs).
 - **Redaction workflow** (`scripts/helpers/batch_black_squere.py`) reads
@@ -140,8 +148,10 @@ content as sensitive PHI-equivalent data.
 - **Never push, force-push, or rewrite history** without explicit user
   request. Never push to `main` from an agent context.
 - **Never** use `--no-verify`, `--no-gpg-sign`, or otherwise skip hooks.
-- **Stage explicitly** (`git add <file>`) — avoid `git add -A` so the DB,
-  videos, and tracking JSONs don't slip in.
+- **Stage explicitly** (`git add <file>`) — avoid `git add -A` so videos,
+  tracking JSONs, and unencrypted DB backups don't slip in. The main
+  `ScalpelDatabase.sqlite` is fine to stage (git-crypt encrypts it on
+  commit), but verify with `git crypt status` first.
 - **Branch hygiene**: work on a feature branch when the change is
   non-trivial. The repo's main branch is `main`.
 
