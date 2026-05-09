@@ -94,7 +94,7 @@ def home() -> None:
         )
         seq = _query(
             db_path,
-            "SELECT recording_date, camera_name, drop_rate FROM seq_field_analysis "
+            "SELECT recording_date, camera_name, drop_rate FROM seq_enriched "
             "WHERE drop_rate IS NOT NULL",
         )
         tagged = _query(
