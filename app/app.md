@@ -19,7 +19,7 @@ app/
     ├── database.py        — /database  (table CRUD + ERD viewer)
     ├── mp4.py             — /mp4       (mp4_status + cur_mp4_* — stats + coverage)
     ├── seq.py             — /seq       (seq_status — inventory + coverage)
-    └── seq_advanced.py    — /seq-advanced (seq_field_analysis: header + IDX integrity)
+    └── seq_advanced.py    — /seq-advanced (seq_enriched: header + IDX integrity)
 ```
 
 ## Page contract
