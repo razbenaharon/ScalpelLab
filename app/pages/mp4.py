@@ -33,6 +33,13 @@ CAMERAS = [
 ]
 
 
+def _section(title: str, subtitle: str, body_fn) -> None:
+    with ui.card().classes("surface-1 w-full q-pa-md"):
+        ui.label(title).classes("text-subtitle1 text-weight-medium")
+        ui.label(subtitle).classes("text-caption muted")
+        body_fn()
+
+
 def _presence_df(db_path: str) -> pd.DataFrame:
     return query_df(
         db_path,
@@ -464,94 +471,121 @@ def mp4_page() -> None:
                 ((per_case["present"] > 0) & (per_case["present"] < len(CAMERAS))).sum()
             )
 
-        with ui.row().classes("w-full no-wrap gap-4"):
-            kpi_card("TOTAL RECORDINGS", f"{total_recordings:,}", "video files")
-            kpi_card("SURGERY DAYS",     f"{surgery_days:,}",     "unique dates")
-            kpi_card("PARTIAL CASES",    f"{partial_cases:,}",   "missing ≥1 camera")
+        with ui.tabs().classes("w-full") as tabs:
+            ui.tab("Overview")
+            ui.tab("Coverage")
+            ui.tab("Sync")
+        with ui.tab_panels(tabs, value="Overview").classes("w-full surface-1"):
+            with ui.tab_panel("Overview"):
+                _overview_panel(
+                    df, total_recordings, surgery_days, partial_cases,
+                    date_min, date_max, avg_cameras, max_cameras,
+                )
+            with ui.tab_panel("Coverage"):
+                _coverage_panel(db_path, presence)
+            with ui.tab_panel("Sync"):
+                _sync_panel(sync_df)
 
+
+def _overview_panel(
+    df: pd.DataFrame,
+    total_recordings: int,
+    surgery_days: int,
+    partial_cases: int,
+    date_min: str,
+    date_max: str,
+    avg_cameras: float,
+    max_cameras: int,
+) -> None:
+    with ui.row().classes("w-full no-wrap gap-4"):
+        kpi_card("TOTAL RECORDINGS", f"{total_recordings:,}", "video files")
+        kpi_card("SURGERY DAYS",     f"{surgery_days:,}",     "unique dates")
+        kpi_card("PARTIAL CASES",    f"{partial_cases:,}",   "missing ≥1 camera")
+
+    ui.label(
+        f"Range: {date_min} → {date_max}  •  Avg cameras {avg_cameras}  •  Max {max_cameras}"
+    ).classes("text-caption muted")
+
+    with ui.row().classes("w-full no-wrap gap-4 items-stretch"):
+        with ui.card().classes("surface-1 q-pa-md flex-grow"):
+            ui.label("Camera count distribution").classes("text-subtitle1 text-weight-medium")
+            ui.label("How many cameras each recording has.").classes("text-caption muted")
+            _camera_count_distribution(df)
+
+        with ui.card().classes("surface-1 q-pa-md flex-grow"):
+            ui.label("Yearly overview").classes("text-subtitle1 text-weight-medium")
+            ui.label("Recordings vs surgery days per year.").classes("text-caption muted")
+            _yearly_overview(df)
+
+    with ui.row().classes("w-full no-wrap gap-4 items-stretch"):
+        with ui.card().classes("surface-1 q-pa-md flex-grow"):
+            ui.label("Cases per surgery day").classes("text-subtitle1 text-weight-medium")
+            ui.label("Distribution of how many cases run on a given day.") \
+                .classes("text-caption muted")
+            _cases_per_day(df)
+
+        with ui.card().classes("surface-1 q-pa-md flex-grow"):
+            ui.label("Monthly timeline").classes("text-subtitle1 text-weight-medium")
+            ui.label("Cases per month.").classes("text-caption muted")
+            _monthly_timeline(df)
+
+    with ui.card().classes("surface-1 w-full q-pa-md"):
+        ui.label("Average cameras per month").classes("text-subtitle1 text-weight-medium")
+        ui.label("Mean camera count per recording, by month.") \
+            .classes("text-caption muted")
+        _avg_cameras_per_month(df)
+
+
+def _coverage_panel(db_path: str, presence: pd.DataFrame) -> None:
+    with ui.card().classes("surface-1 w-full q-pa-md"):
+        ui.label("Camera × date coverage").classes("text-subtitle1 text-weight-medium")
+        ui.label("One column per recording day. Green = MP4 present, red = missing.") \
+            .classes("text-caption muted")
+        _coverage_heatmap(presence)
+
+    with ui.card().classes("surface-1 w-full q-pa-md"):
+        ui.label("Per-camera presence rate").classes("text-subtitle1 text-weight-medium")
+        ui.label("Share of cases where each camera has an MP4.") \
+            .classes("text-caption muted")
+        _presence_bars(presence)
+
+    with ui.card().classes("surface-1 w-full q-pa-md"):
+        ui.label("Missing MP4s").classes("text-subtitle1 text-weight-medium")
+        ui.label("From cur_mp4_missing — cameras with a SEQ but no MP4 export yet.") \
+            .classes("text-caption muted")
+        _missing_grid(db_path)
+
+
+def _sync_panel(sync_df: pd.DataFrame) -> None:
+    synced_recs, not_syncable_recs, synced_cases, partial_cases = _sync_kpis(sync_df)
+    total_sync = synced_recs + not_syncable_recs
+    synced_pct = round(synced_recs / total_sync * 100, 1) if total_sync else 0.0
+
+    with ui.card().classes("surface-1 w-full q-pa-md"):
+        ui.label("Sync status overview").classes("text-subtitle1 text-weight-medium")
         ui.label(
-            f"Range: {date_min} → {date_max}  •  Avg cameras {avg_cameras}  •  Max {max_cameras}"
+            f"From cur_sync_status — {total_sync:,} recordings  •  "
+            f"{synced_recs:,} synced ({synced_pct}%)  •  "
+            f"{not_syncable_recs:,} not syncable"
         ).classes("text-caption muted")
+        with ui.row().classes("w-full no-wrap gap-4 q-mt-sm"):
+            kpi_card("SYNCED",         f"{synced_recs:,}",
+                     f"{synced_pct}% of recordings")
+            kpi_card("NOT SYNCABLE",   f"{not_syncable_recs:,}", "unrecoverable")
+            kpi_card("SYNCED CASES",   f"{synced_cases:,}",
+                     "all cameras syncable")
+            kpi_card("PARTIAL CASES",  f"{partial_cases:,}",
+                     "some cameras lost")
+        _sync_status_bar(synced_recs, not_syncable_recs)
 
-        with ui.row().classes("w-full no-wrap gap-4 items-stretch"):
-            with ui.card().classes("surface-1 q-pa-md flex-grow"):
-                ui.label("Camera count distribution").classes("text-subtitle1 text-weight-medium")
-                ui.label("How many cameras each recording has.").classes("text-caption muted")
-                _camera_count_distribution(df)
+    with ui.card().classes("surface-1 w-full q-pa-md"):
+        ui.label("Complete case list").classes("text-subtitle1 text-weight-medium")
+        ui.label("Per-case sync status — Synced, Partial, or Not Syncable.") \
+            .classes("text-caption muted")
+        _complete_case_list(sync_df)
 
-            with ui.card().classes("surface-1 q-pa-md flex-grow"):
-                ui.label("Yearly overview").classes("text-subtitle1 text-weight-medium")
-                ui.label("Recordings vs surgery days per year.").classes("text-caption muted")
-                _yearly_overview(df)
-
-        with ui.row().classes("w-full no-wrap gap-4 items-stretch"):
-            with ui.card().classes("surface-1 q-pa-md flex-grow"):
-                ui.label("Cases per surgery day").classes("text-subtitle1 text-weight-medium")
-                ui.label("Distribution of how many cases run on a given day.") \
-                    .classes("text-caption muted")
-                _cases_per_day(df)
-
-            with ui.card().classes("surface-1 q-pa-md flex-grow"):
-                ui.label("Monthly timeline").classes("text-subtitle1 text-weight-medium")
-                ui.label("Cases per month.").classes("text-caption muted")
-                _monthly_timeline(df)
-
-        with ui.card().classes("surface-1 w-full q-pa-md"):
-            ui.label("Average cameras per month").classes("text-subtitle1 text-weight-medium")
-            ui.label("Mean camera count per recording, by month.") \
-                .classes("text-caption muted")
-            _avg_cameras_per_month(df)
-
-        # ── Coverage: MP4 camera × date heatmap ────────────────────────────
-        with ui.card().classes("surface-1 w-full q-pa-md"):
-            ui.label("Camera × date coverage").classes("text-subtitle1 text-weight-medium")
-            ui.label("One column per recording day. Green = MP4 present, red = missing.") \
-                .classes("text-caption muted")
-            _coverage_heatmap(presence)
-
-        # ── Coverage: per-camera presence ─────────────────────────────────
-        with ui.card().classes("surface-1 w-full q-pa-md"):
-            ui.label("Per-camera presence rate").classes("text-subtitle1 text-weight-medium")
-            ui.label("Share of cases where each camera has an MP4.") \
-                .classes("text-caption muted")
-            _presence_bars(presence)
-
-        with ui.card().classes("surface-1 w-full q-pa-md"):
-            ui.label("Missing MP4s").classes("text-subtitle1 text-weight-medium")
-            ui.label("From cur_mp4_missing — cameras with a SEQ but no MP4 export yet.") \
-                .classes("text-caption muted")
-            _missing_grid(db_path)
-
-        # ── Sync status overview (from cur_sync_status) ────────────────────
-        synced_recs, not_syncable_recs, synced_cases, partial_cases = _sync_kpis(sync_df)
-        total_sync = synced_recs + not_syncable_recs
-        synced_pct = round(synced_recs / total_sync * 100, 1) if total_sync else 0.0
-
-        with ui.card().classes("surface-1 w-full q-pa-md"):
-            ui.label("Sync status overview").classes("text-subtitle1 text-weight-medium")
-            ui.label(
-                f"From cur_sync_status — {total_sync:,} recordings  •  "
-                f"{synced_recs:,} synced ({synced_pct}%)  •  "
-                f"{not_syncable_recs:,} not syncable"
-            ).classes("text-caption muted")
-            with ui.row().classes("w-full no-wrap gap-4 q-mt-sm"):
-                kpi_card("SYNCED",         f"{synced_recs:,}",
-                         f"{synced_pct}% of recordings")
-                kpi_card("NOT SYNCABLE",   f"{not_syncable_recs:,}", "unrecoverable")
-                kpi_card("SYNCED CASES",   f"{synced_cases:,}",
-                         "all cameras syncable")
-                kpi_card("PARTIAL CASES",  f"{partial_cases:,}",
-                         "some cameras lost")
-            _sync_status_bar(synced_recs, not_syncable_recs)
-
-        with ui.card().classes("surface-1 w-full q-pa-md"):
-            ui.label("Complete case list").classes("text-subtitle1 text-weight-medium")
-            ui.label("Per-case sync status — Synced, Partial, or Not Syncable.") \
-                .classes("text-caption muted")
-            _complete_case_list(sync_df)
-
-        with ui.card().classes("surface-1 w-full q-pa-md"):
-            ui.label("Detailed recording list").classes("text-subtitle1 text-weight-medium")
-            ui.label("Per-camera sync status from cur_sync_status.") \
-                .classes("text-caption muted")
-            _detailed_recording_list(sync_df)
+    with ui.card().classes("surface-1 w-full q-pa-md"):
+        ui.label("Detailed recording list").classes("text-subtitle1 text-weight-medium")
+        ui.label("Per-camera sync status from cur_sync_status.") \
+            .classes("text-caption muted")
+        _detailed_recording_list(sync_df)

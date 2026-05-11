@@ -33,7 +33,6 @@ from app.pages import (  # noqa: F401,E402
     database,
     mp4,
     seq,
-    seq_advanced,
 )
 
 
@@ -92,11 +91,6 @@ def home() -> None:
             db_path,
             "SELECT recording_date, case_no, cameras_count FROM cur_mp4_status_statistics",
         )
-        seq = _query(
-            db_path,
-            "SELECT recording_date, camera_name, drop_rate FROM seq_enriched "
-            "WHERE drop_rate IS NOT NULL",
-        )
         tagged = _query(
             db_path,
             "SELECT DISTINCT recording_date, case_no FROM analysis_information",
@@ -116,13 +110,6 @@ def home() -> None:
         total_recordings = len(mp4)
         surgery_days = mp4["recording_date"].nunique()
 
-        if not seq.empty:
-            seq = seq.assign(date=pd.to_datetime(seq["recording_date"], errors="coerce"))
-            seq["month"] = seq["date"].dt.to_period("M").astype(str)
-            avg_drop = round(seq["drop_rate"].dropna().mean() * 100, 2)
-        else:
-            avg_drop = None
-
         if not tagged.empty:
             tagged_days = tagged["recording_date"].nunique()
             coverage_pct = round(tagged_days / surgery_days * 100) if surgery_days else 0
@@ -135,14 +122,6 @@ def home() -> None:
         days_series = [
             int(mp4[mp4["month"] == m]["recording_date"].nunique()) for m in last_12
         ]
-        if not seq.empty:
-            drop_series = [
-                round(seq.loc[seq["month"] == m, "drop_rate"].mean() * 100, 2)
-                if (seq["month"] == m).any() else 0
-                for m in last_12
-            ]
-        else:
-            drop_series = []
         if not tagged.empty:
             tagged_d = pd.to_datetime(tagged["recording_date"], errors="coerce")
             tagged_months = tagged_d.dt.to_period("M").astype(str)
@@ -158,12 +137,6 @@ def home() -> None:
                             rec_series, "#4F46E5")
             _kpi_with_spark("SURGERY DAYS", f"{surgery_days:,}", "unique dates",
                             days_series, "#14B8A6")
-            _kpi_with_spark(
-                "AVG DROP RATE",
-                f"{avg_drop:.2f}%" if avg_drop is not None else "—",
-                "across all SEQ files",
-                drop_series, "#F59E0B",
-            )
             _kpi_with_spark(
                 "TAGGED COVERAGE", f"{coverage_pct}%",
                 f"{tagged_days} of {surgery_days} days",
