@@ -10,7 +10,7 @@ scripts/
 ├── 1_nuk_seq_export.py         # raw NorPix exports → DATA_YY-MM-DD/CaseN/CameraName/
 ├── 2_update_db.py              # walks SEQ_ROOT and MP4_ROOT, upserts seq_status / mp4_status / seq_enriched
 ├── 3_seq_to_mp4_convert.py     # SEQ → MP4 via raw H.264 + mkvmerge VFR + FFmpeg fps=30 CFR
-├── import_boris_tags.py        # BORIS TSV → boris_events (+ rebuild cur_boris_intervals)
+├── import_boris_tags.py        # BORIS TSV → boris_events (+ link analysis_information.event_id)
 └── helpers/                    # see scripts/helpers/helpers.md
 ```
 
@@ -65,8 +65,11 @@ configurable. Cleans up all temporary files on success or failure.
   logged.
 - Files must contain at least one BORIS event row.
 - Required TSV columns include `Subject`, `Behavior`, `Behavior type`, `Time`.
-- Rebuilds `cur_boris_intervals` (paired START/STOP). Pairing states stored
-  there: `PAIRED`, `MISSING_STOP`, `ERROR_DOUBLE_START`, `IGNORED`.
+- Stores per-case linkage in `analysis_information.event_id` (one event per
+  case). START/STOP pairing into intervals is computed in the dashboard at
+  [app/pages/boris.py](../app/pages/boris.py) — the old `cur_boris_intervals`
+  view was removed because its join through `analysis_information.event_id`
+  collapsed the result to ~one row per case.
 - Always run with `--dry-run` first when working on this file.
 
 ## Conventions

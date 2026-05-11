@@ -84,8 +84,9 @@ Views (read-only — don't write to these):
 - `cur_mp4_missing` — pivot of cameras present per (date, case)
 - `cur_sync_status` — per-(date, case, camera) `is_syncable` flag from `seq_enriched`, encoding the `3_seq_to_mp4_convert.py` planning gates
 - `cur_mp4_status_statistics` — MP4 cases with cameras_count
-- `cur_boris_intervals` — paired START/STOP behavior intervals
 - `cur_seniority` — anesthesiology roster with computed seniority + A/R status
+
+BORIS intervals are reconstructed in pandas inside [pages/boris.py](pages/boris.py) — there is no SQL view because the old `cur_boris_intervals` joined through `analysis_information.event_id` (which only stores one event per case) and truncated to ~one row per case.
 
 Camera names (use the `CAMERAS` constant defined in mp4/seq/quality):
 `Cart_Center_2, Cart_LT_4, Cart_RT_1, General_3, Monitor, Patient_Monitor,
@@ -96,8 +97,9 @@ Ventilator_Monitor, Injection_Port`. Older data sometimes has `_JUNK` /
 
 - `seq_enriched.time_drift_ms` has corrupt outliers (~2e12 ms). Always clip or
   filter to ±5–10 s before plotting (see `quality.py::DRIFT_LIMIT_MS`).
-- `cur_boris_intervals.pairing_status` values: `PAIRED`, `MISSING_STOP`,
-  `ERROR_DOUBLE_START`, `IGNORED`. Most charts should filter to `PAIRED`.
+- BORIS pairing status (computed in [pages/boris.py](pages/boris.py)) takes
+  the values `PAIRED`, `MISSING_STOP`, `ERROR_DOUBLE_START`. Most charts
+  should filter to `PAIRED`.
 - The Windows console is CP1252; if a script prints UTF-8, set the wrapper
   shown in `memory/MEMORY.md`. NiceGUI itself doesn't need this.
 - `state.get()` returns the active DB path — call it inside the page handler,

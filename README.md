@@ -180,8 +180,6 @@ python MPV_Multiviewer/run_viewer.py
 - `cur_seniority`: anesthesiology experience / status summary.
 - `cur_mp4_status_statistics`: aggregated recording statistics used by the MP4
   dashboard.
-- `cur_boris_intervals`: START / STOP BORIS event intervals derived from
-  imported tags.
 
 ### Camera Set
 

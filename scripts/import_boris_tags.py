@@ -70,116 +70,6 @@ CREATE TABLE IF NOT EXISTS boris_events (
 );
 """
 
-CREATE_BORIS_INTERVALS_VIEW_SQL = """
-CREATE VIEW IF NOT EXISTS cur_boris_intervals AS
-WITH event_cases AS (
-    SELECT
-        boris_events.event_id,
-        analysis_information.recording_date,
-        analysis_information.case_no,
-        boris_events.subject,
-        boris_events.behavior,
-        boris_events.modifier_1,
-        boris_events.modifier_2,
-        boris_events.modifier_3,
-        boris_events.behavior_type,
-        boris_events.time_s,
-        boris_events.source_file
-    FROM boris_events
-    JOIN analysis_information
-      ON analysis_information.event_id = boris_events.event_id
-),
-ordered AS (
-    SELECT
-        event_id,
-        recording_date,
-        case_no,
-        subject,
-        behavior,
-        modifier_1,
-        modifier_2,
-        modifier_3,
-        behavior_type,
-        time_s,
-        source_file,
-        LEAD(event_id) OVER (
-            PARTITION BY
-                recording_date,
-                case_no,
-                subject,
-                behavior,
-                COALESCE(modifier_1, ''),
-                COALESCE(modifier_2, ''),
-                COALESCE(modifier_3, '')
-            ORDER BY time_s, event_id
-        ) AS next_event_id,
-        LEAD(behavior_type) OVER (
-            PARTITION BY
-                recording_date,
-                case_no,
-                subject,
-                behavior,
-                COALESCE(modifier_1, ''),
-                COALESCE(modifier_2, ''),
-                COALESCE(modifier_3, '')
-            ORDER BY time_s, event_id
-        ) AS next_behavior_type,
-        LEAD(time_s) OVER (
-            PARTITION BY
-                recording_date,
-                case_no,
-                subject,
-                behavior,
-                COALESCE(modifier_1, ''),
-                COALESCE(modifier_2, ''),
-                COALESCE(modifier_3, '')
-            ORDER BY time_s, event_id
-        ) AS next_time_s
-    FROM event_cases
-    WHERE behavior_type IN ('START', 'STOP')
-)
-SELECT
-    event_id AS start_event_id,
-    CASE
-        WHEN behavior_type = 'START' AND next_behavior_type = 'STOP'
-        THEN next_event_id
-        ELSE NULL
-    END AS stop_event_id,
-    recording_date,
-    case_no,
-    subject,
-    behavior,
-    modifier_1,
-    modifier_2,
-    modifier_3,
-    time_s AS start_time_s,
-    CASE
-        WHEN behavior_type = 'START' AND next_behavior_type = 'STOP'
-        THEN next_time_s
-        ELSE NULL
-    END AS end_time_s,
-    CASE
-        WHEN behavior_type = 'START' AND next_behavior_type = 'STOP'
-        THEN next_time_s - time_s
-        ELSE NULL
-    END AS duration_s,
-    CASE
-        WHEN behavior_type = 'START' AND next_behavior_type = 'STOP'
-        THEN 'PAIRED'
-        WHEN behavior_type = 'START' AND next_behavior_type = 'START'
-        THEN 'ERROR_DOUBLE_START'
-        WHEN behavior_type = 'START' AND next_behavior_type IS NULL
-        THEN 'MISSING_STOP'
-        WHEN behavior_type = 'START'
-        THEN 'MISSING_STOP'
-        ELSE 'IGNORED'
-    END AS pairing_status,
-    source_file
-FROM ordered
-WHERE behavior_type = 'START';
-"""
-
-
 @dataclass(frozen=True)
 class ParsedFileName:
     recording_date: str
@@ -520,7 +410,6 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             "ALTER TABLE analysis_information "
             "ADD COLUMN event_id INTEGER REFERENCES boris_events(event_id)"
         )
-    conn.execute(CREATE_BORIS_INTERVALS_VIEW_SQL)
     conn.commit()
     conn.execute("PRAGMA foreign_keys = ON")
 

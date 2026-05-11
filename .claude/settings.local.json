@@ -150,7 +150,12 @@
       "Bash(C:/Users/User/anaconda3/envs/faceswap/python.exe -c \"import nicegui, pandas; print\\('nicegui', nicegui.__version__, '| pandas', pandas.__version__\\)\")",
       "Bash(C:/Users/User/anaconda3/python.exe -c \"import nicegui, pandas; print\\('base nicegui', nicegui.__version__, '| pandas', pandas.__version__\\)\")",
       "Bash(C:/Users/User/anaconda3/python.exe -c \"from app.pages import seq_advanced; print\\('seq_advanced import OK'\\); from app import app as app_mod; print\\('app import OK'\\)\")",
-      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\User\\\\Desktop\\\\Python\\\\ScalpelLab\\\\app\\\\pages\\\\\" -File)"
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\User\\\\Desktop\\\\Python\\\\ScalpelLab\\\\app\\\\pages\\\\\" -File)",
+      "Bash(/c/Users/User/anaconda3/envs/myenv/python.exe -c ' *)",
+      "Bash(/c/Users/User/anaconda3/envs/faceswap/python.exe -c \"import nicegui, pandas; print\\('OK', nicegui.__version__, pandas.__version__\\)\")",
+      "Bash(/c/Users/User/anaconda3/python.exe -c \"import nicegui, pandas; print\\('OK base', nicegui.__version__, pandas.__version__\\)\")",
+      "Bash(/c/Users/User/anaconda3/python.exe -c ' *)",
+      "Bash(/c/Users/User/anaconda3/python.exe scripts/helpers/sqlite_to_dbdiagram.py)"
     ],
     "deny": [],
     "ask": []

@@ -68,7 +68,8 @@ keys as useful schema intent, not as proof that all existing rows are clean.
 | `cur_sync_status` | 812 | Per-(date, case, camera) `is_syncable` flag derived from `seq_enriched` using the `3_seq_to_mp4_convert.py` planning gates (has_idx, header_ok, idx_frames > 0, frame timestamps in 2015–2030, duration ≤ 250000s, size_mb ≥ 50). Excludes `_JUNK`/`_Junk` cameras. |
 | `cur_seniority` | 73 | Current anesthesiology seniority and attending/resident status derived from dates. |
 | `cur_mp4_status_statistics` | 162 | Recording-level camera counts used by the MP4 statistics dashboard. |
-| `cur_boris_intervals` | 43 | START/STOP BORIS event pairs expanded through `analysis_information.event_id`; current linked rows are all `MISSING_STOP`. |
+
+BORIS intervals were previously exposed as `cur_boris_intervals` but the view was removed: its join on `analysis_information.event_id` collapsed the result to ~one row per case. Interval pairing now happens in pandas inside `app/pages/boris.py`, partitioned by `boris_events.source_file`.
 
 ## Core Relationships
 
