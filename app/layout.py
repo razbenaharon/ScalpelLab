@@ -20,7 +20,6 @@ NAV_LINKS = [
     ("Anesthesiology",  "/anesthesiology",  "medical_services", "Anesthesiology"),
     ("MP4",             "/mp4",             "movie",          "MP4"),
     ("SEQ",             "/seq",             "folder_open",    "SEQ"),
-    ("Advanced SEQ",    "/seq-advanced",    "analytics",      "Advanced SEQ"),
 ]
 
 

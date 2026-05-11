@@ -456,12 +456,14 @@ def database_page() -> None:
                 "defaultColDef": {
                     "sortable": True, "filter": True,
                     "resizable": True, "floatingFilter": True,
+                    "minWidth": 140,
                 },
                 "columnDefs": [{"field": c} for c in df.columns],
                 "rowData": df.to_dict("records"),
                 "pagination": True,
                 "paginationPageSize": 25,
                 "animateRows": True,
+                "suppressColumnVirtualisation": True,
             }).classes("ag-theme-balham w-full").style("height: 540px")
 
         @ui.refreshable

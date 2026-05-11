@@ -1,10 +1,10 @@
-"""SEQ inventory dashboard — file presence, size, JUNK summary, and coverage.
+"""SEQ dashboard — inventory + time-drift analysis.
 
-Focuses on the raw SEQ side: how much disk each camera occupies, how many
-were marked as undersized JUNK, and the camera×date presence heatmap. For
-deep frame-level analysis see Advanced SEQ.
+Combines the raw SEQ inventory (presence, size, JUNK summary, coverage)
+with per-file time-drift dashboards from ``seq_enriched``. Outliers from
+corrupted IDX timestamps are clipped to ±10 s before plotting.
 
-Sources: ``seq_status``.
+Sources: ``seq_status``, ``seq_enriched``.
 """
 
 from __future__ import annotations
@@ -30,21 +30,17 @@ CAMERAS = [
     "Monitor", "Patient_Monitor", "Ventilator_Monitor", "Injection_Port",
 ]
 
+DRIFT_SMALL_MS = 1_000         # |drift| <= 1 s
+DRIFT_MEDIUM_MS = 5_000        # 1 s < |drift| <= 5 s ; > 5 s is "large"
+
 
 def _is_junk(name: str) -> bool:
     return isinstance(name, str) and (name.endswith("_JUNK") or name.endswith("_Junk"))
 
 
-def _base_camera(name: str) -> str:
-    """Strip a trailing _JUNK / _Junk suffix to recover the underlying camera."""
-    if not isinstance(name, str):
-        return name
-    if name.endswith("_JUNK"):
-        return name[:-5]
-    if name.endswith("_Junk"):
-        return name[:-5]
-    return name
-
+# ---------------------------------------------------------------------------
+# Inventory charts (seq_status)
+# ---------------------------------------------------------------------------
 
 def _coverage_heatmap(seq: pd.DataFrame) -> None:
     if seq.empty:
@@ -85,41 +81,6 @@ def _coverage_heatmap(seq: pd.DataFrame) -> None:
     }).style("height: 420px;")
 
 
-def _presence_bars(clean: pd.DataFrame) -> None:
-    if clean.empty:
-        empty_state("No data.")
-        return
-    cases = clean[["recording_date", "case_no"]].drop_duplicates()
-    total_cases = len(cases)
-    if total_cases == 0:
-        empty_state("No data.")
-        return
-    rates = {}
-    for cam in CAMERAS:
-        present_cases = clean[clean["camera_name"] == cam][
-            ["recording_date", "case_no"]
-        ].drop_duplicates()
-        rates[cam] = round(len(present_cases) / total_cases * 100, 1)
-    cams_sorted = sorted(CAMERAS, key=lambda c: -rates[c])
-    axis = echart_axis_color()
-    palette = chart_palette()
-    ui.echart({
-        "tooltip": base_tooltip("axis") | {"valueFormatter": "{value}%"},
-        "grid": base_grid(left=160, right=40, top=10, bottom=30),
-        "xAxis": {"type": "value", "max": 100,
-                  "axisLabel": {"formatter": "{value}%", "color": axis}},
-        "yAxis": {"type": "category", "data": cams_sorted,
-                  "axisLabel": {"color": axis}},
-        "series": [{
-            "type": "bar",
-            "data": [rates[c] for c in cams_sorted],
-            "itemStyle": {"color": palette[1], "borderRadius": [0, 4, 4, 0]},
-            "label": {"show": True, "position": "right", "formatter": "{c}%",
-                      "color": axis},
-        }],
-    }).style("height: 360px;")
-
-
 def _size_per_camera(clean: pd.DataFrame) -> None:
     if clean.empty or "size_mb" not in clean.columns:
         empty_state("No size data.")
@@ -153,68 +114,81 @@ def _size_per_camera(clean: pd.DataFrame) -> None:
     }).style("height: 320px;")
 
 
-def _junk_breakdown(junk: pd.DataFrame) -> None:
-    if junk.empty:
-        ui.label("No JUNK rows. All SEQ files passed the size threshold.") \
-            .classes("text-positive")
+# ---------------------------------------------------------------------------
+# Drift charts (seq_enriched)
+# ---------------------------------------------------------------------------
+
+def _drift_buckets_per_camera(df: pd.DataFrame) -> None:
+    sub = df.dropna(subset=["time_drift_ms"]).copy()
+    if sub.empty:
+        empty_state("No drift data.")
         return
-    junk = junk.copy()
-    junk["base"] = junk["camera_name"].map(_base_camera)
-    counts = (
-        junk.groupby("base").size().reset_index(name="junk_files")
-        .sort_values("junk_files", ascending=True)
+    abs_drift = sub["time_drift_ms"].abs()
+    sub["bucket"] = pd.cut(
+        abs_drift,
+        bins=[-1, DRIFT_SMALL_MS, DRIFT_MEDIUM_MS, float("inf")],
+        labels=["Small", "Medium", "Large"],
     )
+    counts = (
+        sub.groupby(["camera_name", "bucket"], observed=False)
+        .size().unstack(fill_value=0)
+    )
+    for b in ("Small", "Medium", "Large"):
+        if b not in counts.columns:
+            counts[b] = 0
+    counts = counts[["Small", "Medium", "Large"]]
+    counts["__total"] = counts.sum(axis=1)
+    counts = counts.sort_values("__total", ascending=True)
+    cams = counts.index.tolist()
     axis = echart_axis_color()
-    palette = chart_palette()
+    bucket_labels = {
+        "Small":  f"Small (|drift| ≤ {DRIFT_SMALL_MS // 1000}s)",
+        "Medium": f"Medium ({DRIFT_SMALL_MS // 1000}s < |drift| ≤ {DRIFT_MEDIUM_MS // 1000}s)",
+        "Large":  f"Large (|drift| > {DRIFT_MEDIUM_MS // 1000}s)",
+    }
+    colors = {"Small": "#10b981", "Medium": "#f59e0b", "Large": "#ef4444"}
+    series = [
+        {
+            "name": bucket_labels[b],
+            "type": "bar",
+            "stack": "drift",
+            "data": [int(counts.loc[c, b]) for c in cams],
+            "itemStyle": {"color": colors[b]},
+            "label": {"show": True, "color": "#fff", "formatter": "{c}"},
+        }
+        for b in ("Small", "Medium", "Large")
+    ]
     ui.echart({
         "tooltip": base_tooltip("axis"),
-        "grid": base_grid(left=160, right=40, top=10, bottom=30),
-        "xAxis": {"type": "value", "axisLabel": {"color": axis}},
-        "yAxis": {"type": "category",
-                  "data": counts["base"].tolist(),
+        "legend": {"data": [bucket_labels[b] for b in ("Small", "Medium", "Large")],
+                   "top": 0, "textStyle": {"color": axis}},
+        "grid": base_grid(left=160, right=40, top=40, bottom=30),
+        "xAxis": {"type": "value", "name": "Files",
+                  "nameTextStyle": {"color": axis},
                   "axisLabel": {"color": axis}},
-        "series": [{
-            "type": "bar",
-            "data": counts["junk_files"].astype(int).tolist(),
-            "itemStyle": {"color": palette[3], "borderRadius": [0, 4, 4, 0]},
-            "label": {"show": True, "position": "right", "color": axis},
-        }],
-    }).style("height: 320px;")
+        "yAxis": {"type": "category", "data": cams,
+                  "axisLabel": {"color": axis}},
+        "series": series,
+    }).style("height: 380px;")
 
 
-def _inventory_grid(seq: pd.DataFrame) -> None:
-    if seq.empty:
-        empty_state("No inventory rows.")
-        return
-    cols = [c for c in ["recording_date", "case_no", "camera_name", "size_mb"]
-            if c in seq.columns]
-    df = seq[cols].copy()
-    if "size_mb" in df.columns:
-        df["size_mb"] = df["size_mb"].round(1)
-    ui.aggrid({
-        "defaultColDef": {"sortable": True, "filter": True, "resizable": True,
-                          "floatingFilter": True},
-        "columnDefs": [
-            {"field": "recording_date", "headerName": "Date"},
-            {"field": "case_no",        "headerName": "Case"},
-            {"field": "camera_name",    "headerName": "Camera"},
-            {"field": "size_mb",        "headerName": "Size (MB)",
-             "type": "numericColumn"},
-        ],
-        "rowData": df.sort_values(
-            ["recording_date", "case_no", "camera_name"],
-            ascending=[False, True, True],
-        ).to_dict("records"),
-        "pagination": True, "paginationPageSize": 20,
-    }).classes("ag-theme-balham w-full").style("height: 420px;")
+# ---------------------------------------------------------------------------
+# Page
+# ---------------------------------------------------------------------------
+
+def _section(title: str, subtitle: str, body_fn) -> None:
+    with ui.card().classes("surface-1 w-full q-pa-md"):
+        ui.label(title).classes("text-subtitle1 text-weight-medium")
+        ui.label(subtitle).classes("text-caption muted")
+        body_fn()
 
 
 @ui.page("/seq")
 def seq_page() -> None:
     with page_frame("SEQ"):
         db_path = state.get()
-        ui.label("SEQ Inventory").classes("section-h text-h5 text-weight-medium")
-        ui.label("Raw SEQ files — presence, size, JUNK, and gaps.") \
+        ui.label("SEQ Inventory & Time Drift").classes("section-h text-h5 text-weight-medium")
+        ui.label("Raw SEQ files plus per-file time-drift analysis.") \
             .classes("text-caption muted")
 
         seq = query_df(
@@ -237,6 +211,7 @@ def seq_page() -> None:
         )
         junk_count = len(junk)
 
+        # ── Inventory KPIs ────────────────────────────────────────────────
         with ui.row().classes("w-full no-wrap gap-4"):
             kpi_card("SEQ FILES", f"{total_files:,}", "JUNK excluded")
             kpi_card("TOTAL SIZE", f"{total_size_gb:,} GB", "on disk")
@@ -248,27 +223,95 @@ def seq_page() -> None:
             _size_per_camera(clean)
 
         with ui.card().classes("surface-1 w-full q-pa-md"):
-            ui.label("JUNK breakdown").classes("text-subtitle1 text-weight-medium")
-            ui.label("Undersized rows grouped by underlying camera.") \
-                .classes("text-caption muted")
-            _junk_breakdown(junk)
-
-        # ── Coverage: SEQ camera × date heatmap ────────────────────────────
-        with ui.card().classes("surface-1 w-full q-pa-md"):
             ui.label("Camera × date coverage").classes("text-subtitle1 text-weight-medium")
             ui.label("One column per recording day. Green = SEQ present, red = missing.") \
                 .classes("text-caption muted")
             _coverage_heatmap(clean)
 
-        # ── Coverage: per-camera SEQ presence ──────────────────────────────
-        with ui.card().classes("surface-1 w-full q-pa-md"):
-            ui.label("Per-camera presence rate").classes("text-subtitle1 text-weight-medium")
-            ui.label("Share of cases where each camera has a SEQ.") \
-                .classes("text-caption muted")
-            _presence_bars(clean)
+        # ── Time-drift section (seq_enriched) ─────────────────────────────
+        enriched = query_df(db_path, "SELECT * FROM seq_enriched")
+        if enriched.empty:
+            ui.label(
+                "Could not load seq_enriched. "
+                "Run scripts/helpers/analyze_seq_fields.py to populate it."
+            ).classes("text-warning")
+            return
 
-        with ui.card().classes("surface-1 w-full q-pa-md"):
-            ui.label("Inventory").classes("text-subtitle1 text-weight-medium")
-            ui.label("All SEQ rows. Sort and filter to drill in.") \
-                .classes("text-caption muted")
-            _inventory_grid(seq)
+        ui.label("Time-Drift Analysis").classes("section-h text-h5 text-weight-medium q-mt-md")
+        ui.label("All dashboards below focus on the time_drift_ms column.") \
+            .classes("text-caption muted")
+
+        all_dates = sorted(enriched["recording_date"].dropna().unique().tolist())
+        state_box = {
+            "from": all_dates[0] if all_dates else None,
+            "to": all_dates[-1] if all_dates else None,
+        }
+        view = {"df": enriched.copy()}
+
+        def _apply() -> None:
+            sub = enriched
+            if state_box["from"]:
+                sub = sub[sub["recording_date"] >= state_box["from"]]
+            if state_box["to"]:
+                sub = sub[sub["recording_date"] <= state_box["to"]]
+            view["df"] = sub.copy()
+
+        _apply()
+
+        body = ui.column().classes("w-full gap-4")
+
+        def _draw_body() -> None:
+            body.clear()
+            with body:
+                _section(
+                    "Drift buckets per camera",
+                    f"File counts by |drift|: small ≤ {DRIFT_SMALL_MS // 1000}s, "
+                    f"medium ≤ {DRIFT_MEDIUM_MS // 1000}s, large > {DRIFT_MEDIUM_MS // 1000}s.",
+                    lambda: _drift_buckets_per_camera(view["df"]),
+                )
+
+        def _rerender() -> None:
+            _apply()
+            _draw_body()
+
+        with ui.row().classes("items-center gap-4 q-mt-sm"):
+            with ui.input("From").props("dense readonly").classes("min-w-[140px]") as from_in:
+                from_in.value = state_box["from"] or ""
+                with from_in.add_slot("append"):
+                    ui.icon("event").classes("cursor-pointer")
+                with ui.menu().props("no-parent-event") as from_menu:
+                    ui.date(
+                        value=state_box["from"],
+                        on_change=lambda e: (
+                            state_box.__setitem__("from", e.value or None),
+                            from_in.set_value(e.value or ""),
+                            _rerender(),
+                        ),
+                    )
+                from_in.on("click", lambda _: from_menu.open())
+
+            with ui.input("To").props("dense readonly").classes("min-w-[140px]") as to_in:
+                to_in.value = state_box["to"] or ""
+                with to_in.add_slot("append"):
+                    ui.icon("event").classes("cursor-pointer")
+                with ui.menu().props("no-parent-event") as to_menu:
+                    ui.date(
+                        value=state_box["to"],
+                        on_change=lambda e: (
+                            state_box.__setitem__("to", e.value or None),
+                            to_in.set_value(e.value or ""),
+                            _rerender(),
+                        ),
+                    )
+                to_in.on("click", lambda _: to_menu.open())
+
+            def _reset_dates() -> None:
+                state_box["from"] = all_dates[0] if all_dates else None
+                state_box["to"] = all_dates[-1] if all_dates else None
+                from_in.set_value(state_box["from"] or "")
+                to_in.set_value(state_box["to"] or "")
+                _rerender()
+
+            ui.button("Reset", on_click=_reset_dates).props("dense flat")
+
+        _draw_body()

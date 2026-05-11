@@ -142,7 +142,15 @@
       "Bash(powershell -Command \"Get-Process pythonw -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; Get-Process cscript -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue\")",
       "Bash(git commit *)",
       "Bash(git check-attr *)",
-      "Bash(git crypt *)"
+      "Bash(git crypt *)",
+      "Bash(py _tmp_check_view.py)",
+      "Bash(where conda *)",
+      "Bash(C:/Users/User/anaconda3/envs/myenv/python.exe -c \"import pandas; print\\(pandas.__version__\\)\")",
+      "Bash(C:/Users/User/anaconda3/envs/myenv/python.exe -c \"from app.pages import seq_advanced; print\\('import OK'\\)\")",
+      "Bash(C:/Users/User/anaconda3/envs/faceswap/python.exe -c \"import nicegui, pandas; print\\('nicegui', nicegui.__version__, '| pandas', pandas.__version__\\)\")",
+      "Bash(C:/Users/User/anaconda3/python.exe -c \"import nicegui, pandas; print\\('base nicegui', nicegui.__version__, '| pandas', pandas.__version__\\)\")",
+      "Bash(C:/Users/User/anaconda3/python.exe -c \"from app.pages import seq_advanced; print\\('seq_advanced import OK'\\); from app import app as app_mod; print\\('app import OK'\\)\")",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\User\\\\Desktop\\\\Python\\\\ScalpelLab\\\\app\\\\pages\\\\\" -File)"
     ],
     "deny": [],
     "ask": []
