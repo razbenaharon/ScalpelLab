@@ -30,6 +30,7 @@ from app.charts import kpi_with_spark as _kpi_with_spark, query_df as _query  # 
 from app.layout import page_frame  # noqa: E402
 from app.pages import (  # noqa: F401,E402
     anesthesiology,
+    boris,
     database,
     mp4,
     seq,

@@ -94,7 +94,7 @@ Routing — read the relevant context file before editing:
   `INSERT … ON CONFLICT(pk) DO UPDATE SET <managed>=…`. Never replace this
   with `INSERT OR REPLACE` or full overwrites.
 - **Views are read-only**: `cur_mp4_missing`, `cur_seniority`,
-  `cur_mp4_status_statistics`, `cur_boris_intervals`. Don't write to them;
+  `cur_mp4_status_statistics`, `cur_sync_status`. Don't write to them;
   rebuild via the producer script.
 - **JUNK rows**: any `camera_name` ending in `_JUNK` / `_Junk` is a failed or
   undersized recording. Filter out for stats and visualizations.
