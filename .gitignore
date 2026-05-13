@@ -28,3 +28,10 @@ tmpclaude-*-cwd
 
 # NiceGUI runtime storage (app.storage.general etc.)
 .nicegui/
+
+# Local Codex safety backups
+.codex_pull_backups/
+
+# SimCLR generated run outputs
+CV/SimCLR_reid/simclr_output/
+CV/SimCLR_reid/test_output_dry_run/
