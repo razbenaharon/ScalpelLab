@@ -41,7 +41,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping, cast
 
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -906,7 +906,7 @@ def scan_and_repair(
     return [result for result in ordered_results if result is not None]
 
 
-def build_summary(results: Iterable[RepairResult]) -> dict[str, object]:
+def build_summary(results: Iterable[RepairResult]) -> dict[str, Any]:
     """Aggregate per-file results into a compact summary object."""
     results_list = list(results)
     counts: dict[str, int] = {}
@@ -919,9 +919,9 @@ def build_summary(results: Iterable[RepairResult]) -> dict[str, object]:
     }
 
 
-def write_report(report_path: Path, summary: dict[str, object]) -> None:
+def write_report(report_path: Path, summary: dict[str, Any]) -> None:
     """Write a JSON or CSV report based on the requested file extension."""
-    results = summary["results"]
+    results = cast(list[Mapping[str, Any]], summary["results"])
     if report_path.suffix.lower() == ".csv":
         with open(report_path, "w", newline="", encoding="utf-8") as report_file:
             writer = csv.DictWriter(
@@ -936,10 +936,10 @@ def write_report(report_path: Path, summary: dict[str, object]) -> None:
         json.dump(summary, report_file, indent=2)
 
 
-def print_summary(summary: dict[str, object], dry_run: bool = False) -> None:
+def print_summary(summary: dict[str, Any], dry_run: bool = False) -> None:
     """Emit a readable console summary with affected file lists."""
-    counts = summary["counts"]
-    results = summary["results"]
+    counts = cast(dict[str, int], summary["counts"])
+    results = cast(list[dict[str, Any]], summary["results"])
     mode = "DRY RUN" if dry_run else "REPAIR"
     print(f"SEQ IDX {mode} SUMMARY")
     for status in sorted(counts):

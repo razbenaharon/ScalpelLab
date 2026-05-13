@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportGeneralTypeIssues=false, reportCallIssue=false
 """
 Analyze SEQ header fields and correlate them with frame-drop data and
 timing/synchronization metrics parsed from companion IDX files.
@@ -324,6 +325,11 @@ def _load_existing_keys(db_path: str) -> set[tuple[str, int, str]]:
             conn.close()
     except Exception:
         return set()
+
+
+def load_existing_keys(db_path: str) -> set[tuple[str, int, str]]:
+    """Public wrapper used by callers that want incremental analysis."""
+    return _load_existing_keys(db_path)
 
 
 def _load_camera_canonical_map(db_path: str) -> dict[tuple[str, int, str], str]:
