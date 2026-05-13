@@ -1104,9 +1104,12 @@ def step3_ffmpeg_cfr_encode(
 
     def stderr_reader():
         try:
+            stderr_pipe = process.stderr
+            if stderr_pipe is None:
+                return
             line_buf = bytearray()
             while True:
-                b = process.stderr.read(1)
+                b = stderr_pipe.read(1)
                 if not b:
                     break
                 if b in (b'\r', b'\n'):

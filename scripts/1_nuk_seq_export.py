@@ -240,7 +240,7 @@ def get_file_date(file_path: str) -> str:
     return date
 
 
-def extract_date_from_filename(fname: str) -> str:
+def extract_date_from_filename(fname: str) -> str | None:
     """Extract date from filename supporting multiple timestamp formats.
 
     Parses filename to extract date in yy-mm-dd format. Supports two
@@ -711,6 +711,7 @@ def copy_files_with_threads(file_operations, max_workers=8, progress_callback=No
     return successful_copies, failed_copies
 
 
+def run_curation(root_dir, dest_dir, channel_mapping, simulate=False, max_workers=8):
     # No longer generating output files as per user request
     """Run the full curation process."""
     

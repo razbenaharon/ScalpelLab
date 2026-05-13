@@ -20,6 +20,7 @@ import subprocess
 import threading
 from datetime import datetime, timedelta
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from typing import Any, Callable
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -122,7 +123,7 @@ def load_data_from_database(db_path=None):
 # ============================================================================
 CONFIG = {
     # Output directory for redacted videos (leave empty for same as input)
-    'OUTPUT_DIR': 'D:\Recordings',  # Example: 'F:/Room_8_Data/Output'
+    'OUTPUT_DIR': r'D:\Recordings',  # Example: 'F:/Room_8_Data/Output'
 
     # Number of parallel workers (recommended: 6 for RTX A2000, 2-8 for other GPUs)
     'NUM_WORKERS': 8,
@@ -448,8 +449,12 @@ def process_single_video_from_row(args):
         return (False, None, f"Error: {str(e)}")
 
 
-def redact_videos_from_df(df: pd.DataFrame, output_dir: str = None, num_workers: int = 6,
-                         on_video_complete: callable = None) -> list:
+def redact_videos_from_df(
+    df: pd.DataFrame,
+    output_dir: str | None = None,
+    num_workers: int = 6,
+    on_video_complete: Callable[[str, list[dict[str, Any]], float, dict[str, Any]], None] | None = None,
+) -> tuple[list[str], int, int, dict[Any, str], list[dict[str, Any]]]:
     """
     Process videos from dataframe with case-based redaction using parallel GPU processing.
 
@@ -495,7 +500,7 @@ def redact_videos_from_df(df: pd.DataFrame, output_dir: str = None, num_workers:
             try:
                 success, report_data, error_msg = future.result()
 
-                if success:
+                if success and report_data is not None:
                     output_files.append(report_data['output_file'])
                     processing_report.append(report_data)
                     success_count += 1
@@ -874,7 +879,7 @@ def main():
     unprocessed_files = []
 
     for idx, row in df.iterrows():
-        normalized_path = os.path.abspath(row['path'])
+        normalized_path = os.path.abspath(str(row['path']))
         if normalized_path in processed_files:
             already_processed.append((idx, row))
         else:
@@ -1067,11 +1072,11 @@ def main():
             # Find the output file from processing_report
             output_file = None
             for report in processing_report:
-                if report['file'] == os.path.basename(row['path']):
+                if report['file'] == os.path.basename(str(row['path'])):
                     output_file = report.get('output_file', 'Unknown')
                     break
 
-            update_tracking(tracking_file, row['path'], output_file or 'Unknown', status="SUCCESS")
+            update_tracking(tracking_file, str(row['path']), output_file or 'Unknown', status="SUCCESS")
 
     print(f"Tracking updated: {success_count} files marked as processed")
 

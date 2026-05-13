@@ -41,19 +41,25 @@ import time
 import subprocess
 import json
 from pathlib import Path
+from typing import Any, Callable
 
 # Add parent directory to path to import config
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import get_db_path, get_seq_root, get_mp4_root, DEFAULT_CAMERAS
 
-# SEQ field analysis (optional — skipped gracefully if unavailable)
+# SEQ field analysis (optional - skipped gracefully if unavailable)
+_analyze_seq_dir: Callable[..., Any] | None = None
+_write_seq_analysis: Callable[..., Any] | None = None
+_seq_existing_keys: Callable[[str], set[tuple[str, int, str]]] | None = None
+seq_analysis_available = False
+
 try:
     from helpers.analyze_seq_fields import analyze_directory as _analyze_seq_dir
     from helpers.analyze_seq_fields import write_to_db as _write_seq_analysis
-    from helpers.analyze_seq_fields import _load_existing_keys as _seq_existing_keys
-    _SEQ_ANALYSIS_AVAILABLE = True
+    from helpers.analyze_seq_fields import load_existing_keys as _seq_existing_keys
+    seq_analysis_available = True
 except ImportError:
-    _SEQ_ANALYSIS_AVAILABLE = False
+    pass
 
 # ============================================
 # Defaults (from config.py)
@@ -827,13 +833,16 @@ Examples:
         print("\n" + "="*60)
         print("SEQ FIELD ANALYSIS")
         print("="*60)
-        if not _SEQ_ANALYSIS_AVAILABLE:
+        if not seq_analysis_available:
             print("[SKIP] analyze_seq_fields not found — skipping")
         else:
             seq_root_path = Path(args.seq_root)
             if not seq_root_path.exists():
                 print(f"[SKIP] SEQ root not found: {seq_root_path}")
             else:
+                assert _seq_existing_keys is not None
+                assert _analyze_seq_dir is not None
+                assert _write_seq_analysis is not None
                 skip_keys = _seq_existing_keys(args.db)
                 if skip_keys:
                     print(f"[INFO] {len(skip_keys)} entries already in DB — scanning only new files")
