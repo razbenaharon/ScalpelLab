@@ -155,7 +155,8 @@
       "Bash(/c/Users/User/anaconda3/envs/faceswap/python.exe -c \"import nicegui, pandas; print\\('OK', nicegui.__version__, pandas.__version__\\)\")",
       "Bash(/c/Users/User/anaconda3/python.exe -c \"import nicegui, pandas; print\\('OK base', nicegui.__version__, pandas.__version__\\)\")",
       "Bash(/c/Users/User/anaconda3/python.exe -c ' *)",
-      "Bash(/c/Users/User/anaconda3/python.exe scripts/helpers/sqlite_to_dbdiagram.py)"
+      "Bash(/c/Users/User/anaconda3/python.exe scripts/helpers/sqlite_to_dbdiagram.py)",
+      "Read(//f/Room_8_Data/SIMCLR/dataset/simclr_burst_v3_cleaned/**)"
     ],
     "deny": [],
     "ask": []

@@ -46,7 +46,13 @@ pyarrow>=12.0.0               # Fast parquet serialization for pose tracking dat
 # MACHINE LEARNING / COMPUTER VISION (required for yolo/ directory)
 # ============================================================================
 torch>=2.0.0                  # PyTorch for deep learning
+torchvision>=0.15.0           # SimCLR image augmentations
 ultralytics>=8.0.0            # YOLOv8 pose estimation and tracking
+optuna>=3.6                   # Resumable hyperparameter studies for SimCLR
+torchreid>=0.2.5              # OSNet person ReID backbones
+gdown>=5.0.0                  # Required by torchreid imports
+yacs>=0.1.8                   # Required by torchreid config utilities
+matplotlib>=3.5.0             # Dataset/model visualization utilities
 
 # ============================================================================
 # SCIENTIFIC COMPUTING (required for track processing)

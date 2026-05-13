@@ -1,53 +1,48 @@
 """
-train_simclr.py - SimCLR Contrastive Learning Pipeline for Person Re-ID in the OR
-================================================================================
+train_simclr.py - Burst-aware SimCLR training for OSNet person Re-ID.
 
-PURPOSE:
-    Train an OsNet backbone using SimCLR contrastive learning on burst-captured
-    surgical room data. Supports hyperparameter grid search to find optimal config.
-
-PIPELINE:
-    1. Load burst dataset (grouped by case for WeightedRandomSampler)
-    2. Apply SimCLR augmentations (crop, jitter, erasing)
-    3. Train with NT-Xent contrastive loss
-    4. Partial freezing: freeze stem + layers 1-2, train layers 3-4
-    5. Save best model based on training loss
-
-USAGE:
-    python train_simclr.py --dataset_dir <path> --output_dir <path> [--grid_search]
-
-================================================================================
+Default mode launches a resumable Optuna study backed by SQLite. Use
+--single_run for one-off training.
 """
 
-import os
-import sys
-import re
-import json
 import argparse
-import itertools
-from pathlib import Path
+import gc
+import json
+import math
+import random
+import re
+import time
+from collections import Counter, defaultdict
 from datetime import datetime
-from collections import defaultdict
+from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+from PIL import Image, ImageFile, UnidentifiedImageError
+from torch.utils.data import DataLoader, Dataset, Subset, WeightedRandomSampler
 from torchvision import transforms
-from PIL import Image
-import numpy as np
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+try:
+    import optuna
+except ImportError:
+    optuna = None
+
 
 # ============================================================================
-# Try importing torchreid for OsNet; provide fallback instructions
+# Try importing torchreid for OSNet; provide fallback instructions
 # ============================================================================
 try:
     import torchreid
-    FeatureExtractor = torchreid.utils.FeatureExtractor
+
     TORCHREID_AVAILABLE = True
 except (ImportError, AttributeError):
     TORCHREID_AVAILABLE = False
-    print("[WARNING] torchreid not found. Install with: pip install torchreid")
-    print("          Or: pip install git+https://github.com/KaiyangZhou/deep-person-reid.git")
+    print("[WARNING] torchreid not found. Install with:")
+    print("          pip install torchreid")
 
 
 # ============================================================================
@@ -56,20 +51,28 @@ except (ImportError, AttributeError):
 
 DEFAULT_CONFIG = {
     # Data
-    "image_size": (256, 128),          # H x W (standard ReID size)
-    "batch_size": 64,
-    "num_workers": 0,              # Use 0 on Windows to avoid forrtl/Intel MKL crash
+    "image_size": (256, 128),  # H x W (standard ReID size)
+    "batch_size": 512,        # physical batch; override with --max_physical_batch
+    "min_batch_size": 64,
+    "auto_reduce_batch_on_oom": True,
+    "pin_memory": False,      # opt-in on Windows; safer off after CUDA pressure/OOM
+    "num_workers": 0,         # intentionally 0 for week-long Windows stability
+    "burst_gap_threshold": 60,
+    "val_video_indices": None,
+    "val_split_modulo": 5,
+    "val_split_remainder": 0,
 
     # Training
     "epochs": 50,
     "lr": 3e-4,
     "weight_decay": 1e-4,
     "warmup_epochs": 5,
+    "accumulation_steps": 1,
 
     # SimCLR
-    "temperature": 0.07,               # NT-Xent temperature
-    "projection_dim": 128,             # Projection head output dim
-    "projection_hidden": 512,          # Projection head hidden dim
+    "temperature": 0.07,
+    "projection_dim": 128,
+    "projection_hidden": 512,
 
     # Augmentation
     "color_jitter_strength": 0.5,
@@ -78,21 +81,10 @@ DEFAULT_CONFIG = {
 
     # Architecture
     "backbone": "osnet_ain_x1_0",
-    "pretrained_weights": None,        # Path to .pt file or None for ImageNet
-    # OsNet AIN structure: conv1, maxpool, conv2, pool2, conv3, pool3, conv4, conv5
-    # Freeze: Stem (conv1, maxpool) + Early layers (conv2, pool2, conv3, pool3)
-    # Train:  Deep layers (conv4, conv5) — these learn domain-specific features
-    "freeze_layers": ["conv1", "maxpool", "conv2", "pool2", "conv3", "pool3"],
-}
-
-# Hyperparameter grid for search
-HYPERPARAM_GRID = {
-    "epochs":               [30, 50],
-    "lr":                   [3e-4, 1e-4],
-    "temperature":          [0.07, 0.1],
-    "batch_size":           [64],
-    "color_jitter_strength": [0.5],
-    "projection_dim":       [128],
+    "pretrained_weights": "F:/Projects/ScalpelLab/CV/osnet_ain_x1_0_msmt17.pt",
+    # OSNet AIN structure: conv1, maxpool, conv2, pool2, conv3, pool3, conv4, conv5.
+    "freeze_early_layers": True,
+    "freeze_layers": ["conv1", "maxpool", "conv2", "pool2"],
 }
 
 
@@ -100,131 +92,242 @@ HYPERPARAM_GRID = {
 # DATASET
 # ============================================================================
 
+def build_bursts(image_paths, gap_threshold=60):
+    """Group images into bursts and drop singleton bursts."""
+    pattern = re.compile(r"^(\d+)_v(\d+)_(\d+)\.jpg$", re.IGNORECASE)
+    grouped = defaultdict(list)
+    skipped = 0
+
+    for path in image_paths:
+        match = pattern.match(path.name)
+        if not match:
+            skipped += 1
+            continue
+        case_no = match.group(1)
+        video_idx = int(match.group(2))
+        frame_id = int(match.group(3))
+        grouped[(case_no, video_idx)].append((frame_id, path))
+
+    bursts = []
+    burst_cases = []
+    burst_video_indices = []
+    singletons = 0
+
+    for (case_no, video_idx), items in grouped.items():
+        if not items:
+            continue
+        items.sort(key=lambda item: item[0])
+        current = [items[0][1]]
+        previous_frame = items[0][0]
+
+        for frame_id, path in items[1:]:
+            if frame_id - previous_frame > gap_threshold:
+                if len(current) >= 2:
+                    bursts.append(current)
+                    burst_cases.append(case_no)
+                    burst_video_indices.append(video_idx)
+                else:
+                    singletons += 1
+                current = []
+            current.append(path)
+            previous_frame = frame_id
+
+        if len(current) >= 2:
+            bursts.append(current)
+            burst_cases.append(case_no)
+            burst_video_indices.append(video_idx)
+        else:
+            singletons += 1
+
+    if skipped:
+        print(f"[Dataset] Skipped {skipped} files not matching {{case}}_v{{idx}}_{{frame}}.jpg")
+    if singletons:
+        print(f"[Dataset] Dropped {singletons} singleton bursts (cannot form a positive pair)")
+
+    return bursts, burst_cases, burst_video_indices
+
+
 class BurstSimCLRDataset(Dataset):
-    """
-    Dataset for SimCLR training from burst-captured images.
+    """Return two distinct frames from the same burst, augmented independently."""
 
-    Each image filename is expected as: {case_no}_v{video_idx}_{frame_id}.jpg
-    The case_no is extracted for per-case balancing via WeightedRandomSampler.
-
-    For each __getitem__ call, returns TWO augmented views of the same image
-    (the SimCLR positive pair).
-    """
-
-    def __init__(self, root_dir: str, transform=None, image_size=(256, 128)):
+    def __init__(self, root_dir, transform=None, image_size=(256, 128), burst_gap_threshold=60):
         self.root_dir = Path(root_dir)
         self.transform = transform
         self.image_size = image_size
+        self._warned_bad_paths = set()
 
-        # Collect all images
-        self.image_paths = sorted([
-            p for p in self.root_dir.glob("*.jpg")
-            if not p.name.startswith(".")
-        ])
-
-        if len(self.image_paths) == 0:
+        all_paths = sorted(
+            path for path in self.root_dir.glob("*.jpg")
+            if not path.name.startswith(".")
+        )
+        if not all_paths:
             raise ValueError(f"No .jpg images found in {root_dir}")
 
-        # Extract case_no from filename for balancing
-        self.case_ids = []
-        self.case_to_indices = defaultdict(list)
+        self.bursts, self.burst_cases, self.burst_video_indices = build_bursts(all_paths, burst_gap_threshold)
+        if not self.bursts:
+            raise ValueError(
+                "No multi-image bursts found. Lower --burst_gap_threshold or check filename format."
+            )
+        if len(self.bursts) < 2:
+            raise ValueError("At least two multi-image bursts are required for stable BatchNorm training.")
 
-        for idx, path in enumerate(self.image_paths):
-            case_no = self._extract_case(path.name)
-            self.case_ids.append(case_no)
-            self.case_to_indices[case_no].append(idx)
+        sizes = [len(burst) for burst in self.bursts]
+        total = sum(sizes)
+        print(
+            f"[Dataset] {len(self.bursts)} bursts, {total} images, "
+            f"{len(set(self.burst_cases))} cases | "
+            f"burst size min={min(sizes)} max={max(sizes)} mean={total / len(sizes):.2f}"
+        )
 
-        print(f"[Dataset] Loaded {len(self.image_paths)} images "
-              f"from {len(self.case_to_indices)} cases")
+        top_cases = Counter(self.burst_cases).most_common(10)
+        for case_no, count in top_cases:
+            print(f"  Case {case_no}: {count} bursts")
+        if len(set(self.burst_cases)) > 10:
+            print(f"  ... and {len(set(self.burst_cases)) - 10} more cases")
 
-        # Print case distribution for debugging
-        for case, indices in sorted(self.case_to_indices.items(),
-                                     key=lambda x: len(x[1]), reverse=True)[:10]:
-            print(f"  Case {case}: {len(indices)} images")
-        if len(self.case_to_indices) > 10:
-            print(f"  ... and {len(self.case_to_indices) - 10} more cases")
-        if len(self.case_to_indices) == 1:
-            print(f"  [WARNING] Only 1 case found! WeightedRandomSampler will have no balancing effect.")
-            print(f"  [WARNING] Sample filename: {self.image_paths[0].name}")
+        self._case_burst_counts = Counter(self.burst_cases)
 
-    @staticmethod
-    def _extract_case(filename: str) -> str:
-        """
-        Extract case identifier from filename.
-
-        Supports formats:
-          - '42_v01_000123.jpg'       -> case '42'
-          - 'case42_v01_000123.jpg'   -> case '42'
-          - 'C042_v01_000123.jpg'     -> case '042'
-          - '42_000123.jpg'           -> case '42'
-        """
-        # Standard: {case_no}_v{idx}_{frame}.jpg
-        match = re.match(r"^(\d+)_v\d+_", filename)
-        if match:
-            return match.group(1)
-
-        # With 'case' prefix
-        match = re.match(r"^[Cc](?:ase)?(\d+)_", filename)
-        if match:
-            return match.group(1)
-
-        # Fallback: first numeric segment
-        match = re.match(r"^(\d+)_", filename)
-        if match:
-            return match.group(1)
-
-        # Last resort: use first part before underscore
-        return filename.split("_")[0]
-
-    def get_sample_weights(self) -> torch.Tensor:
-        """
-        Compute inverse-frequency weights for WeightedRandomSampler.
-        W_i = 1 / N_case(i)  => balanced representation across cases.
-        """
-        case_counts = {case: len(indices)
-                       for case, indices in self.case_to_indices.items()}
-        weights = torch.zeros(len(self.image_paths))
-        for idx, case in enumerate(self.case_ids):
-            weights[idx] = 1.0 / case_counts[case]
-        return weights
+    def get_sample_weights(self, indices=None):
+        if indices is None:
+            indices = range(len(self.bursts))
+        selected_cases = [self.burst_cases[idx] for idx in indices]
+        case_counts = Counter(selected_cases)
+        return torch.tensor(
+            [1.0 / case_counts[case_no] for case_no in selected_cases],
+            dtype=torch.float32,
+        )
 
     def __len__(self):
-        return len(self.image_paths)
+        return len(self.bursts)
+
+    def _load_rgb(self, path):
+        try:
+            with Image.open(path) as image:
+                image = image.convert("RGB")
+                return image.resize((self.image_size[1], self.image_size[0]), Image.BILINEAR)
+        except (OSError, UnidentifiedImageError) as exc:
+            if path not in self._warned_bad_paths:
+                self._warned_bad_paths.add(path)
+                print(f"[Dataset] Skipping unreadable image {path}: {exc}")
+            return None
+
+    def _blank_image(self):
+        return Image.new("RGB", (self.image_size[1], self.image_size[0]), color=(0, 0, 0))
 
     def __getitem__(self, idx):
-        img_path = self.image_paths[idx]
-        img = Image.open(img_path).convert("RGB")
+        burst = self.bursts[idx]
+        order = list(range(len(burst)))
+        random.shuffle(order)
 
-        # Resize to standard ReID size
-        img = img.resize((self.image_size[1], self.image_size[0]), Image.BILINEAR)
+        images = []
+        for image_idx in order:
+            image = self._load_rgb(burst[image_idx])
+            if image is not None:
+                images.append(image)
+            if len(images) == 2:
+                break
 
-        if self.transform:
-            view1 = self.transform(img)
-            view2 = self.transform(img)
+        if len(images) < 2:
+            if burst[0] not in self._warned_bad_paths:
+                print(f"[Dataset] Burst {idx} has fewer than two readable images; using a blank fallback.")
+            while len(images) < 2:
+                images.append(self._blank_image())
+
+        if self.transform is not None:
+            view1 = self.transform(images[0])
+            view2 = self.transform(images[1])
         else:
             to_tensor = transforms.ToTensor()
-            view1 = to_tensor(img)
-            view2 = to_tensor(img)
+            view1 = to_tensor(images[0])
+            view2 = to_tensor(images[1])
 
         return view1, view2, idx
+
+
+def parse_video_indices(value):
+    """Parse comma-separated video IDs such as '00,05,10' into ints."""
+    if value is None or value == "":
+        return None
+    indices = []
+    for part in str(value).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        indices.append(int(part))
+    return sorted(set(indices))
+
+
+def build_video_idx_split(dataset, val_video_indices=None, val_split_modulo=5, val_split_remainder=0):
+    """Split burst indices by disjoint video_idx values."""
+    available_videos = sorted(set(dataset.burst_video_indices))
+    if val_video_indices is None:
+        val_videos = [vid for vid in available_videos if vid % val_split_modulo == val_split_remainder]
+    else:
+        val_videos = sorted(set(val_video_indices))
+
+    unknown_videos = sorted(set(val_videos) - set(available_videos))
+    if unknown_videos:
+        print(f"[Split] Ignoring validation video_idx values not present in dataset: {unknown_videos}")
+    val_video_set = set(val_videos) & set(available_videos)
+    train_video_set = set(available_videos) - val_video_set
+
+    if not val_video_set:
+        raise ValueError("Validation split is empty. Adjust --val_video_indices or split modulo/remainder.")
+    if not train_video_set:
+        raise ValueError("Training split is empty. Adjust --val_video_indices or split modulo/remainder.")
+    if train_video_set & val_video_set:
+        raise AssertionError("Train/validation video_idx leakage detected.")
+
+    train_indices = []
+    val_indices = []
+    for idx, video_idx in enumerate(dataset.burst_video_indices):
+        if video_idx in val_video_set:
+            val_indices.append(idx)
+        else:
+            train_indices.append(idx)
+
+    if not train_indices or not val_indices:
+        raise ValueError("Train/validation split produced an empty burst subset.")
+
+    train_images = sum(len(dataset.bursts[idx]) for idx in train_indices)
+    val_images = sum(len(dataset.bursts[idx]) for idx in val_indices)
+    total_bursts = len(train_indices) + len(val_indices)
+    total_images = train_images + val_images
+    split_info = {
+        "train_video_indices": sorted(train_video_set),
+        "val_video_indices": sorted(val_video_set),
+        "train_bursts": len(train_indices),
+        "val_bursts": len(val_indices),
+        "train_images": train_images,
+        "val_images": val_images,
+        "val_burst_fraction": len(val_indices) / total_bursts,
+        "val_image_fraction": val_images / total_images,
+    }
+
+    print(
+        "[Split] "
+        f"train_videos={len(train_video_set)} val_videos={len(val_video_set)} | "
+        f"train_bursts={len(train_indices):,} val_bursts={len(val_indices):,} "
+        f"({split_info['val_burst_fraction']:.2%} val) | "
+        f"train_images={train_images:,} val_images={val_images:,} "
+        f"({split_info['val_image_fraction']:.2%} val)"
+    )
+    print(f"[Split] validation video_idx: {','.join(f'{vid:02d}' for vid in sorted(val_video_set))}")
+
+    return train_indices, val_indices, split_info
 
 
 # ============================================================================
 # SIMCLR AUGMENTATIONS
 # ============================================================================
 
-def get_simclr_transform(image_size=(256, 128),
-                         color_jitter_strength=0.5,
-                         random_erasing_prob=0.3,
-                         crop_scale_min=0.7):
-    """
-    SimCLR augmentation pipeline optimized for person Re-ID.
-
-    Augmentations act as "invariance teachers":
-    - Color Jitter: forces model to ignore clothing shade
-    - Random Erasing: forces focus on structural/body features
-    - Random Crop: teaches spatial invariance
-    """
+def get_simclr_transform(
+    image_size=(256, 128),
+    color_jitter_strength=0.5,
+    random_erasing_prob=0.3,
+    crop_scale_min=0.7,
+):
+    """SimCLR augmentation pipeline tuned for person ReID crops."""
     color_jitter = transforms.ColorJitter(
         brightness=0.4 * color_jitter_strength,
         contrast=0.4 * color_jitter_strength,
@@ -232,121 +335,101 @@ def get_simclr_transform(image_size=(256, 128),
         hue=0.1 * color_jitter_strength,
     )
 
-    transform = transforms.Compose([
+    return transforms.Compose([
         transforms.RandomResizedCrop(
             size=image_size,
             scale=(crop_scale_min, 1.0),
-            ratio=(0.4, 0.7),   # person aspect ratio
+            ratio=(0.4, 0.7),
         ),
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomApply([color_jitter], p=0.8),
         transforms.RandomGrayscale(p=0.2),
         transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                             std=[0.229, 0.224, 0.225]),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         transforms.RandomErasing(
             p=random_erasing_prob,
             scale=(0.02, 0.25),
             ratio=(0.3, 3.3),
         ),
     ])
-    return transform
 
 
 # ============================================================================
-# NT-Xent LOSS (SimCLR Contrastive Loss)
+# NT-Xent LOSS
 # ============================================================================
 
 class NTXentLoss(nn.Module):
-    """
-    Normalized Temperature-scaled Cross Entropy Loss (NT-Xent).
-
-    For a batch of N images producing 2N augmented views:
-    - Attraction: pull together the 2 views of the same image
-    - Repulsion: push apart views from different images
-    """
+    """Normalized temperature-scaled cross entropy loss."""
 
     def __init__(self, temperature=0.07):
         super().__init__()
         self.temperature = temperature
 
     def forward(self, z1, z2):
-        """
-        Args:
-            z1, z2: (N, D) normalized projection vectors for view 1 and view 2
-        Returns:
-            Scalar loss value
-        """
-        N = z1.size(0)
-        z = torch.cat([z1, z2], dim=0)  # (2N, D)
+        batch_size = z1.size(0)
+        z = torch.cat([z1, z2], dim=0)
+        similarities = F.cosine_similarity(z.unsqueeze(1), z.unsqueeze(0), dim=2)
+        similarities = similarities / self.temperature
 
-        # Cosine similarity matrix
-        sim = F.cosine_similarity(z.unsqueeze(1), z.unsqueeze(0), dim=2)  # (2N, 2N)
-        sim = sim / self.temperature
+        mask = torch.eye(2 * batch_size, dtype=torch.bool, device=z.device)
+        similarities.masked_fill_(mask, -1e9)
 
-        # Mask out self-similarity (diagonal)
-        mask = torch.eye(2 * N, dtype=torch.bool, device=z.device)
-        sim.masked_fill_(mask, -1e9)
-
-        # Positive pairs: (i, i+N) and (i+N, i)
-        pos_indices = torch.cat([
-            torch.arange(N, 2 * N, device=z.device),
-            torch.arange(0, N, device=z.device)
-        ])  # (2N,)
-
-        # Cross-entropy: treat positive pair as the correct class
-        loss = F.cross_entropy(sim, pos_indices)
-        return loss
+        positive_indices = torch.cat([
+            torch.arange(batch_size, 2 * batch_size, device=z.device),
+            torch.arange(0, batch_size, device=z.device),
+        ])
+        return F.cross_entropy(similarities, positive_indices)
 
 
 # ============================================================================
-# MODEL: OsNet + Projection Head
+# MODEL: OSNet + Projection Head
 # ============================================================================
 
 class SimCLRModel(nn.Module):
-    """
-    SimCLR model = OsNet Backbone + Projection Head.
+    """SimCLR model = OSNet backbone + projection head."""
 
-    The Projection Head absorbs loss-specific distortions,
-    keeping the Backbone representations clean for downstream inference.
-    """
-
-    def __init__(self, backbone_name="osnet_ain_x1_0",
-                 pretrained_weights=None,
-                 projection_dim=128,
-                 projection_hidden=512,
-                 freeze_layers=None):
+    def __init__(
+        self,
+        backbone_name="osnet_ain_x1_0",
+        pretrained_weights=None,
+        projection_dim=128,
+        projection_hidden=512,
+        freeze_layers=None,
+        allow_downloads=False,
+    ):
         super().__init__()
-
-        # --- Build OsNet Backbone ---
         if not TORCHREID_AVAILABLE:
             raise RuntimeError("torchreid is required. Install it first.")
 
-        # Build model through torchreid
+        weights_path = Path(pretrained_weights) if pretrained_weights else None
+        if weights_path is not None and not weights_path.exists():
+            raise FileNotFoundError(
+                "Pretrained weights were requested but not found. "
+                f"Offline training will not download them automatically: {weights_path}"
+            )
+        use_torchreid_pretrained = allow_downloads and weights_path is None
+
         model = torchreid.models.build_model(
             name=backbone_name,
-            num_classes=1,  # dummy, we discard classifier
-            pretrained=True if pretrained_weights is None else False,
+            num_classes=1,
+            pretrained=use_torchreid_pretrained,
         )
 
-        # Load custom weights if provided (e.g., MSMT17 pretrained)
-        if pretrained_weights and Path(pretrained_weights).exists():
-            state = torch.load(pretrained_weights, map_location="cpu")
-            # Handle different checkpoint formats
-            if "state_dict" in state:
+        if weights_path is not None:
+            state = torch.load(weights_path, map_location="cpu")
+            if isinstance(state, dict) and "state_dict" in state:
                 state = state["state_dict"]
             model.load_state_dict(state, strict=False)
-            print(f"[Model] Loaded pretrained weights from: {pretrained_weights}")
+            print(f"[Model] Loaded pretrained weights from: {weights_path}")
+        elif use_torchreid_pretrained:
+            print("[Model] Loading torchreid-managed pretrained weights; this may require network access.")
+        else:
+            print("[Model] No pretrained weights requested; using random OSNet initialization.")
 
-        # Extract backbone (remove classifier)
-        # OsNet structure: conv1, maxpool, layer1, layer2, layer3, layer4, global_avgpool, fc, classifier
         self.backbone = model
+        feat_dim = model.feature_dim
 
-        # Determine feature dimension from backbone
-        feat_dim = model.feature_dim  # OsNet exposes this
-
-        # --- Projection Head (MLP) ---
         self.projection_head = nn.Sequential(
             nn.Linear(feat_dim, projection_hidden),
             nn.BatchNorm1d(projection_hidden),
@@ -354,12 +437,10 @@ class SimCLRModel(nn.Module):
             nn.Linear(projection_hidden, projection_dim),
         )
 
-        # --- Partial Freezing ---
         if freeze_layers:
             self._freeze_layers(freeze_layers)
 
     def _freeze_layers(self, layer_names):
-        """Freeze specified layers to prevent catastrophic forgetting."""
         frozen_params = 0
         total_params = 0
 
@@ -371,36 +452,20 @@ class SimCLRModel(nn.Module):
                     frozen_params += param.numel()
                     break
 
-        pct = 100 * frozen_params / total_params if total_params > 0 else 0
+        pct = 100 * frozen_params / total_params if total_params else 0
         print(f"[Freeze] Frozen {frozen_params:,}/{total_params:,} params ({pct:.1f}%)")
         print(f"[Freeze] Frozen layers: {layer_names}")
 
     def forward(self, x, return_embedding=False):
-        """
-        Forward pass.
-        Args:
-            x: (N, 3, H, W) input images
-            return_embedding: if True, return backbone embedding (for inference)
-        Returns:
-            if return_embedding: (N, feat_dim) backbone features
-            else: (N, projection_dim) projected features for contrastive loss
-        """
-        # OsNet forward - get features before classifier
-        # We need to extract intermediate features
-        h = self._backbone_forward(x)
-
+        embedding = self._backbone_forward(x)
         if return_embedding:
-            return h
+            return embedding
 
-        z = self.projection_head(h)
-        z = F.normalize(z, dim=1)  # L2 normalize for cosine similarity
-        return z
+        projected = self.projection_head(embedding)
+        return F.normalize(projected, dim=1)
 
     def _backbone_forward(self, x):
-        """Extract features from backbone (before classifier)."""
         model = self.backbone
-
-        # OsNet uses conv1-conv5 structure, not layer1-layer4
         x = model.conv1(x)
         x = model.maxpool(x)
         x = model.conv2(x)
@@ -411,58 +476,131 @@ class SimCLRModel(nn.Module):
         x = model.conv5(x)
         x = model.global_avgpool(x)
         x = x.view(x.size(0), -1)
-        # Pass through fc layer (before classifier)
-        x = model.fc(x)
-        return x
+        return model.fc(x)
 
     def get_backbone_state_dict(self):
-        """Return only backbone weights (for inference without projection head)."""
-        return {k: v for k, v in self.state_dict().items()
-                if not k.startswith("projection_head")}
+        return {
+            key: value
+            for key, value in self.state_dict().items()
+            if not key.startswith("projection_head")
+        }
 
 
 # ============================================================================
 # TRAINING LOOP
 # ============================================================================
 
-def train_one_epoch(model, dataloader, criterion, optimizer, device, epoch, total_epochs):
+def train_one_epoch(
+    model,
+    dataloader,
+    criterion,
+    optimizer,
+    scaler,
+    device,
+    epoch,
+    total_epochs,
+    accumulation_steps=1,
+    grad_clip=1.0,
+    log_every=20,
+):
     """Train for one epoch, return average loss."""
     model.train()
     total_loss = 0.0
-    num_batches = 0
+    num_micro_batches = 0
+    optimizer_steps = 0
+    skipped_batches = 0
+    optimizer.zero_grad(set_to_none=True)
 
     for batch_idx, (view1, view2, _) in enumerate(dataloader):
-        view1 = view1.to(device)
-        view2 = view2.to(device)
+        view1 = view1.to(device, non_blocking=True)
+        view2 = view2.to(device, non_blocking=True)
 
-        # Forward
-        z1 = model(view1)
-        z2 = model(view2)
+        autocast_device = "cuda" if device.type == "cuda" else "cpu"
+        with torch.amp.autocast(device_type=autocast_device, enabled=scaler.is_enabled()):
+            z1 = model(view1)
+            z2 = model(view2)
+            raw_loss = criterion(z1, z2)
 
-        loss = criterion(z1, z2)
+        if not torch.isfinite(raw_loss.detach()):
+            skipped_batches += 1
+            optimizer.zero_grad(set_to_none=True)
+            print(f"  [WARNING] Non-finite loss at batch {batch_idx}; skipped batch.")
+            continue
 
-        # Backward
-        optimizer.zero_grad()
-        loss.backward()
+        loss = raw_loss / accumulation_steps
+        scaler.scale(loss).backward()
 
-        # Gradient clipping for stability
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        is_step = ((batch_idx + 1) % accumulation_steps == 0) or (batch_idx + 1 == len(dataloader))
+        if is_step:
+            if grad_clip is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            old_scale = scaler.get_scale()
+            scaler.step(optimizer)
+            scaler.update()
+            new_scale = scaler.get_scale()
+            if new_scale >= old_scale:
+                optimizer_steps += 1
+            optimizer.zero_grad(set_to_none=True)
 
-        optimizer.step()
+        total_loss += raw_loss.item()
+        num_micro_batches += 1
 
-        total_loss += loss.item()
-        num_batches += 1
+        if batch_idx % log_every == 0:
+            print(
+                f"  Epoch [{epoch + 1}/{total_epochs}] "
+                f"Batch [{batch_idx}/{len(dataloader)}] "
+                f"Loss: {raw_loss.item():.4f}"
+            )
 
-        if batch_idx % 20 == 0:
-            print(f"  Epoch [{epoch+1}/{total_epochs}] "
-                  f"Batch [{batch_idx}/{len(dataloader)}] "
-                  f"Loss: {loss.item():.4f}")
+    if num_micro_batches == 0:
+        raise RuntimeError(f"All batches were skipped in epoch {epoch + 1}.")
+    if skipped_batches:
+        print(f"  [WARNING] Skipped {skipped_batches} non-finite batches in epoch {epoch + 1}.")
 
-    return total_loss / max(num_batches, 1)
+    return total_loss / num_micro_batches, optimizer_steps
+
+
+def validate_one_epoch(model, dataloader, criterion, device, epoch, total_epochs, amp_enabled=True):
+    """Evaluate one epoch on held-out bursts and return average validation loss."""
+    model.eval()
+    total_loss = 0.0
+    num_batches = 0
+    skipped_batches = 0
+    autocast_device = "cuda" if device.type == "cuda" else "cpu"
+
+    with torch.no_grad():
+        for batch_idx, (view1, view2, _) in enumerate(dataloader):
+            view1 = view1.to(device, non_blocking=True)
+            view2 = view2.to(device, non_blocking=True)
+
+            with torch.amp.autocast(device_type=autocast_device, enabled=amp_enabled):
+                z1 = model(view1)
+                z2 = model(view2)
+                loss = criterion(z1, z2)
+
+            if not torch.isfinite(loss.detach()):
+                skipped_batches += 1
+                print(f"  [WARNING] Non-finite validation loss at batch {batch_idx}; skipped batch.")
+                continue
+
+            total_loss += loss.item()
+            num_batches += 1
+
+    if num_batches == 0:
+        raise RuntimeError(f"All validation batches were skipped in epoch {epoch + 1}.")
+    if skipped_batches:
+        print(f"  [WARNING] Skipped {skipped_batches} non-finite validation batches in epoch {epoch + 1}.")
+
+    avg_loss = total_loss / num_batches
+    print(f"  => Validation [{epoch + 1}/{total_epochs}] Loss: {avg_loss:.4f}")
+    return avg_loss
 
 
 def get_cosine_scheduler(optimizer, total_epochs, warmup_epochs, last_epoch=-1):
     """Cosine annealing with linear warmup."""
+    warmup_epochs = max(1, warmup_epochs)
+
     def lr_lambda(epoch):
         if epoch < warmup_epochs:
             return (epoch + 1) / warmup_epochs
@@ -476,77 +614,176 @@ def get_cosine_scheduler(optimizer, total_epochs, warmup_epochs, last_epoch=-1):
 # SINGLE TRAINING RUN
 # ============================================================================
 
-def run_training(config: dict, dataset_dir: str, output_dir: str, run_name: str = "run"):
-    """
-    Execute a full SimCLR training run with the given config.
+def _reduced_batch_size(batch_size, min_batch_size):
+    """Reduce batch size with 32-sample alignment for CUDA OOM recovery."""
+    if batch_size <= min_batch_size:
+        return None
+    reduced = int(batch_size * 0.75)
+    reduced = max(min_batch_size, (reduced // 32) * 32)
+    if reduced >= batch_size:
+        reduced = batch_size - 32
+    return max(min_batch_size, reduced)
 
-    Returns:
-        dict with final metrics and model path
-    """
+
+CUDA_OOM_MARKERS = (
+    "out of memory",
+    "cuda error: out of memory",
+    "cublas_status_alloc_failed",
+    "cuda out of memory",
+)
+
+
+def _is_cuda_oom_error(exc):
+    """Return True for both explicit and asynchronous CUDA OOM exceptions."""
+    if isinstance(exc, torch.OutOfMemoryError):
+        return True
+    message = str(exc).lower()
+    return any(marker in message for marker in CUDA_OOM_MARKERS)
+
+
+def _clear_cuda_after_error():
+    """Best-effort cleanup after CUDA memory pressure."""
+    if torch.cuda.is_available():
+        try:
+            torch.cuda.empty_cache()
+        except Exception as cleanup_exc:
+            print(f"[CUDA] empty_cache failed during cleanup: {cleanup_exc}")
+        try:
+            torch.cuda.ipc_collect()
+        except Exception as cleanup_exc:
+            print(f"[CUDA] ipc_collect failed during cleanup: {cleanup_exc}")
+    gc.collect()
+
+
+def run_training(config, dataset_dir, output_dir, run_name="run", trial=None, patience=10):
+    """Execute training, automatically retrying with smaller batches after CUDA OOM."""
+    current_batch_size = int(config["batch_size"])
+    min_batch_size = int(config.get("min_batch_size", 128))
+    auto_reduce = bool(config.get("auto_reduce_batch_on_oom", True))
+    attempted_batches = []
+
+    while True:
+        attempt_config = config.copy()
+        attempt_config["batch_size"] = current_batch_size
+        attempt_config["attempted_batch_sizes"] = attempted_batches + [current_batch_size]
+
+        try:
+            return _run_training_once(attempt_config, dataset_dir, output_dir, run_name, trial, patience)
+        except (torch.OutOfMemoryError, RuntimeError) as exc:
+            if not _is_cuda_oom_error(exc):
+                raise
+
+            attempted_batches.append(current_batch_size)
+            _clear_cuda_after_error()
+
+            next_batch_size = _reduced_batch_size(current_batch_size, min_batch_size)
+            if not auto_reduce or next_batch_size is None:
+                print(
+                    f"[OOM] CUDA out of memory at batch_size={current_batch_size}. "
+                    "Automatic batch reduction is disabled or already at the minimum."
+                )
+                raise
+
+            print(
+                f"[OOM] CUDA out of memory at batch_size={current_batch_size}: {exc}\n"
+                f"[OOM] Clearing CUDA cache and retrying {run_name} from scratch "
+                f"with batch_size={next_batch_size}."
+            )
+            time.sleep(2)
+            current_batch_size = next_batch_size
+
+
+def _run_training_once(config, dataset_dir, output_dir, run_name="run", trial=None, patience=10):
+    """Execute a SimCLR training run and return the best validation loss."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     run_dir = Path(output_dir) / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print(f"TRAINING RUN: {run_name}")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print(f"Config: {json.dumps(config, indent=2, default=str)}")
     print(f"Device: {device}")
     print(f"Output: {run_dir}")
 
-    # Save config
-    with open(run_dir / "config.json", "w") as f:
-        json.dump(config, f, indent=2, default=str)
+    if config["batch_size"] < 16:
+        print("[WARNING] Physical batch < 16; projection-head BatchNorm statistics may be noisy.")
+    if config["accumulation_steps"] > 1:
+        effective_batch = config["batch_size"] * config["accumulation_steps"]
+        print(f"[Train] Gradient accumulation: physical={config['batch_size']} effective={effective_batch}")
+        print("[Train] NT-Xent negatives still come only from the physical mini-batch.")
 
-    # --- Dataset & DataLoader ---
     transform = get_simclr_transform(
         image_size=config["image_size"],
         color_jitter_strength=config["color_jitter_strength"],
         random_erasing_prob=config["random_erasing_prob"],
         crop_scale_min=config["crop_scale_min"],
     )
-
     dataset = BurstSimCLRDataset(
         root_dir=dataset_dir,
         transform=transform,
         image_size=config["image_size"],
+        burst_gap_threshold=config["burst_gap_threshold"],
     )
 
-    # Weighted sampling for case balancing
-    sample_weights = dataset.get_sample_weights()
+    train_indices, val_indices, split_info = build_video_idx_split(
+        dataset,
+        val_video_indices=config.get("val_video_indices"),
+        val_split_modulo=config.get("val_split_modulo", 5),
+        val_split_remainder=config.get("val_split_remainder", 0),
+    )
+    config.update(split_info)
+
+    with open(run_dir / "config.json", "w", encoding="utf-8") as file:
+        json.dump(config, file, indent=2, default=str)
+
+    train_dataset = Subset(dataset, train_indices)
+    val_dataset = Subset(dataset, val_indices)
+
+    sample_weights = dataset.get_sample_weights(train_indices)
     sampler = WeightedRandomSampler(
         weights=sample_weights,
-        num_samples=len(dataset),
+        num_samples=len(train_dataset),
         replacement=True,
     )
 
-    # Determine num_workers safely for the current OS
-    num_workers = config["num_workers"]
-    if os.name == "nt" and num_workers > 0:
-        print(f"[WARNING] Windows detected: forcing num_workers=0 (was {num_workers}) "
-              f"to avoid Intel MKL/forrtl crash")
-        num_workers = 0
-
-    dataloader = DataLoader(
-        dataset,
-        batch_size=config["batch_size"],
+    train_batch_size = min(config["batch_size"], len(train_dataset))
+    val_batch_size = min(config["batch_size"], len(val_dataset))
+    train_drop_last = len(train_dataset) >= config["batch_size"]
+    pin_memory = bool(config.get("pin_memory", False)) and device.type == "cuda"
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=train_batch_size,
         sampler=sampler,
-        num_workers=num_workers,
-        pin_memory=True if torch.cuda.is_available() else False,
-        drop_last=True,  # Important for contrastive loss
+        num_workers=0,
+        pin_memory=pin_memory,
+        drop_last=train_drop_last,
+        persistent_workers=False,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=val_batch_size,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=pin_memory,
+        drop_last=False,
+        persistent_workers=False,
+    )
+    print(
+        f"[DataLoader] train_batches={len(train_loader)} train_batch_size={train_batch_size} "
+        f"drop_last={train_drop_last} | val_batches={len(val_loader)} "
+        f"val_batch_size={val_batch_size} pin_memory={pin_memory}"
     )
 
-    # --- Model ---
     model = SimCLRModel(
         backbone_name=config["backbone"],
         pretrained_weights=config.get("pretrained_weights"),
         projection_dim=config["projection_dim"],
         projection_hidden=config["projection_hidden"],
         freeze_layers=config.get("freeze_layers"),
+        allow_downloads=False,
     ).to(device)
 
-    # --- Optimizer & Scheduler ---
-    # Only optimize parameters that require gradients
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     print(f"[Optimizer] Trainable parameters: {sum(p.numel() for p in trainable_params):,}")
 
@@ -555,151 +792,251 @@ def run_training(config: dict, dataset_dir: str, output_dir: str, run_name: str 
         lr=config["lr"],
         weight_decay=config["weight_decay"],
     )
-
     scheduler = get_cosine_scheduler(
         optimizer,
         total_epochs=config["epochs"],
         warmup_epochs=config["warmup_epochs"],
     )
+    criterion = NTXentLoss(temperature=config["temperature"]).to(device)
+    scaler = torch.amp.GradScaler(
+        "cuda",
+        enabled=device.type == "cuda",
+        init_scale=1024.0,
+        growth_interval=1000,
+    )
 
-    criterion = NTXentLoss(temperature=config["temperature"])
-
-    # --- Training Loop ---
-    best_loss = float("inf")
-    loss_history = []
+    best_val_loss = float("inf")
+    best_epoch = None
+    patience_counter = 0
+    no_step_epochs = 0
+    stopped_early = False
+    train_loss_history = []
+    val_loss_history = []
 
     for epoch in range(config["epochs"]):
-        avg_loss = train_one_epoch(
-            model, dataloader, criterion, optimizer, device,
-            epoch, config["epochs"]
+        train_loss, optimizer_steps = train_one_epoch(
+            model,
+            train_loader,
+            criterion,
+            optimizer,
+            scaler,
+            device,
+            epoch,
+            config["epochs"],
+            accumulation_steps=max(1, config["accumulation_steps"]),
+        )
+        if not math.isfinite(train_loss):
+            raise RuntimeError(f"Non-finite average training loss at epoch {epoch + 1}: {train_loss}")
+
+        if optimizer_steps > 0:
+            no_step_epochs = 0
+            scheduler.step()
+        else:
+            no_step_epochs += 1
+            print(f"  [WARNING] No optimizer steps completed in epoch {epoch + 1}; LR schedule not advanced.")
+            if scaler.is_enabled() and no_step_epochs >= 1:
+                print("  [WARNING] AMP appears unstable for this run; disabling AMP and continuing in FP32.")
+                scaler = torch.amp.GradScaler("cuda", enabled=False)
+
+        val_loss = validate_one_epoch(
+            model,
+            val_loader,
+            criterion,
+            device,
+            epoch,
+            config["epochs"],
+            amp_enabled=scaler.is_enabled(),
+        )
+        if not math.isfinite(val_loss):
+            raise RuntimeError(f"Non-finite average validation loss at epoch {epoch + 1}: {val_loss}")
+
+        train_loss_history.append(train_loss)
+        val_loss_history.append(val_loss)
+        current_lr = optimizer.param_groups[0]["lr"]
+        print(
+            f"  => Epoch {epoch + 1}/{config['epochs']} | "
+            f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | LR: {current_lr:.6f}"
         )
 
-        scheduler.step()
-        current_lr = optimizer.param_groups[0]["lr"]
-        loss_history.append(avg_loss)
-
-        print(f"  => Epoch {epoch+1}/{config['epochs']} | "
-              f"Loss: {avg_loss:.4f} | LR: {current_lr:.6f}")
-
-        # Save best model (backbone only)
-        if avg_loss < best_loss:
-            best_loss = avg_loss
-            torch.save(model.get_backbone_state_dict(),
-                       run_dir / "best_backbone.pt")
-            torch.save(model.state_dict(),
-                       run_dir / "best_full_model.pt")
-            print(f"  => New best model saved (loss: {best_loss:.4f})")
-
-        # Periodic checkpoint
-        if (epoch + 1) % 10 == 0:
+        if val_loss < best_val_loss - 1e-6:
+            best_val_loss = val_loss
+            best_epoch = epoch + 1
+            patience_counter = 0
             torch.save({
                 "epoch": epoch + 1,
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
+                "scaler_state_dict": scaler.state_dict(),
                 "scheduler_state_dict": scheduler.state_dict(),
-                "loss": avg_loss,
+                "loss": best_val_loss,
+                "val_loss": best_val_loss,
+                "train_loss": train_loss,
                 "config": config,
-            }, run_dir / f"checkpoint_epoch_{epoch+1}.pt")
+            }, run_dir / "best_checkpoint.pt")
+            torch.save(model.get_backbone_state_dict(), run_dir / "best_backbone.pt")
+            print(f"  => New best validation loss ({best_val_loss:.4f}) - checkpoint saved")
+        else:
+            patience_counter += 1
 
-    # Save final model
-    torch.save(model.get_backbone_state_dict(),
-               run_dir / "final_backbone.pt")
+        if trial is not None:
+            trial.report(val_loss, epoch)
+            if trial.should_prune():
+                if optuna is None:
+                    raise RuntimeError("Optuna is required for pruning.")
+                raise optuna.TrialPruned()
 
-    # Save training history
+        if patience_counter >= patience:
+            stopped_early = True
+            print(f"[EarlyStop] No improvement for {patience} epochs at epoch {epoch + 1}")
+            break
+
+    torch.save(model.get_backbone_state_dict(), run_dir / "final_backbone.pt")
+
     results = {
         "run_name": run_name,
         "config": config,
-        "best_loss": best_loss,
-        "final_loss": loss_history[-1] if loss_history else None,
-        "loss_history": loss_history,
+        "best_loss": best_val_loss,
+        "best_val_loss": best_val_loss,
+        "best_epoch": best_epoch,
+        "final_loss": val_loss_history[-1] if val_loss_history else None,
+        "final_val_loss": val_loss_history[-1] if val_loss_history else None,
+        "final_train_loss": train_loss_history[-1] if train_loss_history else None,
+        "loss_history": val_loss_history,
+        "train_loss_history": train_loss_history,
+        "val_loss_history": val_loss_history,
+        "train_video_indices": split_info["train_video_indices"],
+        "val_video_indices": split_info["val_video_indices"],
+        "train_bursts": split_info["train_bursts"],
+        "val_bursts": split_info["val_bursts"],
+        "train_images": split_info["train_images"],
+        "val_images": split_info["val_images"],
         "total_epochs": config["epochs"],
+        "completed_epochs": len(val_loss_history),
+        "stopped_early": stopped_early,
         "timestamp": datetime.now().isoformat(),
     }
-    with open(run_dir / "results.json", "w") as f:
-        json.dump(results, f, indent=2, default=str)
+    with open(run_dir / "results.json", "w", encoding="utf-8") as file:
+        json.dump(results, file, indent=2, default=str)
 
-    print(f"\n[DONE] {run_name}: Best Loss = {best_loss:.4f}")
-    return results
+    print(f"\n[DONE] {run_name}: Best Val Loss = {best_val_loss:.4f}")
+    return best_val_loss
 
 
 # ============================================================================
-# HYPERPARAMETER GRID SEARCH
+# OPTUNA STUDY
 # ============================================================================
 
-def run_grid_search(base_config: dict, dataset_dir: str, output_dir: str,
-                    grid: dict = None):
-    """
-    Run grid search over hyperparameter combinations.
+def objective(trial, args, base_config):
+    cfg = base_config.copy()
+    cfg["lr"] = trial.suggest_float("lr", 1e-5, 1e-3, log=True)
+    cfg["temperature"] = trial.suggest_float("temperature", 0.05, 0.2)
+    cfg["projection_dim"] = trial.suggest_categorical("projection_dim", [64, 128, 256])
+    cfg["color_jitter_strength"] = trial.suggest_float("color_jitter_strength", 0.3, 0.7)
+    cfg["freeze_early_layers"] = trial.suggest_categorical("freeze_early_layers", [True, False])
+    cfg["freeze_layers"] = ["conv1", "maxpool", "conv2", "pool2"] if cfg["freeze_early_layers"] else []
+    cfg["batch_size"] = args.max_physical_batch
+    cfg["accumulation_steps"] = args.accumulation_steps
+    cfg["epochs"] = args.epochs
+    cfg["burst_gap_threshold"] = args.burst_gap_threshold
+    cfg["val_video_indices"] = parse_video_indices(args.val_video_indices)
+    cfg["val_split_modulo"] = args.val_split_modulo
+    cfg["val_split_remainder"] = args.val_split_remainder
 
-    Each combination is trained independently and results are compared.
-    """
-    if grid is None:
-        grid = HYPERPARAM_GRID
+    run_name = f"trial_{trial.number:04d}"
+    try:
+        return run_training(
+            cfg,
+            args.dataset_dir,
+            args.output_dir,
+            run_name=run_name,
+            trial=trial,
+            patience=args.patience,
+        )
+    finally:
+        _clear_cuda_after_error()
 
-    # Generate all combinations
-    keys = list(grid.keys())
-    values = list(grid.values())
-    combinations = list(itertools.product(*values))
 
-    print(f"\n{'='*70}")
-    print(f"HYPERPARAMETER GRID SEARCH")
-    print(f"{'='*70}")
-    print(f"Parameters: {keys}")
-    print(f"Total combinations: {len(combinations)}")
-    print(f"Grid: {json.dumps(grid, indent=2)}")
+def _storage_url(args):
+    if args.storage:
+        return args.storage
+    return f"sqlite:///{(Path(args.output_dir) / 'optuna_study.db').as_posix()}"
 
-    all_results = []
 
-    for i, combo in enumerate(combinations):
-        # Build config for this run
-        config = base_config.copy()
-        run_label_parts = []
-        for key, val in zip(keys, combo):
-            config[key] = val
-            run_label_parts.append(f"{key}={val}")
+def _make_storage(storage_url):
+    if storage_url.startswith("sqlite:///"):
+        db_path = Path(storage_url.replace("sqlite:///", "", 1))
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        return optuna.storages.RDBStorage(
+            url=storage_url,
+            engine_kwargs={"connect_args": {"timeout": 120}},
+        )
+    return storage_url
 
-        run_name = f"run_{i+1:03d}_{'_'.join(run_label_parts)}"
-        print(f"\n[{i+1}/{len(combinations)}] {run_name}")
+
+def _finished_trial_count(study):
+    return sum(1 for trial in study.trials if trial.state.is_finished())
+
+
+def run_optuna_study(args, base_config):
+    if optuna is None:
+        raise RuntimeError("Optuna is required. Install with: pip install optuna>=3.6")
+
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    storage_url = _storage_url(args)
+    storage = _make_storage(storage_url)
+    study = optuna.create_study(
+        study_name=args.study_name,
+        storage=storage,
+        direction="minimize",
+        load_if_exists=True,
+        pruner=optuna.pruners.MedianPruner(n_startup_trials=3, n_warmup_steps=5, interval_steps=1),
+        sampler=optuna.samplers.TPESampler(seed=42),
+    )
+
+    print(f"[Optuna] study={args.study_name} storage={storage_url}")
+    deadline = time.monotonic() + args.timeout if args.timeout else None
+    consecutive_driver_errors = 0
+
+    while True:
+        if args.n_trials is not None and _finished_trial_count(study) >= args.n_trials:
+            break
+        if deadline is not None and time.monotonic() >= deadline:
+            print("[Optuna] Timeout reached; study can resume with the same command.")
+            break
+
+        remaining_timeout = None
+        if deadline is not None:
+            remaining_timeout = max(1, int(deadline - time.monotonic()))
 
         try:
-            result = run_training(config, dataset_dir, output_dir, run_name)
-            all_results.append(result)
-        except Exception as e:
-            print(f"[ERROR] Run failed: {e}")
-            all_results.append({
-                "run_name": run_name,
-                "config": config,
-                "error": str(e),
-            })
+            study.optimize(
+                lambda trial: objective(trial, args, base_config),
+                n_trials=1,
+                timeout=remaining_timeout,
+                gc_after_trial=True,
+                catch=(RuntimeError, OSError, ValueError),
+            )
+            consecutive_driver_errors = 0
+        except KeyboardInterrupt:
+            print("[Optuna] Interrupted by user; study is safely resumable.")
+            break
+        except Exception as exc:
+            consecutive_driver_errors += 1
+            wait_s = min(300, 10 * consecutive_driver_errors)
+            print(f"[Optuna] Driver/storage error #{consecutive_driver_errors}: {exc}")
+            if consecutive_driver_errors >= 5:
+                print("[Optuna] Pausing after repeated driver errors. Re-run the same command to resume.")
+                break
+            print(f"[Optuna] Sleeping {wait_s}s, then reloading the study.")
+            time.sleep(wait_s)
+            study = optuna.load_study(study_name=args.study_name, storage=storage)
 
-    # --- Summary ---
-    print(f"\n{'='*70}")
-    print(f"GRID SEARCH SUMMARY")
-    print(f"{'='*70}")
-
-    successful = [r for r in all_results if "best_loss" in r]
-    if successful:
-        successful.sort(key=lambda r: r["best_loss"])
-        print(f"\nTop 5 configurations (by best loss):")
-        for i, r in enumerate(successful[:5]):
-            print(f"  {i+1}. Loss={r['best_loss']:.4f} | {r['run_name']}")
-            for key in keys:
-                print(f"       {key}: {r['config'][key]}")
-
-    # Save full summary
-    summary_path = Path(output_dir) / "grid_search_summary.json"
-    with open(summary_path, "w") as f:
-        json.dump({
-            "grid": grid,
-            "total_runs": len(combinations),
-            "successful_runs": len(successful),
-            "results": all_results,
-            "best_run": successful[0] if successful else None,
-            "timestamp": datetime.now().isoformat(),
-        }, f, indent=2, default=str)
-
-    print(f"\nSummary saved to: {summary_path}")
-    return all_results
+    try:
+        print(f"\nBest trial: #{study.best_trial.number}  loss={study.best_value:.4f}")
+        print(f"Params: {study.best_params}")
+    except ValueError:
+        print("[Optuna] No completed trial yet.")
+    return study
 
 
 # ============================================================================
@@ -708,53 +1045,111 @@ def run_grid_search(base_config: dict, dataset_dir: str, output_dir: str,
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="SimCLR Training for Person Re-ID in the Operating Room"
+        description="Burst-aware SimCLR training for person ReID in the operating room."
     )
-    parser.add_argument("--dataset_dir", type=str,
-                        default="F:/Room_8_Data/SIMCLR/dataset/simclr_burst_v3_cleaned",
-                        help="Path to burst dataset directory (from build_dataset.py)")
-    parser.add_argument("--output_dir", type=str, default="./simclr_output",
-                        help="Output directory for models and results")
-    parser.add_argument("--pretrained_weights", type=str, default=None,
-                        help="Path to MSMT17 pretrained OsNet weights (.pt)")
+    parser.add_argument(
+        "--dataset_dir",
+        type=str,
+        default="F:/Room_8_Data/SIMCLR/dataset/simclr_burst_v3_cleaned",
+        help="Path to burst dataset directory from build_dataset.py.",
+    )
+    parser.add_argument("--output_dir", type=str, default="./simclr_output")
+    parser.add_argument("--pretrained_weights", type=str, default=DEFAULT_CONFIG["pretrained_weights"])
+    parser.add_argument(
+        "--no_pretrained_weights",
+        action="store_true",
+        help="Use random OSNet initialization and do not load or download pretrained weights.",
+    )
 
-    # Single run or grid search
-    parser.add_argument("--grid_search", action="store_true",
-                        help="Run hyperparameter grid search")
+    # Mode
+    parser.add_argument("--single_run", action="store_true", help="Run one training job instead of Optuna.")
 
-    # Override defaults for single run
-    parser.add_argument("--epochs", type=int, default=None)
-    parser.add_argument("--batch_size", type=int, default=None)
+    # Hardware
+    parser.add_argument("--max_physical_batch", type=int, default=DEFAULT_CONFIG["batch_size"])
+    parser.add_argument("--accumulation_steps", type=int, default=DEFAULT_CONFIG["accumulation_steps"])
+    parser.add_argument("--min_physical_batch", type=int, default=DEFAULT_CONFIG["min_batch_size"])
+    parser.add_argument(
+        "--pin_memory",
+        action="store_true",
+        default=DEFAULT_CONFIG["pin_memory"],
+        help="Enable pinned CPU memory for DataLoader transfers. Faster sometimes, less resilient after OOM.",
+    )
+    parser.add_argument(
+        "--disable_auto_batch_reduction",
+        action="store_true",
+        help="Disable automatic CUDA-OOM retry with a smaller physical batch.",
+    )
+
+    # Training
+    parser.add_argument("--epochs", type=int, default=DEFAULT_CONFIG["epochs"])
+    parser.add_argument("--patience", type=int, default=10)
+    parser.add_argument("--burst_gap_threshold", type=int, default=DEFAULT_CONFIG["burst_gap_threshold"])
+    parser.add_argument(
+        "--val_video_indices",
+        type=str,
+        default=None,
+        help="Comma-separated validation video_idx values. Overrides --val_split_modulo/remainder.",
+    )
+    parser.add_argument("--val_split_modulo", type=int, default=DEFAULT_CONFIG["val_split_modulo"])
+    parser.add_argument("--val_split_remainder", type=int, default=DEFAULT_CONFIG["val_split_remainder"])
+
+    # Single-run overrides
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--temperature", type=float, default=None)
     parser.add_argument("--projection_dim", type=int, default=None)
     parser.add_argument("--color_jitter", type=float, default=None)
+    parser.add_argument(
+        "--freeze_early_layers",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_CONFIG["freeze_early_layers"],
+        help="For single runs, freeze conv1/maxpool/conv2/pool2. Use --no-freeze_early_layers to train them.",
+    )
+
+    # Optuna
+    parser.add_argument("--n_trials", type=int, default=50)
+    parser.add_argument("--timeout", type=int, default=604800, help="Study timeout in seconds.")
+    parser.add_argument("--storage", type=str, default=None)
+    parser.add_argument("--study_name", type=str, default="simclr_reid")
 
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-
-    # Build config
     config = DEFAULT_CONFIG.copy()
-    if args.pretrained_weights:
-        config["pretrained_weights"] = args.pretrained_weights
-    if args.epochs:
-        config["epochs"] = args.epochs
-    if args.batch_size:
-        config["batch_size"] = args.batch_size
-    if args.lr:
-        config["lr"] = args.lr
-    if args.temperature:
-        config["temperature"] = args.temperature
-    if args.projection_dim:
-        config["projection_dim"] = args.projection_dim
-    if args.color_jitter:
-        config["color_jitter_strength"] = args.color_jitter
+    config["pretrained_weights"] = None if args.no_pretrained_weights else (args.pretrained_weights or config["pretrained_weights"])
+    config["batch_size"] = args.max_physical_batch
+    config["min_batch_size"] = args.min_physical_batch
+    config["auto_reduce_batch_on_oom"] = not args.disable_auto_batch_reduction
+    config["pin_memory"] = args.pin_memory
+    config["accumulation_steps"] = args.accumulation_steps
+    config["epochs"] = args.epochs
+    config["burst_gap_threshold"] = args.burst_gap_threshold
+    config["val_video_indices"] = parse_video_indices(args.val_video_indices)
+    config["val_split_modulo"] = args.val_split_modulo
+    config["val_split_remainder"] = args.val_split_remainder
+    config["freeze_early_layers"] = args.freeze_early_layers
+    config["freeze_layers"] = ["conv1", "maxpool", "conv2", "pool2"] if args.freeze_early_layers else []
 
-    # Always run grid search
-    run_grid_search(config, args.dataset_dir, args.output_dir)
+    if args.single_run:
+        for key, value in [
+            ("lr", args.lr),
+            ("temperature", args.temperature),
+            ("projection_dim", args.projection_dim),
+            ("color_jitter_strength", args.color_jitter),
+        ]:
+            if value is not None:
+                config[key] = value
+        run_training(
+            config,
+            args.dataset_dir,
+            args.output_dir,
+            run_name="single_run",
+            trial=None,
+            patience=args.patience,
+        )
+    else:
+        run_optuna_study(args, config)
 
 
 if __name__ == "__main__":

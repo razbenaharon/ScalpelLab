@@ -10,6 +10,8 @@ Creates visualizations showing:
     - Dataset quality metrics
 """
 
+from __future__ import annotations
+
 import re
 from pathlib import Path
 from collections import defaultdict, OrderedDict
