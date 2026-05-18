@@ -20,6 +20,9 @@ NAV_LINKS = [
     ("Anesthesiology",  "/anesthesiology",  "medical_services", "Anesthesiology"),
     ("MP4",             "/mp4",             "movie",          "MP4"),
     ("SEQ",             "/seq",             "folder_open",    "SEQ"),
+    ("SEQ Curation",    "/seq-curation",    "drive_folder_upload", "SEQ Curation"),
+    ("Update DB",       "/update-db",       "sync",           "Update DB"),
+    ("SEQ → MP4",       "/seq-to-mp4",      "movie_filter",   "SEQ → MP4"),
     ("BORIS",           "/boris",           "label",          "BORIS Tags"),
 ]
 

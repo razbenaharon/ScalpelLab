@@ -65,6 +65,11 @@ scipy>=1.10.0                 # Spatial distance calculations
 psutil>=5.9.0                 # Process and system monitoring
 
 # ============================================================================
+# TESTING (optional — for tests/ end-to-end harness)
+# ============================================================================
+pytest>=7.0                   # see tests/README.md for sample-data setup
+
+# ============================================================================
 # NOTES
 # ============================================================================
 # - sqlite3 is included with Python standard library (no installation needed)

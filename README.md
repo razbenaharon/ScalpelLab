@@ -86,7 +86,7 @@ The dashboard lives under [`app/`](app/) and currently includes:
 
 ### Main Scripts
 
-- [`scripts/1_nuk_seq_export.py`](scripts/1_nuk_seq_export.py): organize raw
+- [`scripts/1_seq_curation.py`](scripts/1_seq_curation.py): curate raw
   SEQ exports into `DATA_YY-MM-DD/CaseN/CameraName`, copy companion files,
   verify hashes, and flag undersized files as junk.
 - [`scripts/2_update_db.py`](scripts/2_update_db.py): scan SEQ and MP4 trees,
@@ -145,7 +145,7 @@ Computer-vision experiments live under [`CV/`](CV/):
 ```bash
 python config.py
 python run_app.py
-python scripts/1_nuk_seq_export.py
+python scripts/1_seq_curation.py
 python scripts/2_update_db.py --dry-run
 python scripts/2_update_db.py --skip-duration
 python scripts/3_seq_to_mp4_convert.py
@@ -220,7 +220,7 @@ ScalpelLab/
 │   ├── config.ini
 │   └── run_viewer.py
 ├── scripts/
-│   ├── 1_nuk_seq_export.py
+│   ├── 1_seq_curation.py
 │   ├── 2_update_db.py
 │   ├── 3_seq_to_mp4_convert.py
 │   ├── import_boris_tags.py
