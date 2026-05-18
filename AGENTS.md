@@ -50,6 +50,10 @@ There are no automated tests, linters, or CI. Validate by running scripts with
 
 - **DB path** comes from `config.py::DB_PATH`, overridable per-process by the
   `SCALPEL_DB` env var, or per-session via the dashboard's left drawer.
+- **NorPix SequenceViewer path** comes from
+  `config.py::NORPIX_SEQUENCE_VIEWER_PATH`, defaults to
+  `C:\Program Files\Common Files\NorPix\SequenceViewer.exe`, and is editable
+  from the dashboard Home page Configuration panel.
 - **External tools on PATH**: `ffmpeg`, `ffprobe`, `mkvmerge`, and `mpv.exe`.
   GPU paths assume NVIDIA NVENC; some workflows fall back to NorPix `CLExport`.
 - **Windows console** is CP1252. Scripts that print non-ASCII must reconfigure
@@ -59,8 +63,8 @@ There are no automated tests, linters, or CI. Validate by running scripts with
   undersized recording — filter out for stats and visualizations.
 - **`seq_enriched.time_drift_ms`** has corrupt outliers (~2e12 ms) from broken
   IDX timestamps — always clip to ±5–10 s before plotting.
-- The README still says "Streamlit" in places; the dashboard has been migrated
-  to **NiceGUI** (native pywebview window). Trust the code over the README.
+- The dashboard is **NiceGUI** (native pywebview window). Trust the code over
+  stale docs if you find old Streamlit references.
 
 ## Conventions when editing
 

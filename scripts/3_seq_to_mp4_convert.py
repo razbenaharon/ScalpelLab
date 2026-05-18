@@ -44,8 +44,9 @@ import os
 import re
 import time
 import threading
+import math
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Tuple, Optional, NamedTuple
 from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -181,9 +182,80 @@ class SessionGroup:
         return int(round(self.global_duration * TARGET_FPS))
 
 
+@dataclass
+class NotSyncableCamera:
+    """A camera that can be decoded as video but cannot be timeline-synced."""
+    recording_date: str
+    case_no: int
+    camera_name: str
+    seq_path: Path
+    width: int
+    height: int
+    pix_fmt: str
+    source_fps: float
+    reason: str
+
+
+@dataclass
+class PlanDiagnostics:
+    """Compact counters for noisy planning-stage details."""
+    seq_missing: List[str] = field(default_factory=list)
+    idx_missing: List[str] = field(default_factory=list)
+    corrupt_timestamps: List[str] = field(default_factory=list)
+    zero_idx: List[str] = field(default_factory=list)
+    corrupt_duration: List[str] = field(default_factory=list)
+    fallback_unavailable: List[str] = field(default_factory=list)
+    idx_cached: int = 0
+    idx_parsed: int = 0
+    resolution_cached: int = 0
+    resolution_probed: int = 0
+    timeline_extended: int = 0
+
+
 # =========================
 # Utility Functions
 # =========================
+def _utc_year(timestamp: float) -> int:
+    """Return UTC year without using deprecated utcfromtimestamp."""
+    return datetime.fromtimestamp(timestamp, timezone.utc).year
+
+
+def _sample(items: List[str], limit: int = 3) -> str:
+    """Format a short sample from a potentially large diagnostic list."""
+    shown = ", ".join(items[:limit])
+    if len(items) > limit:
+        shown += f", +{len(items) - limit} more"
+    return shown
+
+
+def print_plan_diagnostics(diag: PlanDiagnostics, include_not_syncable: bool) -> None:
+    """Print one compact summary for noisy planning-stage skips and cache use."""
+    print("\nPlanning scan summary:")
+    print(
+        f"  IDX metadata: {diag.idx_cached} cached, {diag.idx_parsed} parsed; "
+        f"resolution: {diag.resolution_cached} from DB, {diag.resolution_probed} probed"
+    )
+    if diag.timeline_extended:
+        print(f"  Existing converted cameras extended timelines: {diag.timeline_extended}")
+
+    skipped = [
+        ("SEQ missing", diag.seq_missing),
+        ("IDX missing", diag.idx_missing),
+        ("corrupt timestamps", diag.corrupt_timestamps),
+        ("empty IDX", diag.zero_idx),
+        ("duration sanity skip", diag.corrupt_duration),
+    ]
+    for label, items in skipped:
+        if items:
+            print(f"  {label}: {len(items)} ({_sample(items)})")
+
+    if include_not_syncable and diag.fallback_unavailable:
+        print(
+            f"  NOT SYNCABLE unavailable: {len(diag.fallback_unavailable)} "
+            f"({_sample(diag.fallback_unavailable)})"
+        )
+
+
 def find_executable(paths: List[str]) -> Optional[str]:
     """Find an executable in common locations or PATH."""
     for path in paths:
@@ -310,6 +382,8 @@ def append_log(result: Dict, recording_date: str = "", case_no: int = 0, group_n
 
         if skipped:
             status = "SKIPPED"
+        elif success and result.get('syncable') is False:
+            status = "NO-SYNC"
         elif success:
             status = "OK"
         else:
@@ -449,6 +523,58 @@ def detect_resolution(seq_path: Path, ffprobe_path: str) -> Tuple[int, int, str]
     return 1920, 1080, "yuv420p"
 
 
+def _parse_fps(value, default: float = TARGET_FPS) -> float:
+    """Return a sane FPS value from a number or ffprobe ratio string."""
+    try:
+        if value is None:
+            return default
+        if isinstance(value, str) and "/" in value:
+            num, den = value.split("/", 1)
+            fps = float(num) / float(den)
+        else:
+            fps = float(value)
+        if math.isfinite(fps) and 1 <= fps <= 1000:
+            return fps
+    except Exception:
+        pass
+    return default
+
+
+def probe_h264_stream(seq_path: Path, ffprobe_path: str) -> Optional[dict]:
+    """Return basic stream metadata when FFprobe can decode SEQ as raw H.264."""
+    cmd = [
+        ffprobe_path,
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=codec_name,width,height,pix_fmt,avg_frame_rate",
+        "-of", "json",
+        str(seq_path),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+        data = json.loads(result.stdout)
+        streams = data.get("streams") or []
+        if not streams:
+            return None
+        stream = streams[0]
+        if stream.get("codec_name") != "h264":
+            return None
+        width = int(stream.get("width") or 0)
+        height = int(stream.get("height") or 0)
+        if width <= 0 or height <= 0:
+            return None
+        return {
+            "width": width,
+            "height": height,
+            "pix_fmt": stream.get("pix_fmt") or "yuv420p",
+            "ffprobe_fps": _parse_fps(stream.get("avg_frame_rate")),
+        }
+    except Exception:
+        return None
+
+
 # =========================
 # Database Functions
 # =========================
@@ -477,7 +603,7 @@ def get_seq_enriched_metadata(
     try:
         row = conn.execute(
             """SELECT width, height, first_frame_time, last_frame_time,
-                      idx_frames, idx_file_size
+                      idx_frames, idx_file_size, fps
                FROM seq_enriched
                WHERE recording_date = ? AND case_no = ? AND camera_name = ?""",
             (recording_date, case_no, camera_name),
@@ -509,6 +635,7 @@ def get_seq_enriched_metadata(
         'frame_count': row[4],
         'idx_file_size': cached_size,
         'cache_valid': cache_valid,
+        'fps': row[6],
     }
 
 
@@ -724,7 +851,12 @@ def get_camera_group(camera_name: str) -> Optional[str]:
     return None
 
 
-def build_session_groups(files: List[Dict], ffprobe_path: str) -> List[SessionGroup]:
+def build_session_groups(
+    files: List[Dict],
+    ffprobe_path: str,
+    diagnostics: PlanDiagnostics | None = None,
+    verbose: bool = False,
+) -> List[SessionGroup]:
     """Organize files into synchronized session groups."""
     group_map: Dict[Tuple[str, int, str], SessionGroup] = {}
 
@@ -750,12 +882,18 @@ def build_session_groups(files: List[Dict], ffprobe_path: str) -> List[SessionGr
         # Build paths
         seq_path = build_seq_path(date, case, camera)
         if seq_path is None or not seq_path.exists():
-            print(f"  ⚠️  SEQ not found: {date} Case{case} {camera} — skipping")
+            if diagnostics is not None:
+                diagnostics.seq_missing.append(f"{date} Case{case} {camera}")
+            if verbose:
+                print(f"  ⚠️  SEQ not found: {date} Case{case} {camera} — skipping")
             continue
 
         idx_path = build_idx_path(seq_path)
         if idx_path is None:
-            print(f"  ⚠️  IDX not found for: {seq_path.name} — skipping camera")
+            if diagnostics is not None:
+                diagnostics.idx_missing.append(f"{date} Case{case} {camera}")
+            if verbose:
+                print(f"  ⚠️  IDX not found for: {seq_path.name} — skipping camera")
             continue
 
         # Single read of seq_enriched: resolution, header timestamps, and IDX cache.
@@ -767,10 +905,14 @@ def build_session_groups(files: List[Dict], ffprobe_path: str) -> List[SessionGr
             ft, lt = sfa['first_frame_time'], sfa['last_frame_time']
             if ft < EPOCH_MIN or ft > EPOCH_MAX or lt < EPOCH_MIN or lt > EPOCH_MAX:
                 bad_ts = ft if (ft < EPOCH_MIN or ft > EPOCH_MAX) else lt
-                bad_year = datetime.utcfromtimestamp(bad_ts).year
-                print(f"  ⚠️  CORRUPT TIMESTAMPS: {camera} — "
-                      f"first/last_frame_time decodes to year {bad_year}, "
-                      f"valid range is 2015–2030 — skipping (would poison group timeline)")
+                bad_year = _utc_year(bad_ts)
+                detail = f"{date} Case{case} {camera}: first/last year {bad_year}"
+                if diagnostics is not None:
+                    diagnostics.corrupt_timestamps.append(detail)
+                if verbose:
+                    print(f"  ⚠️  CORRUPT TIMESTAMPS: {camera} — "
+                          f"first/last_frame_time decodes to year {bad_year}, "
+                          f"valid range is 2015–2030 — skipping (would poison group timeline)")
                 continue
 
         # Parse IDX — use cached values if seq_enriched has a valid cache, else fast scan
@@ -781,14 +923,24 @@ def build_session_groups(files: List[Dict], ffprobe_path: str) -> List[SessionGr
                 't_end': sfa['last_frame_time'],
                 'idx_file_size': sfa['idx_file_size'],
             }
-            print(f"  IDX (cached): {camera} ... {meta['frame_count']} frames")
+            if diagnostics is not None:
+                diagnostics.idx_cached += 1
+            if verbose:
+                print(f"  IDX (cached): {camera} ... {meta['frame_count']} frames")
         else:
-            print(f"  Parsing IDX: {camera} ...", end="", flush=True)
+            if verbose:
+                print(f"  Parsing IDX: {camera} ...", end="", flush=True)
             meta = parse_idx_metadata_fast(idx_path)
             if not meta or meta['frame_count'] == 0:
-                print(f" ⚠️  0 records, skipping")
+                if diagnostics is not None:
+                    diagnostics.zero_idx.append(f"{date} Case{case} {camera}")
+                if verbose:
+                    print(f" ⚠️  0 records, skipping")
                 continue
-            print(f" {meta['frame_count']} frames")
+            if diagnostics is not None:
+                diagnostics.idx_parsed += 1
+            if verbose:
+                print(f" {meta['frame_count']} frames")
             save_idx_cache(DB_PATH, date, case, camera, meta)
 
         t_start = meta['t_start']
@@ -797,22 +949,36 @@ def build_session_groups(files: List[Dict], ffprobe_path: str) -> List[SessionGr
         # Epoch validation: reject cameras with IDX timestamps outside 2015–2030
         # This prevents a corrupt camera from poisoning the shared global timeline.
         if t_start < EPOCH_MIN or t_start > EPOCH_MAX:
-            bad_year = datetime.utcfromtimestamp(t_start).year
-            print(f"  ⚠️  CORRUPT TIMESTAMPS: {camera} — t_start decodes to year {bad_year}, "
-                  f"valid range is 2015–2030 — skipping (would poison group timeline)")
+            bad_year = _utc_year(t_start)
+            detail = f"{date} Case{case} {camera}: t_start year {bad_year}"
+            if diagnostics is not None:
+                diagnostics.corrupt_timestamps.append(detail)
+            if verbose:
+                print(f"  ⚠️  CORRUPT TIMESTAMPS: {camera} — t_start decodes to year {bad_year}, "
+                      f"valid range is 2015–2030 — skipping (would poison group timeline)")
             continue
         if t_end < EPOCH_MIN or t_end > EPOCH_MAX:
-            bad_year = datetime.utcfromtimestamp(t_end).year
-            print(f"  ⚠️  CORRUPT TIMESTAMPS: {camera} — t_end decodes to year {bad_year}, "
-                  f"valid range is 2015–2030 — skipping (would poison group timeline)")
+            bad_year = _utc_year(t_end)
+            detail = f"{date} Case{case} {camera}: t_end year {bad_year}"
+            if diagnostics is not None:
+                diagnostics.corrupt_timestamps.append(detail)
+            if verbose:
+                print(f"  ⚠️  CORRUPT TIMESTAMPS: {camera} — t_end decodes to year {bad_year}, "
+                      f"valid range is 2015–2030 — skipping (would poison group timeline)")
             continue
 
         # Resolution: prefer seq_enriched (no subprocess), fall back to ffprobe
         if sfa and sfa['width'] and sfa['height'] and sfa['width'] > 0 and sfa['height'] > 0:
             w, h, pix_fmt = sfa['width'], sfa['height'], "yuv420p"
-            print(f"  Resolution: {camera} — {w}x{h} (from seq_enriched)")
+            if diagnostics is not None:
+                diagnostics.resolution_cached += 1
+            if verbose:
+                print(f"  Resolution: {camera} — {w}x{h} (from seq_enriched)")
         else:
-            print(f"  Resolution: {camera} — querying via ffprobe ...")
+            if diagnostics is not None:
+                diagnostics.resolution_probed += 1
+            if verbose:
+                print(f"  Resolution: {camera} — querying via ffprobe ...")
             w, h, pix_fmt = detect_resolution(seq_path, ffprobe_path)
 
         cam_timeline = CameraTimeline(
@@ -830,8 +996,12 @@ def build_session_groups(files: List[Dict], ffprobe_path: str) -> List[SessionGr
 
         # Sanity check: skip cameras with corrupted IDX timestamps
         if cam_timeline.duration > MAX_VALID_DURATION_SECONDS:
-            print(f"  ⚠️  CORRUPTED timestamps: {camera} "
-                  f"(duration={cam_timeline.duration:.0f}s / {cam_timeline.duration/86400:.1f} days) — skipping")
+            detail = f"{date} Case{case} {camera}: {cam_timeline.duration/86400:.1f} days"
+            if diagnostics is not None:
+                diagnostics.corrupt_duration.append(detail)
+            if verbose:
+                print(f"  ⚠️  CORRUPTED timestamps: {camera} "
+                      f"(duration={cam_timeline.duration:.0f}s / {cam_timeline.duration/86400:.1f} days) — skipping")
             continue
 
         session.cameras[camera] = cam_timeline
@@ -885,10 +1055,70 @@ def build_session_groups(files: List[Dict], ffprobe_path: str) -> List[SessionGr
                     session.t_global_start = t_start
                 if t_end > session.t_global_end:
                     session.t_global_end = t_end
-                print(f"  Timeline includes already-converted: {cam_name} "
-                      f"({t_start:.3f} – {t_end:.3f})")
+                if diagnostics is not None:
+                    diagnostics.timeline_extended += 1
+                if verbose:
+                    print(f"  Timeline includes already-converted: {cam_name} "
+                          f"({t_start:.3f} – {t_end:.3f})")
 
     return [sg for sg in group_map.values() if sg.cameras]
+
+
+def build_not_syncable_fallbacks(
+    files: List[Dict],
+    ffprobe_path: str,
+    diagnostics: PlanDiagnostics | None = None,
+    verbose: bool = False,
+) -> List[NotSyncableCamera]:
+    """Find missing-IDX SEQs that FFmpeg can still decode as raw H.264.
+
+    These outputs are intentionally excluded from synchronized groups because
+    there are no trusted per-frame timestamps. They are useful archive MP4s,
+    but their timing should be treated as approximate.
+    """
+    fallbacks: List[NotSyncableCamera] = []
+
+    for file_info in files:
+        date = file_info['recording_date']
+        case = file_info['case_no']
+        camera = file_info['camera_name']
+
+        seq_path = build_seq_path(date, case, camera)
+        if seq_path is None or not seq_path.exists():
+            continue
+
+        if build_idx_path(seq_path) is not None:
+            continue
+
+        stream = probe_h264_stream(seq_path, ffprobe_path)
+        if stream is None:
+            if diagnostics is not None:
+                diagnostics.fallback_unavailable.append(f"{date} Case{case} {camera}")
+            if verbose:
+                print(f"  ⚠️  NOT SYNCABLE fallback unavailable: {date} Case{case} {camera} "
+                      f"— FFprobe could not decode raw H.264")
+            continue
+
+        sfa = get_seq_enriched_metadata(DB_PATH, date, case, camera, None)
+        source_fps = _parse_fps(sfa.get('fps') if sfa else None, TARGET_FPS)
+        if verbose:
+            print(f"  ⚠️  NOT SYNCABLE fallback: {date} Case{case} {camera} — "
+                  f"missing IDX, direct H.264 decode {stream['width']}x{stream['height']} "
+                  f"@ assumed {source_fps:.3f}fps")
+
+        fallbacks.append(NotSyncableCamera(
+            recording_date=date,
+            case_no=case,
+            camera_name=camera,
+            seq_path=seq_path,
+            width=stream['width'],
+            height=stream['height'],
+            pix_fmt=stream['pix_fmt'],
+            source_fps=source_fps,
+            reason="missing IDX; direct FFmpeg conversion; timing is approximate",
+        ))
+
+    return fallbacks
 
 
 # =========================
@@ -1226,6 +1456,151 @@ def step3_ffmpeg_cfr_encode(
     return True, ""
 
 
+def process_camera_not_syncable(
+    cam: NotSyncableCamera,
+    ffmpeg_path: str,
+    ffprobe_path: str,
+    out_path: Path,
+) -> Dict:
+    """Convert a missing-IDX SEQ directly with FFmpeg and mark it not syncable."""
+    cam_name = cam.camera_name
+    result = {
+        'camera': cam_name,
+        'success': False,
+        'syncable': False,
+        'message': '',
+        'duration': None,
+        'frames': None,
+        'output_path': None,
+    }
+    cam_start_time = time.time()
+    stall_timeout = 3600
+
+    vf = f"fps={TARGET_FPS}"
+    ffmpeg_cmd = [
+        ffmpeg_path,
+        "-y",
+        "-fflags", "+genpts",
+        "-r", f"{cam.source_fps:.6f}",
+        "-i", str(cam.seq_path),
+        "-vf", vf,
+        "-an",
+        "-c:v", "hevc_nvenc",
+        "-preset", "p4",
+        "-rc", "vbr",
+        "-cq", "27",
+        "-pix_fmt", "yuv420p",
+        "-r", str(TARGET_FPS),
+        "-metadata", "comment=NOT_SYNCABLE: missing IDX; direct FFmpeg conversion; timing is approximate",
+        "-movflags", "+faststart",
+        str(out_path),
+    ]
+
+    print(f"  [{cam_name}] NOT SYNCABLE: {cam.reason}")
+    print(f"  [{cam_name}] Direct FFmpeg fallback: assumed input {cam.source_fps:.3f}fps → {TARGET_FPS}fps CFR")
+    print(f"  [{cam_name}] Output: {out_path}")
+
+    try:
+        process = subprocess.Popen(
+            ffmpeg_cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+    except Exception as e:
+        result['message'] = f"FFmpeg launch failed: {e}"
+        return result
+
+    stderr_lines = []
+    last_progress_time = [time.time()]
+    last_frame_count = [0]
+    last_print_time = [time.time()]
+
+    def stderr_reader():
+        try:
+            stderr_pipe = process.stderr
+            if stderr_pipe is None:
+                return
+            line_buf = bytearray()
+            while True:
+                b = stderr_pipe.read(1)
+                if not b:
+                    break
+                if b in (b'\r', b'\n'):
+                    if line_buf:
+                        line = line_buf.decode('utf-8', errors='replace')
+                        stderr_lines.append(line)
+                        m = re.search(r'frame=\s*(\d+)', line)
+                        if m:
+                            current_frame = int(m.group(1))
+                            now = time.time()
+                            if current_frame > last_frame_count[0]:
+                                last_frame_count[0] = current_frame
+                                last_progress_time[0] = now
+                            if now - last_print_time[0] >= 5.0:
+                                fps_match = re.search(r'fps=\s*([\d.]+)', line)
+                                fps_str = f" @ {fps_match.group(1)} fps" if fps_match else ""
+                                speed_match = re.search(r'speed=\s*([\d.]+)x', line)
+                                speed_str = f" ({speed_match.group(1)}x)" if speed_match else ""
+                                print(f"  [{cam_name}] ⏳ NOT SYNCABLE fallback — frame {current_frame}{fps_str}{speed_str}")
+                                _emit("frame", camera=cam_name, percent=0.0,
+                                      frame=current_frame, total=0)
+                                last_print_time[0] = now
+                        line_buf = bytearray()
+                else:
+                    line_buf.extend(b)
+        except Exception:
+            pass
+
+    stderr_thread = threading.Thread(target=stderr_reader, daemon=True)
+    stderr_thread.start()
+
+    while True:
+        try:
+            process.wait(timeout=30)
+            break
+        except subprocess.TimeoutExpired:
+            stall_duration = time.time() - last_progress_time[0]
+            if stall_duration > stall_timeout:
+                process.kill()
+                stderr_thread.join(timeout=5)
+                result['elapsed'] = time.time() - cam_start_time
+                result['message'] = (f"FFmpeg stalled — no new frames for {int(stall_duration)}s "
+                                     f"(last frame: {last_frame_count[0]})")
+                return result
+
+    stderr_thread.join(timeout=10)
+
+    if process.returncode != 0:
+        err_tail = ''.join(stderr_lines[-10:])
+        result['elapsed'] = time.time() - cam_start_time
+        result['message'] = f"FFmpeg exited with code {process.returncode}:\n{err_tail}"
+        print(f"  [{cam_name}] ❌ NOT SYNCABLE fallback failed: {result['message']}")
+        return result
+
+    if not is_valid_video_file(out_path):
+        result['elapsed'] = time.time() - cam_start_time
+        result['message'] = "Output file is too small or missing"
+        print(f"  [{cam_name}] ❌ Output file too small or missing")
+        return result
+
+    size_mb = out_path.stat().st_size / (1024 * 1024)
+    dur = get_video_duration(out_path, ffprobe_path)
+    frames = get_video_frame_count(out_path, ffprobe_path)
+
+    result['success'] = True
+    result['duration'] = dur
+    result['frames'] = frames
+    result['output_path'] = out_path
+    result['elapsed'] = time.time() - cam_start_time
+    duration_str = f" | {dur:.1f}s" if dur is not None else ""
+    result['message'] = f"NOT SYNCABLE | {size_mb:.1f} MB{duration_str} | {cam.reason}"
+
+    print(f"  [{cam_name}] ✅ {result['message']} (took {fmt_seconds(result['elapsed'])})")
+    return result
+
+
 # =========================
 # Full VFR→CFR Conversion (runs in thread)
 # =========================
@@ -1251,6 +1626,7 @@ def process_camera_sync(
     result = {
         'camera': cam_name,
         'success': False,
+        'syncable': True,
         'message': '',
         'duration': None,
         'frames': None,
@@ -1354,6 +1730,9 @@ def process_camera_sync(
 # =========================
 def display_session_plan(groups: List[SessionGroup]):
     """Print a summary of what will be processed."""
+    if not groups:
+        return
+
     print("\n" + "=" * 90)
     print("SYNCHRONIZATION PLAN")
     print("=" * 90)
@@ -1376,6 +1755,33 @@ def display_session_plan(groups: List[SessionGroup]):
     print("\n" + "=" * 90)
 
 
+def display_not_syncable_plan(cameras: List[NotSyncableCamera], verbose: bool = False):
+    """Print the direct-conversion plan for missing-IDX files."""
+    if not cameras:
+        return
+
+    print("\n" + "=" * 90)
+    print("NOT SYNCABLE FALLBACK PLAN")
+    print("=" * 90)
+    print("Missing-IDX files that can be archived as *_NOT_SYNCABLE.mp4.")
+
+    if not verbose:
+        grouped: Dict[Tuple[str, int], List[str]] = {}
+        for cam in cameras:
+            grouped.setdefault((cam.recording_date, cam.case_no), []).append(cam.camera_name)
+        for (recording_date, case_no), camera_names in grouped.items():
+            print(f"  {recording_date} Case{case_no}: {', '.join(camera_names)}")
+        print("\n" + "=" * 90)
+        return
+
+    for cam in cameras:
+        print(f"\n📁 {cam.recording_date} Case{cam.case_no} — NOT SYNCABLE")
+        print(f"   📷 {cam.camera_name:25s} | {cam.width}x{cam.height} {cam.pix_fmt:12s} | "
+              f"assumed input {cam.source_fps:.3f}fps → {TARGET_FPS}fps | {cam.reason}")
+
+    print("\n" + "=" * 90)
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     """Build the argparse surface that the dashboard page and CLI share.
 
@@ -1393,6 +1799,7 @@ Examples:
   python scripts/3_seq_to_mp4_convert.py --cameras Cart_Center_2,Cart_LT_4 --date 2025-01-15
   python scripts/3_seq_to_mp4_convert.py --case 3 --workers 1 --auto-confirm
   python scripts/3_seq_to_mp4_convert.py --overwrite --case 7 --auto-confirm
+  python scripts/3_seq_to_mp4_convert.py --no-include-not-syncable --dry-run
         """,
     )
     parser.add_argument("--db", default=DB_PATH, help="SQLite DB path")
@@ -1412,8 +1819,16 @@ Examples:
                         help="Re-encode rows already present in mp4_status; overwrites the base filename instead of bumping")
     parser.add_argument("--dry-run", action="store_true",
                         help="Build the synchronization plan and print it, then exit without encoding")
+    parser.add_argument("--include-not-syncable", action=argparse.BooleanOptionalAction,
+                        default=True,
+                        help=("Also convert missing-IDX SEQs that FFmpeg can decode directly "
+                              "(default: enabled). Outputs are marked *_NOT_SYNCABLE.mp4 "
+                              "and are not synchronized. Use --no-include-not-syncable "
+                              "for syncable-only runs."))
     parser.add_argument("--auto-confirm", action="store_true",
                         help="Skip the interactive y/N prompt")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Print detailed per-camera planning diagnostics")
     return parser
 
 
@@ -1441,21 +1856,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         all_cameras = list(DEFAULT_CAMERAS)
     workers = max(1, int(args.workers))
+    verbose = bool(args.verbose)
 
     print("=" * 90)
-    print("SMART SEQ SYNC CONVERTER — VFR-to-CFR Multi-Camera Synchronization")
+    print("SMART SEQ SYNC CONVERTER")
     print("=" * 90)
+    print(f"Mode:        {'DRY RUN (plan only)' if args.dry_run else 'CONVERT'}")
     print(f"Database:    {DB_PATH}")
-    print(f"SEQ Root:    {SEQ_ROOT}")
-    print(f"Output Root: {OUT_ROOT}")
-    print(f"Target FPS:  {TARGET_FPS}")
-    print(f"Parallel:    {workers} cameras")
-    print(f"Min SEQ size:{args.min_pending_mb} MB")
-    print(f"Max duration sanity cap: {MAX_VALID_DURATION_SECONDS}s")
-    print(f"Encoder:     hevc_nvenc (H.265)")
-    print(f"Pipeline:    SEQ→H.264+timecodes→mkvmerge(VFR MKV)→FFmpeg fps={TARGET_FPS}(CFR)→MP4")
+    print(f"SEQ root:    {SEQ_ROOT}")
+    print(f"Output root: {OUT_ROOT}")
+    print(
+        f"Settings:    fps={TARGET_FPS}, workers={workers}, "
+        f"min_seq={args.min_pending_mb} MB, fallback={'on' if args.include_not_syncable else 'off'}"
+    )
     if args.dry_run:
-        print("Mode:        DRY RUN (plan only, no encode)")
+        print("Output:      no MP4 files will be written")
     if args.overwrite:
         print("Overwrite:   ON (existing MP4s will be re-encoded)")
     if args.date:
@@ -1470,14 +1885,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("❌ FFmpeg not found! Install FFmpeg or add it to PATH.")
         _emit("done", ok=0, fail=0, skip=0, error="ffmpeg missing")
         return 1
-    print(f"✓ FFmpeg:    {ffmpeg_path}")
 
     ffprobe_path = find_ffprobe()
     if not ffprobe_path:
         print("❌ FFprobe not found! It should come with FFmpeg.")
         _emit("done", ok=0, fail=0, skip=0, error="ffprobe missing")
         return 1
-    print(f"✓ FFprobe:   {ffprobe_path}")
 
     mkvmerge_path = find_mkvmerge()
     if not mkvmerge_path:
@@ -1485,13 +1898,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("   Download: https://mkvtoolnix.download/downloads.html")
         _emit("done", ok=0, fail=0, skip=0, error="mkvmerge missing")
         return 1
-    print(f"✓ mkvmerge:  {mkvmerge_path}")
+    if verbose:
+        print(f"✓ FFmpeg:    {ffmpeg_path}")
+        print(f"✓ FFprobe:   {ffprobe_path}")
+        print(f"✓ mkvmerge:  {mkvmerge_path}")
+    else:
+        print("Tools:       FFmpeg OK, FFprobe OK, mkvmerge OK")
 
-    print(f"\nCamera groups:")
-    print(f"  Group A: {', '.join(GROUP_A)}")
-    print(f"  Group B: {', '.join(GROUP_B)}")
-    print(f"  Solo: {', '.join(SOLO_CAMERAS)}")
-    print(f"  Selected: {', '.join(all_cameras)}")
+    print(f"Selected:    {len(all_cameras)} cameras")
+    if verbose:
+        print(f"  Group A: {', '.join(GROUP_A)}")
+        print(f"  Group B: {', '.join(GROUP_B)}")
+        print(f"  Solo: {', '.join(SOLO_CAMERAS)}")
+        print(f"  Selected: {', '.join(all_cameras)}")
     print()
 
     print("Querying database for pending conversions...")
@@ -1520,28 +1939,49 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     print(f"Found {len(files)} camera files pending conversion")
 
-    print("\nScanning IDX files and detecting resolutions...")
-    print("-" * 90)
-    session_groups = build_session_groups(files, ffprobe_path)
+    print("\nBuilding conversion plan...")
+    diagnostics = PlanDiagnostics()
+    session_groups = build_session_groups(
+        files,
+        ffprobe_path,
+        diagnostics=diagnostics,
+        verbose=verbose,
+    )
+    not_syncable_cameras = (
+        build_not_syncable_fallbacks(
+            files,
+            ffprobe_path,
+            diagnostics=diagnostics,
+            verbose=verbose,
+        )
+        if args.include_not_syncable else []
+    )
+    print_plan_diagnostics(diagnostics, include_not_syncable=args.include_not_syncable)
 
-    if not session_groups:
+    if not session_groups and not not_syncable_cameras:
         print("❌ No valid session groups found (missing IDX files?)")
         _emit("plan", total=0, sessions=0)
         _emit("done", ok=0, fail=0, skip=0, error="no valid sessions")
         return 1
 
     display_session_plan(session_groups)
+    display_not_syncable_plan(not_syncable_cameras, verbose=verbose)
 
-    total_cameras = sum(len(sg.cameras) for sg in session_groups)
+    sync_cameras = sum(len(sg.cameras) for sg in session_groups)
+    total_cameras = sync_cameras + len(not_syncable_cameras)
     total_frames = sum(
         sg.total_output_frames * len(sg.cameras)
         for sg in session_groups
     )
 
-    print(f"\nTotal: {total_cameras} cameras across {len(session_groups)} groups")
+    print(f"\nTotal: {total_cameras} cameras across "
+          f"{len(session_groups)} sync groups + {len(not_syncable_cameras)} NOT SYNCABLE fallbacks")
+    print(f"  Syncable cameras:     {sync_cameras}")
+    print(f"  NOT SYNCABLE cameras: {len(not_syncable_cameras)}")
     print(f"Estimated total output frames: {total_frames:,}")
     print()
     _emit("plan", total=total_cameras, sessions=len(session_groups),
+          not_syncable=len(not_syncable_cameras),
           overwrite=bool(args.overwrite), dry_run=bool(args.dry_run))
 
     if args.dry_run:
@@ -1550,7 +1990,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     if not args.auto_confirm:
-        response = input("Proceed with synchronized conversion? (y/n): ").strip().lower()
+        response = input("Proceed with conversion? (y/n): ").strip().lower()
         if response != 'y':
             print("Cancelled.")
             _emit("done", ok=0, fail=0, skip=0, cancelled=True)
@@ -1562,14 +2002,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         with open(LOG_FILE, 'a', encoding='utf-8') as f:
             f.write(f"\n{'=' * 100}\n")
             f.write(f"RUN STARTED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | "
-                    f"{total_cameras} cameras, {len(session_groups)} groups\n")
+                    f"{sync_cameras} syncable cameras, "
+                    f"{len(not_syncable_cameras)} NOT SYNCABLE fallbacks, "
+                    f"{len(session_groups)} groups\n")
             f.write(f"{'=' * 100}\n")
     except Exception:
         pass
     print(f"Log file:    {LOG_FILE}")
 
     print("\n" + "=" * 90)
-    print(f"STARTING VFR→CFR SYNCHRONIZED CONVERSION (up to {workers} cameras in parallel)")
+    print(f"STARTING CONVERSION (up to {workers} cameras in parallel)")
     print("=" * 90)
 
     all_results: List[Dict] = []
@@ -1673,6 +2115,79 @@ def main(argv: Optional[List[str]] = None) -> int:
                           done=done_idx, total=total_cameras,
                           message=str(e))
 
+    if not_syncable_cameras:
+        print(f"\n{'─' * 90}")
+        print(f"[NOT SYNCABLE FALLBACK] {len(not_syncable_cameras)} missing-IDX cameras")
+        print(f"{'─' * 90}")
+
+        tasks = []
+        for cam in not_syncable_cameras:
+            out_root_path = Path(OUT_ROOT).resolve()
+            out_dir = compute_out_dir(cam.seq_path, out_root_path)
+            base_name = f"{cam.camera_name}_NOT_SYNCABLE"
+            if args.overwrite:
+                mp4_path = out_dir / f"{base_name}.mp4"
+            else:
+                _, mp4_path = get_next_available_filename(out_dir, base_name, ".mp4")
+            tasks.append((cam, mp4_path))
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {}
+            for cam, mp4_path in tasks:
+                _emit("camera_start", camera=cam.camera_name,
+                      date=cam.recording_date, case=cam.case_no,
+                      group="NOT_SYNCABLE",
+                      done=done_idx, total=total_cameras)
+                future = executor.submit(
+                    process_camera_not_syncable,
+                    cam, ffmpeg_path, ffprobe_path, mp4_path,
+                )
+                futures[future] = (cam, mp4_path)
+
+            for future in as_completed(futures):
+                cam, mp4_path = futures[future]
+                try:
+                    result = future.result()
+                    result['skipped'] = False
+                    all_results.append(result)
+                    append_log(result, cam.recording_date, cam.case_no, "NOT_SYNCABLE")
+
+                    if not result['success'] and mp4_path.exists():
+                        try:
+                            mp4_path.unlink()
+                        except Exception:
+                            pass
+
+                    done_idx += 1
+                    _emit("camera_done", camera=cam.camera_name,
+                          status="ok" if result['success'] else "fail",
+                          date=cam.recording_date, case=cam.case_no,
+                          done=done_idx, total=total_cameras,
+                          elapsed=result.get('elapsed'),
+                          frames=result.get('frames'),
+                          syncable=False,
+                          message=result.get('message', ''))
+
+                except Exception as e:
+                    print(f"  [{cam.camera_name}] ❌ Exception: {e}")
+                    err_result = {
+                        'camera': cam.camera_name, 'success': False, 'syncable': False,
+                        'skipped': False, 'message': str(e), 'duration': None, 'frames': None,
+                    }
+                    all_results.append(err_result)
+                    append_log(err_result, cam.recording_date, cam.case_no, "NOT_SYNCABLE")
+                    if mp4_path.exists():
+                        try:
+                            mp4_path.unlink()
+                        except Exception:
+                            pass
+                    done_idx += 1
+                    _emit("camera_done", camera=cam.camera_name, status="fail",
+                          date=cam.recording_date, case=cam.case_no,
+                          done=done_idx, total=total_cameras,
+                          syncable=False,
+                          message=str(e))
+
     # =========================
     # Summary & Sync Validation
     # =========================
@@ -1683,16 +2198,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     print("=" * 90)
 
     successes = [r for r in all_results if r['success'] and not r.get('skipped')]
+    syncable_successes = [r for r in successes if r.get('syncable', True)]
+    not_syncable_successes = [r for r in successes if r.get('syncable') is False]
     failures = [r for r in all_results if not r['success']]
     skipped = [r for r in all_results if r.get('skipped')]
 
     print(f"\n  Processed: {len(all_results)} cameras in {total_time:.1f}s ({fmt_seconds(total_time)})")
     print(f"  Success:   {len(successes)}")
+    print(f"    Syncable:     {len(syncable_successes)}")
+    print(f"    NOT SYNCABLE: {len(not_syncable_successes)}")
     print(f"  Skipped:   {len(skipped)}")
     print(f"  Failed:    {len(failures)}")
     print(f"  Encoder:   hevc_nvenc (H.265)")
-    print(f"  Strategy:  VFR→CFR via mkvmerge+FFmpeg @ {TARGET_FPS} FPS")
-    print(f"  Pipeline:  SEQ→H.264+timecodes→MKV(VFR)→MP4(CFR)")
+    print(f"  Strategy:  syncable=VFR→CFR via mkvmerge+FFmpeg; NOT_SYNCABLE=direct FFmpeg @ {TARGET_FPS} FPS")
+    print(f"  Pipeline:  syncable SEQ→H.264+timecodes→MKV(VFR)→MP4(CFR)")
     print(f"  Parallel:  {workers} cameras")
 
     if failures:
@@ -1701,9 +2220,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"     {r['camera']}: {r['message']}")
 
     # Sync validation across groups
-    if len(successes) >= 2:
+    if len(syncable_successes) >= 2:
         print(f"\n  ⏱️  SYNC VALIDATION (durations must match within group):")
-        durations = [(r['camera'], r['duration'], r['frames']) for r in successes if r['duration']]
+        durations = [(r['camera'], r['duration'], r['frames']) for r in syncable_successes if r['duration']]
         if durations:
             ref_dur = durations[0][1]
             ref_frames = durations[0][2]
@@ -1727,6 +2246,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     print("=" * 90)
     _emit("done", ok=len(successes), fail=len(failures), skip=len(skipped),
+          not_syncable=len(not_syncable_successes),
           elapsed=round(total_time, 1))
     return 1 if failures else 0
 

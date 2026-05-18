@@ -658,7 +658,7 @@ def load_data_from_database(db_path: str = None) -> pd.DataFrame:
         - parse_video_path(): Extract metadata from video path
 
     Warning:
-        Database must not be locked by other processes (e.g., Streamlit app).
+        Database must not be locked by other processes (e.g., NiceGUI app).
         Close all database connections before calling this function.
     """
     if db_path is None:
@@ -733,10 +733,10 @@ def load_data_from_database(db_path: str = None) -> pd.DataFrame:
 #### app/utils.py - Module-Level Docstring
 
 ```python
-"""Database utility functions for ScalpelLab Streamlit application.
+"""Database utility functions for ScalpelLab NiceGUI application.
 
 This module provides safe database connection management, schema inspection,
-table/view operations, and Graphviz ERD generation for the Streamlit web
+table/view operations, and Graphviz ERD generation for the NiceGUI desktop
 interface. All database operations use context managers for automatic
 resource cleanup.
 
@@ -809,7 +809,7 @@ Security:
     - Database path must be validated before passing to functions
 
 See Also:
-    - app/app.py: Main Streamlit application using these utilities
+    - app/app.py: Main NiceGUI application using these utilities
     - app/pages/1_Database.py: Table browser and editor
     - docs/DATABASE_SCHEMA.md: Complete schema documentation
 

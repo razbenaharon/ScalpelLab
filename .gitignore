@@ -29,6 +29,9 @@ tmpclaude-*-cwd
 # NiceGUI runtime storage (app.storage.general etc.)
 .nicegui/
 
+# Pipeline logs (local operational output)
+logs/
+
 # Local Codex safety backups
 .codex_pull_backups/
 

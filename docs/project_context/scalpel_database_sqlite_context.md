@@ -8,7 +8,7 @@ and the SEQ-specific references in this directory.
 
 ## Role in the Project
 
-`ScalpelDatabase.sqlite` is the local working database for the Streamlit dashboard,
+`ScalpelDatabase.sqlite` is the local working database for the NiceGUI dashboard,
 file-system status scans, SEQ-to-MP4 conversion workflow, and batch redaction
 scripts.
 
@@ -17,9 +17,10 @@ The database is expected to live in the project root. `config.py` defines:
 - `DB_PATH = PROJECT_ROOT / "ScalpelDatabase.sqlite"`
 - `SEQ_ROOT = F:\Room_8_Data\Sequence_Backup`
 - `MP4_ROOT = F:\Room_8_Data\Recordings`
+- `NORPIX_SEQUENCE_VIEWER_PATH = C:\Program Files\Common Files\NorPix\SequenceViewer.exe`
 
-The Streamlit app can also point at another database path through its sidebar or
-the `SCALPEL_DB` environment variable.
+The NiceGUI app can also point at alternate paths through the Home page
+Configuration panel or `SCALPEL_*` environment variables.
 
 ## Current Snapshot
 
@@ -247,9 +248,10 @@ For column-by-column definitions, use
 | Area | Main files |
 |---|---|
 | Database location and camera list | [`config.py`](../../config.py) |
-| Streamlit DB browsing and loading | [`app/utils.py`](../../app/utils.py), [`app/app.py`](../../app/app.py), `app/pages/*` |
+| NiceGUI DB browsing and loading | [`app/utils.py`](../../app/utils.py), [`app/app.py`](../../app/app.py), `app/pages/*` |
 | SEQ / MP4 status refresh | [`scripts/2_update_db.py`](../../scripts/2_update_db.py) |
 | SEQ metadata enrichment | [`scripts/helpers/analyze_seq_fields.py`](../../scripts/helpers/analyze_seq_fields.py) |
+| IDX creation | NorPix SequenceViewer configured by `config.NORPIX_SEQUENCE_VIEWER_PATH` |
 | SEQ-to-MP4 conversion and IDX cache reuse | [`scripts/3_seq_to_mp4_convert.py`](../../scripts/3_seq_to_mp4_convert.py) |
 | Redaction timing and black-segment writes | [`scripts/5_batch_blacken.py`](../../scripts/5_batch_blacken.py) |
 | Schema export | [`scripts/helpers/sqlite_to_dbdiagram.py`](../../scripts/helpers/sqlite_to_dbdiagram.py) |
@@ -260,6 +262,9 @@ For column-by-column definitions, use
 - `scripts/2_update_db.py` is designed to preserve columns it does not manage.
   It manages `seq_status.size_mb/path` and
   `mp4_status.size_mb/duration_minutes/path`.
+- Missing IDX files are created by opening registered SEQ files with NorPix
+  SequenceViewer. The executable path is configurable in `config.py` and from
+  the NiceGUI Home page.
 - `scripts/5_batch_blacken.py` reads `mp4_times` joined to `mp4_status`, then
   can update `mp4_status.pre_black_segment` and `post_black_segment`.
 - `scripts/3_seq_to_mp4_convert.py` prefers `seq_enriched` for resolution,

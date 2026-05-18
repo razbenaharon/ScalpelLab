@@ -3,15 +3,18 @@
 This module centralizes all path configurations for the project, including:
 - Database location (SQLite)
 - Source directories for SEQ and MP4 files
+- NorPix SequenceViewer location for IDX creation
 - Default camera configuration
 - Path validation utilities
 
 The configuration is designed to be easily customizable for different deployment
-environments by editing the SEQ_ROOT and MP4_ROOT paths.
+environments by editing the SEQ_ROOT, MP4_ROOT, and SequenceViewer paths.
 
 IMPORTANT:
     - The database (ScalpelDatabase.sqlite) must always be in the project directory
     - SEQ_ROOT and MP4_ROOT can be on different drives or locations
+    - NORPIX_SEQUENCE_VIEWER_PATH points to the NorPix tool used to open .seq
+      files and create companion .seq.idx files
     - Use raw strings (r"...") for Windows paths to avoid backslash issues
 
 Example:
@@ -48,6 +51,10 @@ SEQ_ROOT = r"F:\Room_8_Data\Sequence_Backup"
 # Example: r"F:\Room_8_Data\Recordings"
 # Expected structure: MP4_ROOT/DATA_YY-MM-DD/CaseN/CameraName/*.mp4
 MP4_ROOT = r"F:\Room_8_Data\Recordings"
+
+# NorPix SequenceViewer executable used by the IDX creation workflow.
+# Opening a .seq file with this tool creates or refreshes the companion .seq.idx.
+NORPIX_SEQUENCE_VIEWER_PATH = r"C:\Program Files\Common Files\NorPix\SequenceViewer.exe"
 
 # =============================================================================
 # Camera Configuration
@@ -106,17 +113,27 @@ def get_mp4_root() -> str:
     return MP4_ROOT
 
 
+def get_norpix_sequence_viewer_path() -> str:
+    """Get the NorPix SequenceViewer executable path as a string.
+
+    Returns:
+        str: Path to the SequenceViewer executable used to create .seq.idx files.
+    """
+    return NORPIX_SEQUENCE_VIEWER_PATH
+
+
 def validate_paths() -> Dict[str, Dict[str, Any]]:
     """Validate that configured paths exist on the filesystem.
 
-    Checks whether the database file and both root directories (SEQ and MP4)
-    exist at their configured locations. This is useful for debugging
+    Checks whether the database file, both root directories (SEQ and MP4), and
+    the NorPix SequenceViewer executable exist at their configured locations.
+    This is useful for debugging
     configuration issues and verifying setup after deployment.
 
     Returns:
         Dict[str, Dict[str, Any]]: Nested dictionary with validation results.
-            Each key ('db_path', 'seq_root', 'mp4_root') maps to a dictionary
-            containing:
+            Each key ('db_path', 'seq_root', 'mp4_root',
+            'norpix_sequence_viewer') maps to a dictionary containing:
                 - 'path' (str): The configured path
                 - 'exists' (bool): Whether the path exists
                 - 'type' (str): Either 'file' or 'directory'
@@ -141,6 +158,11 @@ def validate_paths() -> Dict[str, Dict[str, Any]]:
             'path': MP4_ROOT,
             'exists': Path(MP4_ROOT).exists(),
             'type': 'directory'
+        },
+        'norpix_sequence_viewer': {
+            'path': NORPIX_SEQUENCE_VIEWER_PATH,
+            'exists': Path(NORPIX_SEQUENCE_VIEWER_PATH).is_file(),
+            'type': 'file'
         }
     }
     return results
@@ -154,6 +176,7 @@ def print_config() -> None:
     - Database location
     - SEQ files root directory
     - MP4 files root directory
+    - NorPix SequenceViewer executable
     - Validation status for each path (EXISTS or NOT FOUND)
 
     The output is printed to stdout and includes warning messages if any
@@ -173,6 +196,7 @@ def print_config() -> None:
     print(f"Database:      {DB_PATH}")
     print(f"SEQ Root:      {SEQ_ROOT}")
     print(f"MP4 Root:      {MP4_ROOT}")
+    print(f"SequenceViewer: {NORPIX_SEQUENCE_VIEWER_PATH}")
     print("=" * 70)
 
     # Validate paths

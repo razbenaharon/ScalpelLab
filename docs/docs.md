@@ -35,6 +35,8 @@ docs/
 - **Designing a new dashboard page** that uses `seq_enriched` → read
   `seq_enriched_table_reference.md` for column semantics, especially around
   drift outliers.
+- **Touching IDX creation** → use the canonical NorPix SequenceViewer path from
+  `config.NORPIX_SEQUENCE_VIEWER_PATH`, editable on the NiceGUI Home page.
 - **Re-rendering the ERD** → regenerate `scalpel_dbdiagram.txt` via
   `scripts/helpers/sqlite_to_dbdiagram.py`, paste into dbdiagram.io, export
   the PDF over `ERD.pdf`.
@@ -45,3 +47,16 @@ docs/
 **checkpoint files** written by their respective helper scripts. Don't edit
 them by hand and don't delete them mid-run — you'll lose progress on long
 batch jobs.
+
+## Operational logs
+
+Pipeline run logs live under the repo-root `logs/` directory and are ignored by
+git. Use per-step subdirectories:
+
+```text
+logs/seq_curation/
+logs/db_update/
+logs/idx_creation/
+logs/seq_analysis/
+logs/seq_to_mp4/
+```

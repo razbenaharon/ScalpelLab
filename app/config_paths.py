@@ -50,16 +50,30 @@ def _db_assignment(db_path: str) -> str:
     return f"DB_PATH = Path({_py_raw_string(db_path)})"
 
 
-def save_config_paths(db_path: str, seq_root: str, mp4_root: str) -> None:
+def save_config_paths(
+    db_path: str,
+    seq_root: str,
+    mp4_root: str,
+    norpix_sequence_viewer: str,
+) -> None:
     """Rewrite only the path constants in config.py."""
     text = CONFIG_PATH.read_text(encoding="utf-8")
     replacements = {
         r"^DB_PATH\s*=.*$": _db_assignment(db_path),
         r"^SEQ_ROOT\s*=.*$": f"SEQ_ROOT = {_py_raw_string(seq_root)}",
         r"^MP4_ROOT\s*=.*$": f"MP4_ROOT = {_py_raw_string(mp4_root)}",
+        r"^NORPIX_SEQUENCE_VIEWER_PATH\s*=.*$": (
+            f"NORPIX_SEQUENCE_VIEWER_PATH = {_py_raw_string(norpix_sequence_viewer)}"
+        ),
     }
     for pattern, replacement in replacements.items():
-        text, count = re.subn(pattern, replacement, text, count=1, flags=re.MULTILINE)
+        text, count = re.subn(
+            pattern,
+            lambda _match, value=replacement: value,
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
         if count != 1:
             raise RuntimeError(f"Could not find config assignment matching {pattern}")
     CONFIG_PATH.write_text(text, encoding="utf-8")

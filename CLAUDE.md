@@ -25,7 +25,8 @@ other component is a producer or consumer of it.
   ECharts; legacy Plotly only on the `mp4-stats` page.
 - **Data**: SQLite (stdlib `sqlite3`), pandas, numpy, pyarrow (Parquet for CV).
 - **Video**: FFmpeg + ffprobe + mkvmerge (must be on PATH); NVIDIA NVENC for
-  GPU encode; NorPix `CLExport` as fallback. `mpv.exe` for the multiviewer.
+  GPU encode; NorPix SequenceViewer for IDX creation; NorPix `CLExport` as
+  fallback. `mpv.exe` for the multiviewer.
 - **CV (optional)**: PyTorch, ultralytics (YOLOv8), OpenCV.
 - **OS**: Windows 11. Console codepage is CP1252 — see §9 for the UTF-8
   stdout snippet required in any script that prints non-ASCII.
@@ -37,7 +38,7 @@ Install: `pip install -r requirements.txt`. Validate paths: `python config.py`.
 | Path                                | Role                                                     |
 |-------------------------------------|----------------------------------------------------------|
 | `ScalpelDatabase.sqlite`            | Source of truth. **Never commit.**                       |
-| `config.py`                         | `DB_PATH`, `SEQ_ROOT`, `MP4_ROOT`, `DEFAULT_CAMERAS`     |
+| `config.py`                         | `DB_PATH`, `SEQ_ROOT`, `MP4_ROOT`, `NORPIX_SEQUENCE_VIEWER_PATH`, `DEFAULT_CAMERAS` |
 | `run_app.py`                        | Launches NiceGUI dashboard via `python -m app.app`       |
 | `app/`                              | NiceGUI dashboard — see [app/app.md](app/app.md)         |
 | `scripts/1_…`, `2_…`, `3_…`         | SEQ→DB→MP4 pipeline — see [scripts/scripts.md](scripts/scripts.md) |
@@ -63,6 +64,9 @@ Routing — read the relevant context file before editing:
   under `scripts/helpers/`; do not create new top-level scripts unsolicited.
 - **Paths**: use raw strings (`r"…"`) for any new Windows path literals.
 - **Config**: import from `config.py` — never hardcode `F:\Room_8_Data\…`.
+  The canonical NorPix SequenceViewer executable is configured as
+  `NORPIX_SEQUENCE_VIEWER_PATH` and defaults to
+  `C:\Program Files\Common Files\NorPix\SequenceViewer.exe`.
 - **Docstrings**: Google style (template in `docs/DOCSTRING_GUIDE.md`).
   Module-level docstring is expected on every Python file.
 - **Comments**: write only when the *why* is non-obvious. No restating *what*.
@@ -86,6 +90,9 @@ Routing — read the relevant context file before editing:
 
 - **DB path resolution**: `config.DB_PATH` → overridable by `SCALPEL_DB`
   env var → overridable per-session via the dashboard's left drawer.
+- **SequenceViewer path resolution**: `config.NORPIX_SEQUENCE_VIEWER_PATH` →
+  overridable by `SCALPEL_NORPIX_SEQUENCE_VIEWER` → editable per-session and
+  persistable from the NiceGUI Home page Configuration panel.
 - **`PRAGMA foreign_keys = ON`** is set inside `app/utils.py::connect`.
   Preserve this — the schema relies on it.
 - **Managed-columns contract** (`scripts/2_update_db.py`): only the
@@ -182,9 +189,8 @@ There are **no automated tests, linters, or CI**. Validate manually:
 - **Respect contracts.** The "managed columns" contract in
   `scripts/scripts.md`, the page contract in `app/app.md`, and the import
   shim in `2_update_db.py` all encode prior bugs. Don't refactor them away.
-- **Trust code over README.** The top-level `README.md` still mentions
-  Streamlit; the dashboard has been migrated to NiceGUI. When the README and
-  the code disagree, the code wins.
+- **Trust code over stale docs.** The dashboard is NiceGUI. If you find an old
+  Streamlit reference, treat it as legacy context and verify against the code.
 - **Ask before destructive ops.** Confirm before: deleting / overwriting
   files, applying schema changes against `ScalpelDatabase.sqlite`, running
   scripts without `--dry-run`, force-pushing, or `rm`-ing tracking JSON

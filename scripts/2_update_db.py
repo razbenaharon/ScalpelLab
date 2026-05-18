@@ -453,6 +453,9 @@ def update_mp4_status(db_path: str, mp4_root: Path, threshold_mb: int,
     print("="*60)
 
     threshold_bytes = threshold_mb * 1024 * 1024
+    if dry_run and not skip_duration:
+        skip_duration = True
+        print("[INFO] Dry run: skipping MP4 duration probing for a fast preview")
 
     # Delete small files first
     if not skip_delete and not dry_run:

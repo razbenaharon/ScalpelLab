@@ -13,6 +13,7 @@ pywebview>=5.0                # Required for NiceGUI native=True desktop window
 # ============================================================================
 pandas>=2.0.0
 numpy>=1.24.0
+numexpr>=2.10.2                 # Optional pandas acceleration; required by pandas 3.x
 
 # ============================================================================
 # DATA VISUALIZATION
@@ -23,7 +24,7 @@ graphviz>=0.20.0              # For database ERD diagram generation
 # ============================================================================
 # PDF AND IMAGE PROCESSING
 # ============================================================================
-PyMuPDF>=1.26.0               # PDF rendering in Streamlit app
+PyMuPDF>=1.26.0               # PDF rendering in NiceGUI app
 Pillow>=11.0.0                # Image processing
 
 # ============================================================================
