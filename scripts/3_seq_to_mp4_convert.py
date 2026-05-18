@@ -33,6 +33,9 @@ Features:
 Author: Raz (Technion)
 """
 
+import argparse
+import io
+import json
 import sqlite3
 import subprocess
 import struct
@@ -46,6 +49,10 @@ from datetime import datetime
 from typing import Dict, List, Tuple, Optional, NamedTuple
 from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+if hasattr(sys.stdout, "buffer") and (sys.stdout.encoding or "").lower() not in ("utf-8", "utf8"):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
+                                  errors="replace", line_buffering=True)
 
 # Add parent directory to path to import config
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -275,6 +282,22 @@ def cleanup_temp_files(*paths: Path):
             pass
 
 
+_emit_lock = threading.Lock()
+
+
+def _emit(event: str, **fields) -> None:
+    """Print a single PROGRESS::JSON {…} line that the dashboard can parse.
+
+    Run alongside the human-readable prints; the dashboard scans recent log
+    lines for this prefix and JSON-decodes the most recent occurrence of each
+    event type to update its live counter strip.
+    """
+    payload = {"event": event}
+    payload.update(fields)
+    with _emit_lock:
+        print(f"PROGRESS::JSON {json.dumps(payload, default=str)}", flush=True)
+
+
 def append_log(result: Dict, recording_date: str = "", case_no: int = 0, group_name: str = ""):
     """Append a single conversion result to the log file."""
     try:
@@ -451,14 +474,21 @@ def get_seq_enriched_metadata(
     to re-parse the IDX.
     """
     conn = connect_db(db_path)
-    row = conn.execute(
-        """SELECT width, height, first_frame_time, last_frame_time,
-                  idx_frames, idx_file_size
-           FROM seq_enriched
-           WHERE recording_date = ? AND case_no = ? AND camera_name = ?""",
-        (recording_date, case_no, camera_name),
-    ).fetchone()
-    conn.close()
+    try:
+        row = conn.execute(
+            """SELECT width, height, first_frame_time, last_frame_time,
+                      idx_frames, idx_file_size
+               FROM seq_enriched
+               WHERE recording_date = ? AND case_no = ? AND camera_name = ?""",
+            (recording_date, case_no, camera_name),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        # seq_enriched may not exist yet (analyze_seq_fields never ran);
+        # treat that as "no cached metadata" so the caller falls back to a
+        # fresh IDX parse via save_idx_cache, which auto-creates the table.
+        row = None
+    finally:
+        conn.close()
 
     if row is None:
         return None
@@ -497,43 +527,67 @@ def save_idx_cache(
     partial row is inserted; analyze_seq_fields will fill header columns later.
     """
     conn = connect_db(db_path)
-    conn.execute(
-        """
-        INSERT INTO seq_enriched
-            (recording_date, case_no, camera_name,
-             idx_frames, first_frame_time, last_frame_time,
-             idx_file_size, idx_cached_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(recording_date, case_no, camera_name) DO UPDATE SET
-            idx_frames       = excluded.idx_frames,
-            first_frame_time = excluded.first_frame_time,
-            last_frame_time  = excluded.last_frame_time,
-            idx_file_size    = excluded.idx_file_size,
-            idx_cached_at    = excluded.idx_cached_at
-        """,
-        (
-            recording_date,
-            case_no,
-            camera_name,
-            metadata['frame_count'],
-            metadata['t_start'],
-            metadata['t_end'],
-            metadata['idx_file_size'],
-            datetime.now().isoformat(),
-        ),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            """
+            INSERT INTO seq_enriched
+                (recording_date, case_no, camera_name,
+                 idx_frames, first_frame_time, last_frame_time,
+                 idx_file_size, idx_cached_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(recording_date, case_no, camera_name) DO UPDATE SET
+                idx_frames       = excluded.idx_frames,
+                first_frame_time = excluded.first_frame_time,
+                last_frame_time  = excluded.last_frame_time,
+                idx_file_size    = excluded.idx_file_size,
+                idx_cached_at    = excluded.idx_cached_at
+            """,
+            (
+                recording_date,
+                case_no,
+                camera_name,
+                metadata['frame_count'],
+                metadata['t_start'],
+                metadata['t_end'],
+                metadata['idx_file_size'],
+                datetime.now().isoformat(),
+            ),
+        )
+        conn.commit()
+    except sqlite3.OperationalError as e:
+        # seq_enriched not initialized (analyze_seq_fields never ran). The
+        # cache is just an optimization; skip silently so the conversion
+        # itself isn't blocked.
+        print(f"  (skipping IDX cache for {camera_name}: {e})")
+    finally:
+        conn.close()
 
 
-def get_all_sessions(db_path: str, cameras: Optional[List[str]] = None) -> List[Dict]:
-    """Get all SEQ files that need MP4 conversion."""
+def get_all_sessions(
+    db_path: str,
+    cameras: Optional[List[str]] = None,
+    min_size_mb: Optional[float] = None,
+    include_existing: bool = False,
+) -> List[Dict]:
+    """Get all SEQ files that need MP4 conversion.
+
+    Args:
+        db_path: Path to the SQLite DB.
+        cameras: Camera names to include (defaults to ``DEFAULT_CAMERAS``).
+        min_size_mb: Minimum SEQ size to qualify a row (defaults to
+            ``MIN_PENDING_SEQ_SIZE_MB``). Used to skip aborted/JUNK recordings.
+        include_existing: When True, drop the ``mp4_status`` predicate so rows
+            already converted are also returned (used by ``--overwrite``).
+    """
     if cameras is None:
         cameras = DEFAULT_CAMERAS
+    if min_size_mb is None:
+        min_size_mb = MIN_PENDING_SEQ_SIZE_MB
 
     conn = connect_db(db_path)
     cursor = conn.cursor()
 
+    mp4_predicate = "" if include_existing else "AND (m.size_mb IS NULL OR m.size_mb < 1)"
     query = """
     SELECT
         s.recording_date,
@@ -546,13 +600,16 @@ def get_all_sessions(db_path: str, cameras: Optional[List[str]] = None) -> List[
         AND s.case_no = m.case_no
         AND s.camera_name = m.camera_name
     WHERE
-        s.camera_name IN ({})
+        s.camera_name IN ({placeholders})
         AND s.size_mb >= ?
-        AND (m.size_mb IS NULL OR m.size_mb < 1)
+        {mp4_predicate}
     ORDER BY s.recording_date DESC, s.case_no, s.camera_name
-    """.format(','.join(['?'] * len(cameras)))
+    """.format(
+        placeholders=','.join(['?'] * len(cameras)),
+        mp4_predicate=mp4_predicate,
+    )
 
-    cursor.execute(query, (*cameras, MIN_PENDING_SEQ_SIZE_MB))
+    cursor.execute(query, (*cameras, min_size_mb))
 
     files = []
     for row in cursor.fetchall():
@@ -1133,6 +1190,9 @@ def step3_ffmpeg_cfr_encode(
                                 speed_str = f" ({speed_match.group(1)}x)" if speed_match else ""
                                 print(f"  [{cam_name}] ⏳ {pct:5.1f}% — "
                                       f"frame {current_frame}/{total_frames}{fps_str}{speed_str}")
+                                _emit("frame", camera=cam_name,
+                                      percent=round(pct, 1),
+                                      frame=current_frame, total=total_frames)
                                 last_print_time[0] = now
                         line_buf = bytearray()
                 else:
@@ -1316,7 +1376,72 @@ def display_session_plan(groups: List[SessionGroup]):
     print("\n" + "=" * 90)
 
 
-def main():
+def _build_arg_parser() -> argparse.ArgumentParser:
+    """Build the argparse surface that the dashboard page and CLI share.
+
+    Defaults read from ``config.py`` and the module constants, so running
+    ``python scripts/3_seq_to_mp4_convert.py`` with no flags reproduces the
+    pre-argparse behavior exactly.
+    """
+    parser = argparse.ArgumentParser(
+        description="Convert NorPix SEQ recordings to multi-camera-synchronized MP4s.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python scripts/3_seq_to_mp4_convert.py
+  python scripts/3_seq_to_mp4_convert.py --dry-run --auto-confirm
+  python scripts/3_seq_to_mp4_convert.py --cameras Cart_Center_2,Cart_LT_4 --date 2025-01-15
+  python scripts/3_seq_to_mp4_convert.py --case 3 --workers 1 --auto-confirm
+  python scripts/3_seq_to_mp4_convert.py --overwrite --case 7 --auto-confirm
+        """,
+    )
+    parser.add_argument("--db", default=DB_PATH, help="SQLite DB path")
+    parser.add_argument("--seq-root", default=SEQ_ROOT, help="Root Sequence_Backup directory")
+    parser.add_argument("--mp4-root", default=OUT_ROOT, help="Output Recordings root directory")
+    parser.add_argument("--cameras", default=None,
+                        help="Comma-separated camera names (default: all configured cameras)")
+    parser.add_argument("--date", action="append", default=[],
+                        help="Recording date filter, repeatable; accepts YYYY-MM-DD or YY-MM-DD")
+    parser.add_argument("--case", action="append", type=int, default=[],
+                        help="Case number filter, repeatable")
+    parser.add_argument("--workers", type=int, default=MAX_PARALLEL,
+                        help=f"Concurrent FFmpeg processes (default: {MAX_PARALLEL})")
+    parser.add_argument("--min-pending-mb", type=float, default=MIN_PENDING_SEQ_SIZE_MB,
+                        help=f"Skip SEQ smaller than this many MB (default: {MIN_PENDING_SEQ_SIZE_MB})")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="Re-encode rows already present in mp4_status; overwrites the base filename instead of bumping")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Build the synchronization plan and print it, then exit without encoding")
+    parser.add_argument("--auto-confirm", action="store_true",
+                        help="Skip the interactive y/N prompt")
+    return parser
+
+
+def _date_matches(recording_date: str, wanted: List[str]) -> bool:
+    """Match the DB ``recording_date`` (YYYY-MM-DD) against user-supplied
+    date filters in either YYYY-MM-DD or YY-MM-DD form."""
+    if not wanted:
+        return True
+    return any(recording_date == d or recording_date.endswith(d) for d in wanted)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    args = _build_arg_parser().parse_args(argv)
+
+    # Apply overrides as module globals so the existing helpers
+    # (build_seq_path, build_session_groups, etc.) see the new paths.
+    global DB_PATH, SEQ_ROOT, OUT_ROOT, LOG_FILE
+    DB_PATH = args.db
+    SEQ_ROOT = args.seq_root
+    OUT_ROOT = args.mp4_root
+    LOG_FILE = Path(OUT_ROOT) / "conversion_log.txt"
+
+    if args.cameras:
+        all_cameras = [c.strip() for c in args.cameras.split(",") if c.strip()]
+    else:
+        all_cameras = list(DEFAULT_CAMERAS)
+    workers = max(1, int(args.workers))
+
     print("=" * 90)
     print("SMART SEQ SYNC CONVERTER — VFR-to-CFR Multi-Camera Synchronization")
     print("=" * 90)
@@ -1324,46 +1449,74 @@ def main():
     print(f"SEQ Root:    {SEQ_ROOT}")
     print(f"Output Root: {OUT_ROOT}")
     print(f"Target FPS:  {TARGET_FPS}")
-    print(f"Parallel:    {MAX_PARALLEL} cameras")
-    print(f"Min SEQ size:{MIN_PENDING_SEQ_SIZE_MB} MB")
+    print(f"Parallel:    {workers} cameras")
+    print(f"Min SEQ size:{args.min_pending_mb} MB")
     print(f"Max duration sanity cap: {MAX_VALID_DURATION_SECONDS}s")
     print(f"Encoder:     hevc_nvenc (H.265)")
     print(f"Pipeline:    SEQ→H.264+timecodes→mkvmerge(VFR MKV)→FFmpeg fps={TARGET_FPS}(CFR)→MP4")
+    if args.dry_run:
+        print("Mode:        DRY RUN (plan only, no encode)")
+    if args.overwrite:
+        print("Overwrite:   ON (existing MP4s will be re-encoded)")
+    if args.date:
+        print(f"Date filter: {', '.join(args.date)}")
+    if args.case:
+        print(f"Case filter: {', '.join(str(c) for c in args.case)}")
     print()
 
     # Check tool availability
     ffmpeg_path = find_ffmpeg()
     if not ffmpeg_path:
         print("❌ FFmpeg not found! Install FFmpeg or add it to PATH.")
-        return
+        _emit("done", ok=0, fail=0, skip=0, error="ffmpeg missing")
+        return 1
     print(f"✓ FFmpeg:    {ffmpeg_path}")
 
     ffprobe_path = find_ffprobe()
     if not ffprobe_path:
         print("❌ FFprobe not found! It should come with FFmpeg.")
-        return
+        _emit("done", ok=0, fail=0, skip=0, error="ffprobe missing")
+        return 1
     print(f"✓ FFprobe:   {ffprobe_path}")
 
     mkvmerge_path = find_mkvmerge()
     if not mkvmerge_path:
         print("❌ mkvmerge not found! Install MKVToolNix or add it to PATH.")
         print("   Download: https://mkvtoolnix.download/downloads.html")
-        return
+        _emit("done", ok=0, fail=0, skip=0, error="mkvmerge missing")
+        return 1
     print(f"✓ mkvmerge:  {mkvmerge_path}")
 
-    all_cameras = DEFAULT_CAMERAS
     print(f"\nCamera groups:")
     print(f"  Group A: {', '.join(GROUP_A)}")
     print(f"  Group B: {', '.join(GROUP_B)}")
     print(f"  Solo: {', '.join(SOLO_CAMERAS)}")
+    print(f"  Selected: {', '.join(all_cameras)}")
     print()
 
     print("Querying database for pending conversions...")
-    files = get_all_sessions(DB_PATH, cameras=all_cameras)
+    files = get_all_sessions(
+        DB_PATH,
+        cameras=all_cameras,
+        min_size_mb=args.min_pending_mb,
+        include_existing=args.overwrite,
+    )
+
+    # Post-filter by date / case (kept out of SQL for clarity)
+    if args.date or args.case:
+        before = len(files)
+        files = [
+            f for f in files
+            if _date_matches(f['recording_date'], args.date)
+            and (not args.case or f['case_no'] in args.case)
+        ]
+        print(f"Filtered {before} → {len(files)} rows by date/case")
 
     if not files:
         print("✓ No files need converting!")
-        return
+        _emit("plan", total=0, sessions=0)
+        _emit("done", ok=0, fail=0, skip=0)
+        return 0
 
     print(f"Found {len(files)} camera files pending conversion")
 
@@ -1373,7 +1526,9 @@ def main():
 
     if not session_groups:
         print("❌ No valid session groups found (missing IDX files?)")
-        return
+        _emit("plan", total=0, sessions=0)
+        _emit("done", ok=0, fail=0, skip=0, error="no valid sessions")
+        return 1
 
     display_session_plan(session_groups)
 
@@ -1386,14 +1541,24 @@ def main():
     print(f"\nTotal: {total_cameras} cameras across {len(session_groups)} groups")
     print(f"Estimated total output frames: {total_frames:,}")
     print()
+    _emit("plan", total=total_cameras, sessions=len(session_groups),
+          overwrite=bool(args.overwrite), dry_run=bool(args.dry_run))
 
-    response = input("Proceed with synchronized conversion? (y/n): ").strip().lower()
-    if response != 'y':
-        print("Cancelled.")
-        return
+    if args.dry_run:
+        print("Dry run complete — no MP4 files were written.")
+        _emit("done", ok=0, fail=0, skip=0, dry_run=True)
+        return 0
+
+    if not args.auto_confirm:
+        response = input("Proceed with synchronized conversion? (y/n): ").strip().lower()
+        if response != 'y':
+            print("Cancelled.")
+            _emit("done", ok=0, fail=0, skip=0, cancelled=True)
+            return 0
 
     # Initialize log file with run header
     try:
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(LOG_FILE, 'a', encoding='utf-8') as f:
             f.write(f"\n{'=' * 100}\n")
             f.write(f"RUN STARTED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | "
@@ -1404,11 +1569,12 @@ def main():
     print(f"Log file:    {LOG_FILE}")
 
     print("\n" + "=" * 90)
-    print(f"STARTING VFR→CFR SYNCHRONIZED CONVERSION (up to {MAX_PARALLEL} cameras in parallel)")
+    print(f"STARTING VFR→CFR SYNCHRONIZED CONVERSION (up to {workers} cameras in parallel)")
     print("=" * 90)
 
-    all_results = []
+    all_results: List[Dict] = []
     global_start_time = time.time()
+    done_idx = 0
 
     group_idx = 0
     for sg in session_groups:
@@ -1424,17 +1590,25 @@ def main():
         for cam_name, cam in sg.cameras.items():
             out_root_path = Path(OUT_ROOT).resolve()
             out_dir = compute_out_dir(cam.seq_path, out_root_path)
-            _, mp4_path = get_next_available_filename(out_dir, cam_name, ".mp4")
+            if args.overwrite:
+                mp4_path = out_dir / f"{cam_name}.mp4"
+            else:
+                _, mp4_path = get_next_available_filename(out_dir, cam_name, ".mp4")
 
-            if is_valid_video_file(mp4_path):
-                print(f"\n  📷 {cam_name} — ⏭️  SKIP: MP4 already exists ({mp4_path.name})")
-                skip_result = {
-                    'camera': cam_name, 'success': True, 'skipped': True,
-                    'message': 'Already exists', 'duration': None, 'frames': None,
-                }
-                all_results.append(skip_result)
-                append_log(skip_result, sg.recording_date, sg.case_no, sg.group_name)
-                continue
+                if is_valid_video_file(mp4_path):
+                    print(f"\n  📷 {cam_name} — ⏭️  SKIP: MP4 already exists ({mp4_path.name})")
+                    skip_result = {
+                        'camera': cam_name, 'success': True, 'skipped': True,
+                        'message': 'Already exists', 'duration': None, 'frames': None,
+                    }
+                    all_results.append(skip_result)
+                    append_log(skip_result, sg.recording_date, sg.case_no, sg.group_name)
+                    done_idx += 1
+                    _emit("camera_done", camera=cam_name, status="skip",
+                          date=sg.recording_date, case=sg.case_no,
+                          done=done_idx, total=total_cameras,
+                          message="already exists")
+                    continue
 
             tasks.append((cam_name, cam, mp4_path))
 
@@ -1443,9 +1617,13 @@ def main():
             continue
 
         # Launch parallel processing
-        with ThreadPoolExecutor(max_workers=MAX_PARALLEL) as executor:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {}
             for cam_name, cam, mp4_path in tasks:
+                _emit("camera_start", camera=cam_name,
+                      date=sg.recording_date, case=sg.case_no,
+                      group=sg.group_name,
+                      done=done_idx, total=total_cameras)
                 future = executor.submit(
                     process_camera_sync,
                     cam, sg, ffmpeg_path, ffprobe_path, mkvmerge_path, mp4_path,
@@ -1467,6 +1645,15 @@ def main():
                         except Exception:
                             pass
 
+                    done_idx += 1
+                    _emit("camera_done", camera=cam_name,
+                          status="ok" if result['success'] else "fail",
+                          date=sg.recording_date, case=sg.case_no,
+                          done=done_idx, total=total_cameras,
+                          elapsed=result.get('elapsed'),
+                          frames=result.get('frames'),
+                          message=result.get('message', ''))
+
                 except Exception as e:
                     print(f"  [{cam_name}] ❌ Exception: {e}")
                     err_result = {
@@ -1480,6 +1667,11 @@ def main():
                             mp4_path.unlink()
                         except Exception:
                             pass
+                    done_idx += 1
+                    _emit("camera_done", camera=cam_name, status="fail",
+                          date=sg.recording_date, case=sg.case_no,
+                          done=done_idx, total=total_cameras,
+                          message=str(e))
 
     # =========================
     # Summary & Sync Validation
@@ -1501,7 +1693,7 @@ def main():
     print(f"  Encoder:   hevc_nvenc (H.265)")
     print(f"  Strategy:  VFR→CFR via mkvmerge+FFmpeg @ {TARGET_FPS} FPS")
     print(f"  Pipeline:  SEQ→H.264+timecodes→MKV(VFR)→MP4(CFR)")
-    print(f"  Parallel:  {MAX_PARALLEL} cameras")
+    print(f"  Parallel:  {workers} cameras")
 
     if failures:
         print(f"\n  ❌ FAILURES:")
@@ -1534,11 +1726,14 @@ def main():
                 print(f"  ❌ SYNC FAILED — max drift {max_drift:.3f}s ({int(max_drift * TARGET_FPS)} frames)")
 
     print("=" * 90)
+    _emit("done", ok=len(successes), fail=len(failures), skip=len(skipped),
+          elapsed=round(total_time, 1))
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main())
     except KeyboardInterrupt:
         print("\n\n⚠️  Conversion interrupted by user")
         sys.exit(1)

@@ -32,6 +32,8 @@ IDX record layout (32 bytes, little-endian):
     offset 28 : uint32  frame_number  <-- monotonic ring-buffer counter
 """
 
+from __future__ import annotations
+
 import re
 import sys
 import sqlite3

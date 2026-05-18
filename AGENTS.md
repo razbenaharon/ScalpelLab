@@ -37,7 +37,7 @@ truth — every other component is a producer or consumer of it.
 ```bash
 python config.py                                 # validate paths
 python run_app.py                                # launch NiceGUI dashboard
-python scripts/1_nuk_seq_export.py               # organize raw SEQ
+python scripts/1_seq_curation.py                 # curate raw SEQ into SEQ_ROOT
 python scripts/2_update_db.py --dry-run          # refresh DB
 python scripts/3_seq_to_mp4_convert.py           # SEQ → MP4 (NVENC)
 python MPV_Multiviewer/run_viewer.py             # multi-camera viewer

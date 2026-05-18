@@ -27,13 +27,17 @@ ng_app.add_static_files("/static", str(_docs_dir()))
 
 from app import state  # noqa: E402
 from app.charts import kpi_with_spark as _kpi_with_spark, query_df as _query  # noqa: E402
+from app.config_paths import browse_directory, browse_file, path_status, save_config_paths  # noqa: E402
 from app.layout import page_frame  # noqa: E402
 from app.pages import (  # noqa: F401,E402
     anesthesiology,
     boris,
     database,
     mp4,
+    nuk_export,
     seq,
+    seq_to_mp4,
+    update_db,
 )
 
 
@@ -82,10 +86,85 @@ def _calendar_heatmap(mp4: pd.DataFrame) -> None:
     }).style(f"height: {30 + 150 * len(cal_range) + 60}px;")
 
 
+def _configuration_panel() -> None:
+    with ui.card().classes("surface-1 w-full q-pa-md"):
+        ui.label("Configuration").classes("text-subtitle1 text-weight-medium")
+        ui.label(
+            "These paths drive dashboard queries and the script pages. Changes are saved "
+            "for this app session; use Save to config.py to make them the defaults."
+        ).classes("text-caption muted")
+
+        db_input = ui.input("SQLite database", value=state.get()).props("outlined dense").classes("w-full")
+        seq_input = ui.input("SEQ root", value=state.get_seq()).props("outlined dense").classes("w-full")
+        mp4_input = ui.input("MP4 root", value=state.get_mp4()).props("outlined dense").classes("w-full")
+        status_label = ui.label("").classes("text-caption muted")
+
+        def _sync_state() -> None:
+            state.set_(str(db_input.value or ""))
+            state.set_seq(str(seq_input.value or ""))
+            state.set_mp4(str(mp4_input.value or ""))
+
+        db_input.on_value_change(lambda e: state.set_(e.value))
+        seq_input.on_value_change(lambda e: state.set_seq(e.value))
+        mp4_input.on_value_change(lambda e: state.set_mp4(e.value))
+
+        with ui.row().classes("items-center gap-2"):
+            def pick_db() -> None:
+                selected = browse_file(
+                    "Select SQLite database",
+                    [("SQLite databases", "*.sqlite *.db"), ("All files", "*.*")],
+                )
+                if selected:
+                    db_input.set_value(selected)
+                    state.set_(selected)
+
+            def pick_seq() -> None:
+                selected = browse_directory("Select SEQ root", seq_input.value or None)
+                if selected:
+                    seq_input.set_value(selected)
+                    state.set_seq(selected)
+
+            def pick_mp4() -> None:
+                selected = browse_directory("Select MP4 root", mp4_input.value or None)
+                if selected:
+                    mp4_input.set_value(selected)
+                    state.set_mp4(selected)
+
+            def save_config() -> None:
+                _sync_state()
+                try:
+                    save_config_paths(state.get(), state.get_seq(), state.get_mp4())
+                except Exception as exc:
+                    ui.notify(f"Save failed: {exc}", type="negative")
+                else:
+                    ui.notify("config.py updated.", type="positive")
+
+            ui.button("Browse DB", icon="storage", on_click=pick_db).props("outline")
+            ui.button("Browse SEQ", icon="folder_open", on_click=pick_seq).props("outline")
+            ui.button("Browse MP4", icon="folder_open", on_click=pick_mp4).props("outline")
+            ui.button("Save to config.py", icon="save", on_click=save_config).props("color=primary")
+
+        def refresh_status() -> None:
+            db_ok, db_msg = path_status(str(db_input.value or ""), "file")
+            seq_ok, seq_msg = path_status(str(seq_input.value or ""), "directory")
+            mp4_ok, mp4_msg = path_status(str(mp4_input.value or ""), "directory")
+            status_label.set_text(
+                f"DB: {db_msg}  |  SEQ: {seq_msg}  |  MP4: {mp4_msg}"
+            )
+            status_label.classes(
+                remove="text-negative text-positive",
+                add="text-positive" if db_ok and seq_ok and mp4_ok else "text-negative",
+            )
+
+        refresh_status()
+        ui.timer(1.0, refresh_status)
+
+
 @ui.page("/")
 def home() -> None:
     with page_frame("Home"):
         ui.label("ScalpelLab Dashboard").classes("section-h text-h5 text-weight-medium")
+        _configuration_panel()
 
         db_path = state.get()
         mp4 = _query(
@@ -100,7 +179,7 @@ def home() -> None:
         if mp4.empty:
             ui.label(
                 "Could not load cur_mp4_status_statistics. "
-                "Verify the SQLite path in the left drawer."
+                "Verify the SQLite path in Configuration."
             ).classes("text-warning")
             return
 

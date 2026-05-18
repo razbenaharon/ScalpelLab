@@ -7,7 +7,7 @@ Run in order; each is idempotent and can be re-run safely.
 
 ```
 scripts/
-├── 1_nuk_seq_export.py         # raw NorPix exports → DATA_YY-MM-DD/CaseN/CameraName/
+├── 1_seq_curation.py           # curate raw NorPix SEQ → DATA_YY-MM-DD/CaseN/CameraName/
 ├── 2_update_db.py              # walks SEQ_ROOT and MP4_ROOT, upserts seq_status / mp4_status / seq_enriched
 ├── 3_seq_to_mp4_convert.py     # SEQ → MP4 via raw H.264 + mkvmerge VFR + FFmpeg fps=30 CFR
 ├── import_boris_tags.py        # BORIS TSV → boris_events (+ link analysis_information.event_id)
@@ -16,7 +16,7 @@ scripts/
 
 ## Pipeline contract — read before editing
 
-### `1_nuk_seq_export.py`
+### `1_seq_curation.py`
 - Discovers `.seq` files plus companion files (`.metadata`, `.idx`, `.xml`,
   `.aud`) in a source directory.
 - Groups by date, then into "cases" using a 30-minute time window.

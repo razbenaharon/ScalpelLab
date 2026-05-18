@@ -103,7 +103,7 @@ Dependencies:
 Example:
     Interactive mode::
 
-        $ python scripts/1_nuk_seq_export.py
+        $ python scripts/1_seq_curation.py
         Enter Source Directory: /path/to/raw/seqs
         Enter Destination Directory [Default: F:/Room_8_Data/Sequence_Backup]:
         Number of parallel workers [Default: 8]: 8
@@ -128,7 +128,7 @@ Example:
 
     Programmatic usage::
 
-        from scripts.nuk_seq_export import run_curation, map_channels_auto
+        from scripts.seq_curation import run_curation, map_channels_auto
 
         source_channels = get_unique_source_channels("/path/to/source")
         channel_mapping = map_channels_auto(source_channels)
@@ -184,6 +184,9 @@ Version:
     2.0.0 (2026-01-06) - CLI interface with auto-mapping
 """
 
+from __future__ import annotations
+
+import argparse
 import os
 import sys
 import shutil
@@ -711,7 +714,15 @@ def copy_files_with_threads(file_operations, max_workers=8, progress_callback=No
     return successful_copies, failed_copies
 
 
-def run_curation(root_dir, dest_dir, channel_mapping, simulate=False, max_workers=8):
+def run_curation(
+    root_dir,
+    dest_dir,
+    channel_mapping,
+    simulate=False,
+    max_workers=8,
+    dry_run=False,
+    auto_confirm=False,
+):
     # No longer generating output files as per user request
     """Run the full curation process."""
     
@@ -782,8 +793,18 @@ def run_curation(root_dir, dest_dir, channel_mapping, simulate=False, max_worker
     print(f"Source:      {root_dir}")
     print(f"Destination: {dest_dir}")
     print(f"Files:       {total_files}")
+    print(f"Orphaned:    {total_orphaned}")
+    print(f"Total size:  {total_size / (1024 ** 3):,.2f} GB")
+
+    if dry_run:
+        print("\n[DRY RUN] No files were copied.")
+        if file_operations['file_operations']:
+            print("\nPlanned copy examples:")
+            for op in file_operations['file_operations'][:10]:
+                print(f"  {op['source_path']} -> {op['destination_path']}")
+        return
     
-    if input("\nProceed? (y/n): ").lower() != 'y':
+    if not auto_confirm and input("\nProceed? (y/n): ").lower() != 'y':
         print("Aborted.")
         return
 
@@ -847,7 +868,7 @@ def map_channels_auto(source_channels):
             
     return mapping
 
-def main():
+def _interactive_main():
     print("=" * 80)
     print("BATCH EXPORT SCRIPT - SEQUENCE CURATOR")
     print("=" * 80)
@@ -897,9 +918,82 @@ def main():
     # 5. Run
     run_curation(source_dir, dest_dir, channel_mapping, simulate=False, max_workers=max_workers)
 
+
+def _build_arg_parser():
+    parser = argparse.ArgumentParser(
+        description="Organize raw NorPix SEQ files into the ScalpelLab SEQ root.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python scripts/1_seq_curation.py
+  python scripts/1_seq_curation.py --source F:\\RawSEQ --dest F:\\Room_8_Data\\Sequence_Backup --dry-run
+  python scripts/1_seq_curation.py --source F:\\RawSEQ --dest F:\\Room_8_Data\\Sequence_Backup --auto-confirm
+        """,
+    )
+    parser.add_argument("--source", help="Raw source directory containing unorganized .seq files")
+    parser.add_argument("--dest", default=get_seq_root(), help="Destination SEQ root")
+    parser.add_argument("--workers", type=int, default=8, help="Parallel copy workers")
+    parser.add_argument("--dry-run", action="store_true", help="Plan and summarize without copying")
+    parser.add_argument("--auto-confirm", action="store_true", help="Skip confirmation prompt")
+    return parser
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if not argv:
+        _interactive_main()
+        return 0
+
+    parser = _build_arg_parser()
+    args = parser.parse_args(argv)
+
+    print("=" * 80)
+    print("BATCH EXPORT SCRIPT - SEQUENCE CURATOR")
+    print("=" * 80)
+    if args.dry_run:
+        print("[DRY RUN MODE - No files will be copied]")
+    print(f"Source:      {args.source}")
+    print(f"Destination: {args.dest}")
+    print(f"Workers:     {args.workers}")
+
+    if not args.source:
+        parser.error("--source is required in non-interactive mode")
+    source_dir = str(args.source).strip('"').strip("'")
+    dest_dir = str(args.dest).strip('"').strip("'")
+
+    if not os.path.isdir(source_dir):
+        print(f"[ERROR] Source directory not found: {source_dir}")
+        return 2
+    if args.workers < 1:
+        print("[ERROR] --workers must be at least 1")
+        return 2
+
+    print("\nScanning for source channels...")
+    source_channels = get_unique_source_channels(source_dir)
+    if not source_channels:
+        print("No channels (.seq files) found in source directory.")
+        return 1
+
+    print(f"Found {len(source_channels)} unique channels.")
+    channel_mapping = map_channels_auto(source_channels)
+    if not channel_mapping:
+        print("No channels mapped. Exiting.")
+        return 1
+
+    run_curation(
+        source_dir,
+        dest_dir,
+        channel_mapping,
+        simulate=False,
+        max_workers=args.workers,
+        dry_run=args.dry_run,
+        auto_confirm=args.auto_confirm,
+    )
+    return 0
+
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main())
     except KeyboardInterrupt:
         print("\nOperation cancelled by user.")
     except Exception as e:
