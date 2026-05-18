@@ -30,7 +30,11 @@ def render_job_panel() -> None:
             ui.textarea(value="")
             .props("readonly outlined")
             .classes("w-full q-mt-sm")
-            .style("height: 360px; font-family: Consolas, monospace; font-size: 12px;")
+            .style(
+                "height: clamp(560px, 68vh, 900px); "
+                "font-family: Consolas, monospace; "
+                "font-size: 12px;"
+            )
         )
 
         def refresh() -> None:

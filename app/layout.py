@@ -13,18 +13,29 @@ from . import state
 from .theme import apply_global_theme
 
 
-# (label, href, icon, page_title)
-NAV_LINKS = [
-    ("Home",            "/",                "dashboard",      "Home"),
-    ("Database",        "/database",        "table_view",     "Database Management"),
-    ("Anesthesiology",  "/anesthesiology",  "medical_services", "Anesthesiology"),
-    ("MP4",             "/mp4",             "movie",          "MP4"),
-    ("SEQ",             "/seq",             "folder_open",    "SEQ"),
-    ("SEQ Curation",    "/seq-curation",    "drive_folder_upload", "SEQ Curation"),
-    ("Update DB",       "/update-db",       "sync",           "Update DB"),
-    ("SEQ → MP4",       "/seq-to-mp4",      "movie_filter",   "SEQ → MP4"),
-    ("BORIS",           "/boris",           "label",          "BORIS Tags"),
+# (section_label, [(label, href, icon, page_title), ...])
+NAV_SECTIONS = [
+    (
+        "Dashboards & Monitoring",
+        [
+            ("Home", "/", "dashboard", "Home"),
+            ("Database", "/database", "table_view", "Database Management"),
+            ("Anesthesiology", "/anesthesiology", "medical_services", "Anesthesiology"),
+            ("MP4", "/mp4", "movie", "MP4"),
+            ("SEQ", "/seq", "folder_open", "SEQ"),
+            ("BORIS", "/boris", "label", "BORIS Tags"),
+        ],
+    ),
+    (
+        "Processing Pipeline",
+        [
+            ("SEQ Curation", "/seq-curation", "drive_folder_upload", "SEQ Curation"),
+            ("Update DB + IDX", "/update-db", "sync", "Update DB"),
+            ("SEQ → MP4", "/seq-to-mp4", "movie_filter", "SEQ → MP4"),
+        ],
+    ),
 ]
+NAV_LINKS = [link for _, links in NAV_SECTIONS for link in links]
 
 
 @contextmanager
@@ -71,14 +82,20 @@ def page_frame(title: str):
 
             ui.separator().classes("q-my-md")
 
-            ui.label("NAVIGATION").classes("text-caption muted q-px-md").style("letter-spacing: 1px;")
-            with ui.column().classes("w-full gap-0 q-mt-xs"):
-                for label, href, icon, page_title in NAV_LINKS:
-                    is_active = (page_title == title)
-                    cls = "nav-link active" if is_active else "nav-link"
-                    with ui.link(target=href).classes(cls):
-                        ui.icon(icon)
-                        ui.label(label)
+            with ui.column().classes("w-full gap-0"):
+                for index, (section, links) in enumerate(NAV_SECTIONS):
+                    if index:
+                        ui.separator().classes("q-my-sm")
+                    ui.label(section.upper()).classes("text-caption muted q-px-md").style(
+                        "letter-spacing: 1px;"
+                    )
+                    with ui.column().classes("w-full gap-0 q-mt-xs q-mb-md"):
+                        for label, href, icon, page_title in links:
+                            is_active = (page_title == title)
+                            cls = "nav-link active" if is_active else "nav-link"
+                            with ui.link(target=href).classes(cls):
+                                ui.icon(icon)
+                                ui.label(label)
 
     # ── Page body ────────────────────────────────────────────────────────
     with ui.column().classes("w-full q-pa-lg gap-4"):

@@ -16,6 +16,17 @@ scripts/
 
 ## Pipeline contract — read before editing
 
+The dashboard presents the operational workflow as **Processing Pipeline**:
+
+1. **SEQ Curation** — copy new source `.seq` files into the organized SEQ root.
+2. **Update DB + Create IDX Files** — register SEQ rows, then create missing
+   `.seq.idx` companions.
+3. **Analyze SEQ Fields** — parse registered SEQ headers and IDX metadata once
+   per file.
+4. **SEQ to MP4** — convert eligible SEQ files, then refresh DB MP4 status.
+
+Run dry-runs/previews before any real file operation.
+
 ### `1_seq_curation.py`
 - Discovers `.seq` files plus companion files (`.metadata`, `.idx`, `.xml`,
   `.aud`) in a source directory.
@@ -42,6 +53,24 @@ else, so users can add columns to the schema without breaking re-runs.
 - Common flags: `--dry-run`, `--skip-duration` (skip `ffprobe`),
   `--threshold-mb` (junk threshold), `--delete-small-mb`.
 
+### IDX creation
+The canonical IDX creation flow opens each registered `.seq` file with NorPix
+SequenceViewer and waits for the companion `.seq.idx` file to appear and reach
+a stable size before moving to the next SEQ. The executable path comes from
+`config.NORPIX_SEQUENCE_VIEWER_PATH`, defaulting to:
+
+```text
+C:\Program Files\Common Files\NorPix\SequenceViewer.exe
+```
+
+This path is editable in the NiceGUI Home page Configuration panel. Existing
+valid IDX files are skipped. Failures, timeouts, skipped files, and processed
+files should be logged under `logs/idx_creation/`.
+
+`scripts/helpers/repair_seq_idx.py` is an audit/repair helper that rebuilds IDX
+files from SEQ bytes. Keep it available, but do not treat it as the primary IDX
+creation workflow unless a task explicitly asks for repair or fallback behavior.
+
 ### `3_seq_to_mp4_convert.py` — VFR→CFR sync pipeline
 Multi-camera synchronization to a shared global timeline (union strategy).
 Output videos for the same date/case have **identical duration** with black
@@ -60,6 +89,12 @@ Per-file pipeline:
 Reads the to-do list from the `cur_mp4_missing` view. Concurrent cameras are
 configurable. Cleans up all temporary files on success or failure.
 
+Default fallback: missing-IDX SEQ files are converted directly with FFmpeg
+when it can decode the embedded H.264 stream. These outputs are named
+`*_NOT_SYNCABLE.mp4`, logged as `NO-SYNC`, and excluded from sync validation
+because there are no trusted per-frame timestamps. Use
+`--no-include-not-syncable` for a syncable-only run.
+
 ### `import_boris_tags.py` — strict importer
 - Filenames **must** match `YY-MM-DD-caseN.tsv`. Mismatches are skipped and
   logged.
@@ -75,8 +110,8 @@ configurable. Cleans up all temporary files on success or failure.
 ## Conventions
 
 - All scripts import `config` via `sys.path.insert(0, parent)` shim and read
-  paths through `get_db_path()` / `get_seq_root()` / `get_mp4_root()`. Don't
-  hardcode paths.
+  paths through `get_db_path()` / `get_seq_root()` / `get_mp4_root()` /
+  `get_norpix_sequence_viewer_path()`. Don't hardcode paths.
 - UTF-8 stdout reconfiguration (see auto-memory `MEMORY.md`) is required at
   the top of any script that prints non-ASCII, since the Windows console is
   CP1252.
@@ -93,3 +128,17 @@ configurable. Cleans up all temporary files on success or failure.
   The producer here doesn't repair them; consumers must clip.
 - `3_seq_to_mp4_convert.py` requires `mkvmerge` and NVENC-capable FFmpeg on
   PATH. There is a CPU fallback path; preserve it when refactoring.
+
+## Logs
+
+Operational scripts should write timestamped logs under `logs/`, grouped by
+pipeline step:
+
+```text
+logs/
+├── seq_curation/
+├── db_update/
+├── idx_creation/
+├── seq_analysis/
+└── seq_to_mp4/
+```

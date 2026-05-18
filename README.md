@@ -6,7 +6,7 @@ review workflows, and exploring computer-vision pipelines for room-camera data.
 
 ## What Is In This Repo
 
-- A Streamlit dashboard for browsing, editing, and summarizing the SQLite
+- A NiceGUI desktop dashboard for browsing, editing, and summarizing the SQLite
   database.
 - File-system pipelines for SEQ ingestion, MP4 status updates, SEQ metadata
   enrichment, and SEQ-to-MP4 conversion.
@@ -32,6 +32,8 @@ Edit [`config.py`](config.py) and set:
 
 - `SEQ_ROOT` to your organized SEQ root
 - `MP4_ROOT` to your MP4 recordings root
+- `NORPIX_SEQUENCE_VIEWER_PATH` to the NorPix SequenceViewer executable used
+  to create `.seq.idx` files
 
 Expected layout:
 
@@ -56,7 +58,8 @@ python run_app.py
 ```
 
 `run_app.py` starts the NiceGUI app via `python -m app.app`, which opens a
-native pywebview window.
+native pywebview window. The Home page Configuration panel can also edit and
+persist the DB, SEQ root, MP4 root, and NorPix SequenceViewer paths.
 
 ## Main Components
 
@@ -72,6 +75,9 @@ The dashboard lives under [`app/`](app/) and currently includes:
   MP4 / SEQ presence summaries.
 - [`app/pages/mp4_statistics.py`](app/pages/mp4_statistics.py): interactive
   analytics for `cur_mp4_status_statistics`.
+
+The sidebar is organized into **Dashboards & Monitoring** for read/inspection
+pages and **Processing Pipeline** for operational actions.
 
 ### Database And Migrations
 
@@ -98,6 +104,29 @@ The dashboard lives under [`app/`](app/) and currently includes:
   TSV exports into `boris_events` and maintain BORIS-derived views.
 - [`scripts/helpers/batch_black_squere.py`](scripts/helpers/batch_black_squere.py):
   batch-redact videos from database timing data in `mp4_times`.
+
+Processing Pipeline order:
+
+1. SEQ Curation.
+2. Update DB + Create IDX files.
+3. Analyze SEQ Fields.
+4. SEQ to MP4, followed by a DB refresh so MP4 status reflects the latest files.
+
+IDX creation uses NorPix SequenceViewer, configured by
+`config.NORPIX_SEQUENCE_VIEWER_PATH` and editable from the Home page. The
+existing `repair_seq_idx.py` helper remains an audit/repair path, not the
+primary creation flow.
+
+Pipeline logs are written under `logs/`, grouped by step:
+
+```text
+logs/
+├── seq_curation/
+├── db_update/
+├── idx_creation/
+├── seq_analysis/
+└── seq_to_mp4/
+```
 
 ### Helper Utilities
 
@@ -237,7 +266,9 @@ Some functionality depends on tools outside Python:
 
 - `ffmpeg` and `ffprobe` for conversion, probing, redaction, and cutting.
 - NVIDIA NVENC for GPU-accelerated video workflows where available.
-- CLExport as a fallback SEQ export path in some workflows.
+- NorPix SequenceViewer at `C:\Program Files\Common Files\NorPix\SequenceViewer.exe`
+  by default for opening `.seq` files and creating `.seq.idx` companions.
+- CLExport as a fallback SEQ export path in some legacy workflows.
 - `mpv.exe` for synchronized multi-video playback in `MPV_Multiviewer`.
 
 ## Notes
@@ -245,5 +276,5 @@ Some functionality depends on tools outside Python:
 - The repo is Windows-oriented; paths and examples assume Windows drive letters.
 - The database file defaults to `ScalpelDatabase.sqlite` in the project root.
 - `scripts/2_update_db.py` is designed to preserve columns it does not manage.
-- The Streamlit app can point at a different database path through the sidebar or
-  the `SCALPEL_DB` environment variable.
+- The NiceGUI app can point at different configured paths through the Home page
+  Configuration panel or the relevant `SCALPEL_*` environment variables.

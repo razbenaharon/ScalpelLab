@@ -1,4 +1,4 @@
-"""Database utility functions for the Streamlit application.
+"""Database utility functions for the NiceGUI application.
 
 This module provides helper functions for interacting with the SQLite database,
 including connection management, table/view listing, and data loading.

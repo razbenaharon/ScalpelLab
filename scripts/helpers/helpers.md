@@ -37,10 +37,29 @@ Parses raw NorPix SEQ headers and IDX records:
 
 Primary key in `seq_enriched`: `(recording_date, case_no, camera_name)`.
 
+### IDX creation helper
+The primary IDX creation workflow opens registered `.seq` files with NorPix
+SequenceViewer, configured by `config.NORPIX_SEQUENCE_VIEWER_PATH` and editable
+from the NiceGUI Home page.
+
+Contract:
+- Resolve candidate SEQ files from the DB after `seq_status` has been updated.
+- Skip files that already have a valid companion `.seq.idx` file.
+- Open one SEQ at a time in SequenceViewer, wait for the `.idx` to appear, then
+  poll until the file size is stable.
+- Treat nonzero size divisible by 32 bytes as the basic IDX validity check.
+- Enforce a per-file timeout and report failures without stopping the whole
+  batch.
+- Close the SequenceViewer process after each file; force-kill only the tracked
+  process tree if graceful close times out.
+- Log processed, skipped, failed, and timed-out files under
+  `logs/idx_creation/`.
+
 ### `repair_seq_idx.py`
 Audits and rebuilds `.seq.idx` files by walking the SEQ body. Uses a
 checkpoint file at `docs/seq_idx_repair_tracking.json` so long runs can
-resume. Run with `--dry-run` first.
+resume. Run with `--dry-run` first. This is an audit/repair fallback, not the
+canonical SequenceViewer-based IDX creation path.
 
 ### `batch_black_squere.py` (note the typo — keep it)
 Reads timing ranges from `mp4_times` and applies a black-rectangle redaction
@@ -67,6 +86,7 @@ Useful for verifying backups and migrations.
   `2_update_db.py`, do so inside a `try/except ImportError` so the helper
   remains optional.
 - Use `config.get_db_path()` / `get_seq_root()` / `get_mp4_root()` — never
-  hardcode paths.
+  hardcode paths. Use `get_norpix_sequence_viewer_path()` for the canonical
+  NorPix SequenceViewer executable.
 - Tracking JSON files (`docs/*_tracking.json`) are checkpoint state; do not
   delete them mid-run.

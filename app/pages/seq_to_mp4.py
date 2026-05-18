@@ -89,7 +89,8 @@ def seq_to_mp4_page() -> None:
         ui.label(
             "Convert NorPix SEQ recordings to multi-camera-synchronized MP4s "
             "(H.264 → mkvmerge VFR → FFmpeg fps=30 CFR → HEVC NVENC). "
-            "Requires ffmpeg, mkvmerge, and an NVIDIA NVENC-capable GPU on the host."
+            "Requires ffmpeg, mkvmerge, and an NVIDIA NVENC-capable GPU on the host. "
+            "Missing-IDX files can optionally be exported as NOT SYNCABLE MP4s."
         ).classes("text-caption muted")
 
         db_path = state.get()
@@ -155,6 +156,7 @@ def seq_to_mp4_page() -> None:
                     "Min pending SEQ MB", value=50, min=1, step=1,
                 ).props("outlined dense")
                 overwrite = ui.switch("Allow overwrite", value=False)
+                include_not_syncable = ui.switch("Include NOT SYNCABLE fallback", value=True)
             with ui.row().classes("items-center gap-4 q-mt-sm"):
                 date_input = ui.input(
                     "Date filter (CSV, YYYY-MM-DD or YY-MM-DD)",
@@ -215,6 +217,10 @@ def seq_to_mp4_page() -> None:
                     args.extend(["--case", case])
             if overwrite.value:
                 args.append("--overwrite")
+            if include_not_syncable.value:
+                args.append("--include-not-syncable")
+            else:
+                args.append("--no-include-not-syncable")
             if dry_run:
                 args.append("--dry-run")
             args.append("--auto-confirm")

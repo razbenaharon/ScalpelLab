@@ -9,8 +9,8 @@ database. Entry point is `run_app.py` at the project root, which spawns
 ```
 app/
 ├── app.py              # entry; defines Home dashboard + main()
-├── layout.py           # page_frame() — header, drawer, NAV_LINKS
-├── state.py            # DB path + dark-mode persisted in app.storage.general
+├── layout.py           # page_frame() — header, grouped drawer navigation
+├── state.py            # paths + dark-mode persisted in app.storage.general
 ├── theme.py            # PALETTE, CHART_SEQ, global CSS (surface-1, kpi-card…)
 ├── utils.py            # connect(), list_tables(), list_views(), load_table()
 ├── charts.py           # query_df, kpi_card, kpi_with_spark, echart helpers
@@ -56,9 +56,37 @@ def my_page() -> None:
 After creating the page, register it in two places:
 1. **`app/app.py`** — add to the `from app.pages import (...)` block so `@ui.page`
    decorators run at startup.
-2. **`app/layout.py`** — add a `(label, href, icon, page_title)` tuple to
-   `NAV_LINKS`. The `page_title` must match what the page passes to
-   `page_frame()` so the drawer's active-link highlight works.
+2. **`app/layout.py`** — add it to the appropriate sidebar group. The
+   `page_title` must match what the page passes to `page_frame()` so the
+   drawer's active-link highlight works.
+
+## Navigation
+
+The sidebar is split into two visually separated groups:
+
+- **Dashboards & Monitoring**: Home, Database, Anesthesiology, MP4, SEQ, BORIS.
+- **Processing Pipeline**: SEQ Curation, Update DB + IDX, SEQ to MP4. The
+  underlying pipeline contract includes Analyze SEQ Fields after DB update;
+  add a dedicated page here if it is split out from the DB update flow.
+
+Keep read-only dashboards in the first group and pages that launch real
+filesystem or database work in the second group.
+
+## Home configuration
+
+The Home page Configuration panel controls the paths used by the dashboard and
+script launcher pages:
+
+- SQLite database (`config.DB_PATH`, overridable by `SCALPEL_DB`).
+- SEQ root (`config.SEQ_ROOT`, overridable by `SCALPEL_SEQ_ROOT`).
+- MP4 root (`config.MP4_ROOT`, overridable by `SCALPEL_MP4_ROOT`).
+- NorPix SequenceViewer executable
+  (`config.NORPIX_SEQUENCE_VIEWER_PATH`, overridable by
+  `SCALPEL_NORPIX_SEQUENCE_VIEWER`).
+
+The default SequenceViewer path is
+`C:\Program Files\Common Files\NorPix\SequenceViewer.exe`. The Home page can
+browse to a different executable and persist it back to `config.py`.
 
 ## Conventions
 
