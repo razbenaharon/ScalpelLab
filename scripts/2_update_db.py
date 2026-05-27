@@ -53,12 +53,14 @@ from config import get_db_path, get_seq_root, get_mp4_root, DEFAULT_CAMERAS
 _analyze_seq_dir: Callable[..., Any] | None = None
 _write_seq_analysis: Callable[..., Any] | None = None
 _seq_existing_keys: Callable[[str], set[tuple[str, int, str]]] | None = None
+_seq_canonical_map: Callable[[str], dict[tuple[str, int, str], str]] | None = None
 seq_analysis_available = False
 
 try:
     from helpers.analyze_seq_fields import analyze_directory as _analyze_seq_dir
     from helpers.analyze_seq_fields import write_to_db as _write_seq_analysis
     from helpers.analyze_seq_fields import load_existing_keys as _seq_existing_keys
+    from helpers.analyze_seq_fields import load_camera_canonical_map as _seq_canonical_map
     seq_analysis_available = True
 except ImportError:
     pass
@@ -87,6 +89,95 @@ def parse_recording_date_and_case(data_dir_name: str, case_dir_name: str) -> tup
     yyyy = f"20{yy}" if int(yy) <= 69 else f"19{yy}"
     case_no = int(n.group(1))
     return f"{yyyy}-{mm}-{dd}", case_no
+
+
+def _section(title: str) -> None:
+    print(f"\n{title}")
+    print("-" * len(title))
+
+
+def _status_label(status: int) -> str:
+    return {1: ">= threshold", 2: "< threshold", 3: "missing"}.get(status, str(status))
+
+
+def _fmt_mb(size_mb: int | float | None) -> str:
+    return "NULL" if size_mb is None else f"{size_mb:g} MB"
+
+
+def _fmt_min(minutes: float | None) -> str:
+    return "N/A" if minutes is None else f"{minutes:.1f} min"
+
+
+def _entry_label(recording_date: str, case_no: int, camera_name: str) -> str:
+    return f"{recording_date} Case{case_no} {camera_name}"
+
+
+def _print_inventory_counts(label: str, total: int, new: int, changed: int) -> None:
+    unchanged = total - new - changed
+    print(f"[OK] {label}: total {total:,} | new {new:,} | changed {changed:,} | unchanged {unchanged:,}")
+
+
+def _print_seq_changes(
+    new_entries: list[tuple],
+    changed_entries: list[tuple],
+) -> None:
+    if not new_entries and not changed_entries:
+        print("[OK] No SEQ inventory changes.")
+        return
+    if new_entries:
+        print(f"[NEW] SEQ entries ({len(new_entries):,})")
+        for recording_date, case_no, camera_name, status, size_mb, _file_path in new_entries:
+            print(
+                f"  + {_entry_label(recording_date, case_no, camera_name):42s} | "
+                f"size {_fmt_mb(size_mb):>10s} | status {_status_label(status)}"
+            )
+    if changed_entries:
+        print(f"[CHANGED] SEQ entries ({len(changed_entries):,})")
+        for recording_date, case_no, camera_name, status, old_size, new_size, old_path, new_path in changed_entries:
+            path_note = " | path changed" if old_path != new_path else ""
+            print(
+                f"  ~ {_entry_label(recording_date, case_no, camera_name):42s} | "
+                f"size {_fmt_mb(old_size):>10s} -> {_fmt_mb(new_size):>10s} | "
+                f"status {_status_label(status)}{path_note}"
+            )
+
+
+def _print_mp4_changes(
+    new_entries: list[tuple],
+    changed_entries: list[tuple],
+) -> None:
+    if not new_entries and not changed_entries:
+        print("[OK] No MP4 inventory changes.")
+        return
+    if new_entries:
+        print(f"[NEW] MP4 entries ({len(new_entries):,})")
+        for recording_date, case_no, camera_name, status, size_mb, duration, _file_path in new_entries:
+            print(
+                f"  + {_entry_label(recording_date, case_no, camera_name):42s} | "
+                f"size {_fmt_mb(size_mb):>10s} | duration {_fmt_min(duration):>10s} | "
+                f"status {_status_label(status)}"
+            )
+    if changed_entries:
+        print(f"[CHANGED] MP4 entries ({len(changed_entries):,})")
+        for (
+            recording_date,
+            case_no,
+            camera_name,
+            status,
+            old_size,
+            new_size,
+            old_duration,
+            new_duration,
+            old_path,
+            new_path,
+        ) in changed_entries:
+            path_note = " | path changed" if old_path != new_path else ""
+            print(
+                f"  ~ {_entry_label(recording_date, case_no, camera_name):42s} | "
+                f"size {_fmt_mb(old_size):>10s} -> {_fmt_mb(new_size):>10s} | "
+                f"duration {_fmt_min(old_duration):>10s} -> {_fmt_min(new_duration):>10s} | "
+                f"status {_status_label(status)}{path_note}"
+            )
 
 
 def ensure_seq_table_exists(conn: sqlite3.Connection) -> None:
@@ -198,9 +289,7 @@ def compute_seq_status(camera_dir: Path, threshold_bytes: int, seq_root: Path | 
 
 def update_seq_status(db_path: str, seq_root: Path, threshold_mb: int, dry_run: bool = False) -> dict:
     """Update seq_status table and return statistics."""
-    print("\n" + "="*60)
-    print("UPDATING SEQ STATUS")
-    print("="*60)
+    _section("SEQ inventory")
 
     threshold_bytes = threshold_mb * 1024 * 1024
     updates = {}
@@ -226,16 +315,12 @@ def update_seq_status(db_path: str, seq_root: Path, threshold_mb: int, dry_run: 
         print("[WARN] No SEQ files found")
         return {'total': 0, 'new': 0, 'changed': 0}
 
-    print(f"[INFO] Found {len(updates)} camera entries")
-
-    if dry_run:
-        return {'total': len(updates), 'new': 0, 'changed': 0}
-
     # Check for changes
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = ON")
     try:
-        ensure_seq_table_exists(conn)
+        if not dry_run:
+            ensure_seq_table_exists(conn)
         cur = conn.cursor()
 
         existing = {}
@@ -258,29 +343,9 @@ def update_seq_status(db_path: str, seq_root: Path, threshold_mb: int, dry_run: 
                 if old_size != size_mb or old_path != file_path:
                     changed_entries.append((recording_date, case_no, camera_name, status, old_size, size_mb, old_path, file_path))
 
-        # Show detailed changes
-        if new_entries:
-            print(f"\n  [NEW] {len(new_entries)} new entries:")
-            for recording_date, case_no, camera_name, status, size_mb, file_path in new_entries[:10]:
-                status_label = {1: ">=200MB", 2: "<200MB", 3: "Missing"}.get(status, str(status))
-                size_str = f"{size_mb}MB" if size_mb is not None else "NULL"
-                print(f"    {recording_date} Case{case_no} {camera_name}: {status_label} ({size_str})")
-            if len(new_entries) > 10:
-                print(f"    ... and {len(new_entries) - 10} more")
-
-        if changed_entries:
-            print(f"\n  [CHANGED] {len(changed_entries)} changed entries:")
-            for recording_date, case_no, camera_name, status, old_size, new_size, old_path, new_path in changed_entries[:10]:
-                status_label = {1: ">=200MB", 2: "<200MB", 3: "Missing"}.get(status, str(status))
-                old_str = f"{old_size}MB" if old_size is not None else "NULL"
-                new_str = f"{new_size}MB" if new_size is not None else "NULL"
-                print(f"    {recording_date} Case{case_no} {camera_name}: {status_label} ({old_str} -> {new_str})")
-            if len(changed_entries) > 10:
-                print(f"    ... and {len(changed_entries) - 10} more")
-
         unchanged = len(updates) - len(new_entries) - len(changed_entries)
-        if unchanged > 0:
-            print(f"\n  [UNCHANGED] {unchanged} entries")
+        _print_inventory_counts("SEQ", len(updates), len(new_entries), len(changed_entries))
+        _print_seq_changes(new_entries, changed_entries)
 
         return {
             'total': len(updates),
@@ -358,7 +423,17 @@ def get_video_duration(video_path: Path) -> float | None:
     return None
 
 
-def compute_mp4_status(camera_dir: Path, threshold_bytes: int, calculate_duration: bool = True, mp4_root: Path | None = None) -> tuple[int, int | None, float | None, str | None]:
+def _path_identity(path: Path) -> str:
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
+def compute_mp4_status(
+    camera_dir: Path,
+    threshold_bytes: int,
+    calculate_duration: bool = True,
+    mp4_root: Path | None = None,
+    ignored_files: set[str] | None = None,
+) -> tuple[int, int | None, float | None, str | None]:
     """Return (status, size_mb, duration_minutes, path) for MP4 files in camera directory.
 
     Path will be relative starting from 'Recordings' if mp4_root is provided.
@@ -370,6 +445,8 @@ def compute_mp4_status(camera_dir: Path, threshold_bytes: int, calculate_duratio
     found_any = False
 
     for p in camera_dir.rglob("*.mp4"):
+        if ignored_files and _path_identity(p) in ignored_files:
+            continue
         if p.is_file():
             found_any = True
             try:
@@ -407,13 +484,17 @@ def compute_mp4_status(camera_dir: Path, threshold_bytes: int, calculate_duratio
     return status, size_mb, duration, file_path
 
 
-def delete_small_mp4s(root: Path, threshold_mb: int) -> tuple[int, float]:
-    """Delete MP4 files smaller than threshold_mb."""
+def delete_small_mp4s(root: Path, threshold_mb: int, dry_run: bool = False) -> tuple[int, float, set[str]]:
+    """Delete or preview MP4 files smaller than threshold_mb."""
     threshold_bytes = threshold_mb * 1024 * 1024
     deleted_count = 0
     total_size_mb = 0.0
+    affected_files: set[str] = set()
 
-    print(f"[INFO] Scanning for MP4 files < {threshold_mb}MB to delete...")
+    if dry_run:
+        print(f"[INFO] Scanning for MP4 files < {threshold_mb} MB that would be deleted...")
+    else:
+        print(f"[INFO] Scanning for MP4 files < {threshold_mb} MB to delete...")
 
     for mp4_file in root.rglob("*.mp4"):
         if mp4_file.is_file():
@@ -421,12 +502,19 @@ def delete_small_mp4s(root: Path, threshold_mb: int) -> tuple[int, float]:
                 size_bytes = mp4_file.stat().st_size
                 if size_bytes < threshold_bytes:
                     size_mb = size_bytes / (1024 * 1024)
+                    if dry_run:
+                        print(f"[WOULD DELETE] {mp4_file.name} ({size_mb:.1f}MB)")
+                        deleted_count += 1
+                        total_size_mb += size_mb
+                        affected_files.add(_path_identity(mp4_file))
+                        continue
                     for attempt in range(3):
                         try:
                             mp4_file.unlink()
                             print(f"[DELETED] {mp4_file.name} ({size_mb:.1f}MB)")
                             deleted_count += 1
                             total_size_mb += size_mb
+                            affected_files.add(_path_identity(mp4_file))
                             break
                         except PermissionError:
                             if attempt < 2:
@@ -436,30 +524,28 @@ def delete_small_mp4s(root: Path, threshold_mb: int) -> tuple[int, float]:
             except OSError:
                 continue
 
-    if deleted_count > 0:
+    if deleted_count > 0 and dry_run:
+        print(f"[INFO] Would delete {deleted_count} small MP4 files, freeing {total_size_mb:.1f}MB")
+    elif deleted_count > 0:
         print(f"[INFO] Deleted {deleted_count} small MP4 files, freed {total_size_mb:.1f}MB")
     else:
-        print(f"[INFO] No MP4 files smaller than {threshold_mb}MB found")
+        print(f"[INFO] No MP4 files smaller than {threshold_mb} MB found")
 
-    return deleted_count, total_size_mb
+    return deleted_count, total_size_mb, affected_files
 
 
 def update_mp4_status(db_path: str, mp4_root: Path, threshold_mb: int,
                       skip_duration: bool = False, skip_delete: bool = False,
                       delete_small_mb: int = 10, dry_run: bool = False) -> dict:
     """Update mp4_status table and return statistics."""
-    print("\n" + "="*60)
-    print("UPDATING MP4 STATUS")
-    print("="*60)
+    _section("MP4 inventory")
 
     threshold_bytes = threshold_mb * 1024 * 1024
-    if dry_run and not skip_duration:
-        skip_duration = True
-        print("[INFO] Dry run: skipping MP4 duration probing for a fast preview")
 
-    # Delete small files first
-    if not skip_delete and not dry_run:
-        delete_small_mp4s(mp4_root, delete_small_mb)
+    # Delete small files first; dry-run previews deletion and scans as if applied.
+    ignored_mp4s: set[str] = set()
+    if not skip_delete:
+        _, _, ignored_mp4s = delete_small_mp4s(mp4_root, delete_small_mb, dry_run=dry_run)
         print()
 
     # Check ffprobe availability
@@ -473,25 +559,26 @@ def update_mp4_status(db_path: str, mp4_root: Path, threshold_mb: int,
             print("[WARN] ffprobe not found - skipping duration calculation")
             skip_duration = True
 
-    # Pre-fetch existing data for smart mode (only read managed columns)
+    # Pre-fetch existing data for comparison, smart duration mode, and
+    # preserving duration values when --skip-duration is used.
     existing_all = {}
-    if not dry_run and not skip_duration:
-        conn = sqlite3.connect(db_path)
-        conn.execute("PRAGMA foreign_keys = ON")
-        try:
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        if not dry_run:
             ensure_mp4_table_exists(conn)
-            cur = conn.cursor()
-            try:
-                # Only read columns this script manages
-                cur.execute('SELECT recording_date, case_no, camera_name, size_mb, duration_minutes, path FROM "mp4_status"')
-                for row in cur.fetchall():
-                    existing_all[(row[0], row[1], row[2])] = (row[3], row[4], row[5])
-                if existing_all:
-                    print(f"[INFO] Smart mode: Will only calculate duration for new/changed files")
-            except sqlite3.OperationalError:
-                pass
-        finally:
-            conn.close()
+        cur = conn.cursor()
+        try:
+            # Only read columns this script manages
+            cur.execute('SELECT recording_date, case_no, camera_name, size_mb, duration_minutes, path FROM "mp4_status"')
+            for row in cur.fetchall():
+                existing_all[(row[0], row[1], row[2])] = (row[3], row[4], row[5])
+            if existing_all and not skip_duration:
+                print(f"[INFO] Smart mode: Will only calculate duration for new/changed files")
+        except sqlite3.OperationalError:
+            pass
+    finally:
+        conn.close()
 
     # Scan MP4 files
     updates = {}
@@ -519,27 +606,51 @@ def update_mp4_status(db_path: str, mp4_root: Path, threshold_mb: int,
                 should_calc_duration = not skip_duration
                 if should_calc_duration and key in existing_all:
                     # Quick size check first
-                    status_quick, size_mb_quick, _, path_quick = compute_mp4_status(cam_path, threshold_bytes, calculate_duration=False, mp4_root=mp4_root)
+                    status_quick, size_mb_quick, _, path_quick = compute_mp4_status(
+                        cam_path,
+                        threshold_bytes,
+                        calculate_duration=False,
+                        mp4_root=mp4_root,
+                        ignored_files=ignored_mp4s,
+                    )
                     old_size, old_duration, old_path = existing_all[key]
 
                     if size_mb_quick == old_size and old_duration is not None:
                         status, size_mb, duration, file_path = status_quick, size_mb_quick, old_duration, path_quick
                     else:
-                        status, size_mb, duration, file_path = compute_mp4_status(cam_path, threshold_bytes, calculate_duration=True, mp4_root=mp4_root)
+                        status, size_mb, duration, file_path = compute_mp4_status(
+                            cam_path,
+                            threshold_bytes,
+                            calculate_duration=True,
+                            mp4_root=mp4_root,
+                            ignored_files=ignored_mp4s,
+                        )
                         if duration is not None:
                             duration_calculated += 1
+                elif not should_calc_duration and key in existing_all:
+                    status, size_mb, _, file_path = compute_mp4_status(
+                        cam_path,
+                        threshold_bytes,
+                        calculate_duration=False,
+                        mp4_root=mp4_root,
+                        ignored_files=ignored_mp4s,
+                    )
+                    _, duration, _ = existing_all[key]
                 else:
-                    status, size_mb, duration, file_path = compute_mp4_status(cam_path, threshold_bytes, calculate_duration=should_calc_duration, mp4_root=mp4_root)
+                    status, size_mb, duration, file_path = compute_mp4_status(
+                        cam_path,
+                        threshold_bytes,
+                        calculate_duration=should_calc_duration,
+                        mp4_root=mp4_root,
+                        ignored_files=ignored_mp4s,
+                    )
                     if duration is not None:
                         duration_calculated += 1
 
                 updates[key] = (status, size_mb, duration, file_path)
                 total_processed += 1
 
-                if total_processed % 20 == 0:
-                    print(f"  Processed {total_processed} cameras...", end='\r')
-
-    print(f"  Processed {total_processed} cameras.    ")
+    print(f"[OK] Scanned {total_processed:,} MP4 camera entries.")
     if not skip_duration:
         print(f"[INFO] Calculated duration for {duration_calculated} files")
 
@@ -547,17 +658,13 @@ def update_mp4_status(db_path: str, mp4_root: Path, threshold_mb: int,
         print("[WARN] No MP4 files found")
         return {'total': 0, 'new': 0, 'changed': 0}
 
-    print(f"[INFO] Found {len(updates)} camera entries")
-
-    if dry_run:
-        return {'total': len(updates), 'new': 0, 'changed': 0}
-
     # Check for changes (only read managed columns)
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = ON")
     try:
         if not existing_all:
-            ensure_mp4_table_exists(conn)
+            if not dry_run:
+                ensure_mp4_table_exists(conn)
             cur = conn.cursor()
             try:
                 # Only read columns this script manages
@@ -579,33 +686,9 @@ def update_mp4_status(db_path: str, mp4_root: Path, threshold_mb: int,
                 if old_size != size_mb or old_duration != duration or old_path != file_path:
                     changed_entries.append((recording_date, case_no, camera_name, status, old_size, size_mb, old_duration, duration, old_path, file_path))
 
-        # Show detailed changes
-        if new_entries:
-            print(f"\n  [NEW] {len(new_entries)} new entries:")
-            for recording_date, case_no, camera_name, status, size_mb, duration, file_path in new_entries[:10]:
-                status_label = {1: ">=200MB", 2: "<200MB", 3: "Missing"}.get(status, str(status))
-                size_str = f"{size_mb}MB" if size_mb is not None else "NULL"
-                duration_str = f"{duration:.1f}min" if duration is not None else "N/A"
-                print(f"    {recording_date} Case{case_no} {camera_name}: {status_label} ({size_str}, {duration_str})")
-            if len(new_entries) > 10:
-                print(f"    ... and {len(new_entries) - 10} more")
-
-        if changed_entries:
-            print(f"\n  [CHANGED] {len(changed_entries)} changed entries:")
-            for recording_date, case_no, camera_name, status, old_size, new_size, old_duration, new_duration, old_path, new_path in changed_entries[:10]:
-                status_label = {1: ">=200MB", 2: "<200MB", 3: "Missing"}.get(status, str(status))
-                old_size_str = f"{old_size}MB" if old_size is not None else "NULL"
-                new_size_str = f"{new_size}MB" if new_size is not None else "NULL"
-                old_dur_str = f"{old_duration:.1f}min" if old_duration is not None else "N/A"
-                new_dur_str = f"{new_duration:.1f}min" if new_duration is not None else "N/A"
-                print(f"    {recording_date} Case{case_no} {camera_name}: {status_label}")
-                print(f"      Size: {old_size_str} -> {new_size_str}, Duration: {old_dur_str} -> {new_dur_str}")
-            if len(changed_entries) > 10:
-                print(f"    ... and {len(changed_entries) - 10} more")
-
         unchanged = len(updates) - len(new_entries) - len(changed_entries)
-        if unchanged > 0:
-            print(f"\n  [UNCHANGED] {unchanged} entries")
+        _print_inventory_counts("MP4", len(updates), len(new_entries), len(changed_entries))
+        _print_mp4_changes(new_entries, changed_entries)
 
         return {
             'total': len(updates),
@@ -658,16 +741,23 @@ Examples:
 
     args = ap.parse_args()
 
-    print("\n" + "="*60)
-    print("COMBINED STATUS UPDATER")
-    print("="*60)
-    print(f"Database: {args.db}")
-    print(f"SEQ Root: {args.seq_root}")
-    print(f"MP4 Root: {args.mp4_root}")
-    print(f"Threshold: {args.threshold_mb}MB")
-    if args.dry_run:
-        print("[DRY RUN MODE - No changes will be made]")
-    print("="*60)
+    _section("Plan")
+    print("[DRY RUN] No database writes or file deletes will be performed." if args.dry_run else "[APPLY] Database writes are enabled.")
+    print(f"DB:       {args.db}")
+    print(f"SEQ root: {args.seq_root}")
+    print(f"MP4 root: {args.mp4_root}")
+    print(f"JUNK threshold:       {args.threshold_mb} MB")
+    print(f"Small MP4 threshold:  {args.delete_small_mb} MB")
+    if args.skip_seq:
+        print("[SKIP] SEQ inventory disabled")
+    if args.skip_mp4:
+        print("[SKIP] MP4 inventory disabled")
+    if args.skip_duration:
+        print("[SKIP] MP4 duration probing disabled; existing durations are preserved")
+    if args.skip_delete:
+        print("[SKIP] Small MP4 delete step disabled")
+    if args.skip_analysis:
+        print("[SKIP] SEQ field analysis disabled")
 
     start_time = time.time()
 
@@ -699,145 +789,91 @@ Examples:
     else:
         print("\n[SKIP] MP4 status update skipped")
 
-    # Summary
-    print("\n" + "="*60)
-    print("SUMMARY")
-    print("="*60)
-
     total_changes = 0
 
     if seq_stats:
-        print(f"\nSEQ Status:")
-        print(f"  Total: {seq_stats['total']}")
-        print(f"  New: {seq_stats.get('new', 0)}")
-        print(f"  Changed: {seq_stats.get('changed', 0)}")
-        print(f"  Unchanged: {seq_stats['total'] - seq_stats.get('new', 0) - seq_stats.get('changed', 0)}")
         total_changes += seq_stats.get('new', 0) + seq_stats.get('changed', 0)
 
-        # Show some changes
-        if seq_stats.get('new_entries'):
-            print(f"\n  Recent new SEQ entries:")
-            for recording_date, case_no, camera_name, status, size_mb, file_path in seq_stats['new_entries']:
-                status_label = {1: ">=200MB", 2: "<200MB", 3: "Missing"}.get(status, str(status))
-                size_str = f"{size_mb}MB" if size_mb is not None else "NULL"
-                print(f"    + {recording_date} Case{case_no} {camera_name}: {status_label} ({size_str})")
-
-        if seq_stats.get('changed_entries'):
-            print(f"\n  Recent changed SEQ entries: ")
-            for recording_date, case_no, camera_name, status, old_size, new_size, old_path, new_path in seq_stats['changed_entries']:
-                status_label = {1: ">=200MB", 2: "<200MB", 3: "Missing"}.get(status, str(status))
-                old_str = f"{old_size}MB" if old_size is not None else "NULL"
-                new_str = f"{new_size}MB" if new_size is not None else "NULL"
-                print(f"    ~ {recording_date} Case{case_no} {camera_name}: {old_str} -> {new_str}")
-
     if mp4_stats:
-        print(f"\nMP4 Status:")
-        print(f"  Total: {mp4_stats['total']}")
-        print(f"  New: {mp4_stats.get('new', 0)}")
-        print(f"  Changed: {mp4_stats.get('changed', 0)}")
-        print(f"  Unchanged: {mp4_stats['total'] - mp4_stats.get('new', 0) - mp4_stats.get('changed', 0)}")
         total_changes += mp4_stats.get('new', 0) + mp4_stats.get('changed', 0)
 
-        # Show some changes
-        if mp4_stats.get('new_entries'):
-            print(f"\n  Recent new MP4 entries :")
-            for recording_date, case_no, camera_name, status, size_mb, duration, file_path in mp4_stats['new_entries']:
-                status_label = {1: ">=200MB", 2: "<200MB", 3: "Missing"}.get(status, str(status))
-                size_str = f"{size_mb}MB" if size_mb is not None else "NULL"
-                duration_str = f"{duration:.1f}min" if duration is not None else "N/A"
-                print(f"    + {recording_date} Case{case_no} {camera_name}: {status_label} ({size_str}, {duration_str})")
-
-        if mp4_stats.get('changed_entries'):
-            print(f"\n  Recent changed MP4 entries :")
-            for recording_date, case_no, camera_name, status, old_size, new_size, old_duration, new_duration, old_path, new_path in mp4_stats['changed_entries']:
-                old_size_str = f"{old_size}MB" if old_size is not None else "NULL"
-                new_size_str = f"{new_size}MB" if new_size is not None else "NULL"
-                old_dur_str = f"{old_duration:.1f}min" if old_duration is not None else "N/A"
-                new_dur_str = f"{new_duration:.1f}min" if new_duration is not None else "N/A"
-                print(f"    ~ {recording_date} Case{case_no} {camera_name}")
-                print(f"      Size: {old_size_str} -> {new_size_str}, Duration: {old_dur_str} -> {new_dur_str}")
-
-    elapsed = time.time() - start_time
-    print(f"\nTotal changes to apply: {total_changes}")
-    print(f"Time elapsed: {elapsed:.1f} seconds")
-    print("="*60)
+    _section("Apply changes")
+    if args.dry_run:
+        print(f"[DRY RUN] Would apply {total_changes:,} database change(s).")
+        print("[DRY RUN] No database writes performed.")
+    else:
+        print(f"[APPLY] Planned database changes: {total_changes:,}")
 
     # Apply updates if not dry run
     if not args.dry_run and (seq_stats or mp4_stats):
         if total_changes == 0:
-            print("\n[INFO] No changes detected. Database is already up to date.")
-            return
+            print("[OK] No inventory changes detected. Database is already up to date.")
+        else:
+            # Confirmation
+            if not args.auto_confirm:
+                print(f"\n[CONFIRM] This will update {total_changes} entries in the database.")
+                response = input("Do you want to proceed? (y/N): ").strip().lower()
+                if response not in ['y', 'yes']:
+                    print("[CANCELLED] Database update cancelled by user.")
+                    return
 
-        # Confirmation
-        if not args.auto_confirm:
-            print(f"\n[CONFIRM] This will update {total_changes} entries in the database.")
-            response = input("Do you want to proceed? (y/N): ").strip().lower()
-            if response not in ['y', 'yes']:
-                print("[CANCELLED] Database update cancelled by user.")
-                return
+            # Write to database
+            conn = sqlite3.connect(args.db)
+            conn.execute("PRAGMA foreign_keys = ON")
+            try:
+                ensure_seq_table_exists(conn)
+                ensure_mp4_table_exists(conn)
+                cur = conn.cursor()
 
-        # Write to database
-        conn = sqlite3.connect(args.db)
-        conn.execute("PRAGMA foreign_keys = ON")
-        try:
-            ensure_seq_table_exists(conn)
-            ensure_mp4_table_exists(conn)
-            cur = conn.cursor()
+                # Write SEQ updates (only updates managed columns: size_mb, path)
+                if seq_stats and 'updates' in seq_stats:
+                    for (recording_date, case_no, camera_name), (status, size_mb, file_path) in seq_stats['updates'].items():
+                        cur.execute('''
+                            INSERT INTO "seq_status"
+                            (recording_date, case_no, camera_name, size_mb, path)
+                            VALUES (?, ?, ?, ?, ?)
+                            ON CONFLICT(recording_date, case_no, camera_name)
+                            DO UPDATE SET
+                                size_mb = excluded.size_mb,
+                                path = excluded.path
+                        ''', (recording_date, case_no, camera_name, size_mb, file_path))
 
-            # Write SEQ updates (only updates managed columns: size_mb, path)
-            if seq_stats and 'updates' in seq_stats:
-                for (recording_date, case_no, camera_name), (status, size_mb, file_path) in seq_stats['updates'].items():
-                    cur.execute('''
-                        INSERT INTO "seq_status"
-                        (recording_date, case_no, camera_name, size_mb, path)
-                        VALUES (?, ?, ?, ?, ?)
-                        ON CONFLICT(recording_date, case_no, camera_name)
-                        DO UPDATE SET
-                            size_mb = excluded.size_mb,
-                            path = excluded.path
-                    ''', (recording_date, case_no, camera_name, size_mb, file_path))
+                # Write MP4 updates (only updates managed columns: size_mb, duration_minutes, path)
+                if mp4_stats and 'updates' in mp4_stats:
+                    for (recording_date, case_no, camera_name), (status, size_mb, duration, file_path) in mp4_stats['updates'].items():
+                        # Use INSERT ... ON CONFLICT DO UPDATE to only update managed columns
+                        # This preserves all other columns (present and future)
+                        cur.execute('''
+                            INSERT INTO "mp4_status"
+                            (recording_date, case_no, camera_name, size_mb, duration_minutes, path)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(recording_date, case_no, camera_name)
+                            DO UPDATE SET
+                                size_mb = excluded.size_mb,
+                                duration_minutes = excluded.duration_minutes,
+                                path = excluded.path
+                        ''', (recording_date, case_no, camera_name, size_mb, duration, file_path))
 
-            # Write MP4 updates (only updates managed columns: size_mb, duration_minutes, path)
-            if mp4_stats and 'updates' in mp4_stats:
-                for (recording_date, case_no, camera_name), (status, size_mb, duration, file_path) in mp4_stats['updates'].items():
-                    # Use INSERT ... ON CONFLICT DO UPDATE to only update managed columns
-                    # This preserves all other columns (present and future)
-                    cur.execute('''
-                        INSERT INTO "mp4_status"
-                        (recording_date, case_no, camera_name, size_mb, duration_minutes, path)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(recording_date, case_no, camera_name)
-                        DO UPDATE SET
-                            size_mb = excluded.size_mb,
-                            duration_minutes = excluded.duration_minutes,
-                            path = excluded.path
-                    ''', (recording_date, case_no, camera_name, size_mb, duration, file_path))
+                conn.commit()
 
-            conn.commit()
-
-            print(f"\n{'='*60}")
-            print("[SUCCESS] Database updated!")
-            print("="*60)
-            if seq_stats and seq_stats.get('updates'):
-                seq_new = seq_stats.get('new', 0)
-                seq_changed = seq_stats.get('changed', 0)
-                print(f"SEQ: {seq_new} new + {seq_changed} changed = {seq_new + seq_changed} updated")
-            if mp4_stats and mp4_stats.get('updates'):
-                mp4_new = mp4_stats.get('new', 0)
-                mp4_changed = mp4_stats.get('changed', 0)
-                print(f"MP4: {mp4_new} new + {mp4_changed} changed = {mp4_new + mp4_changed} updated")
-            print(f"Total: {total_changes} entries written to database")
-            print("="*60)
-        finally:
-            conn.close()
+                print("[OK] Database updated.")
+                if seq_stats and seq_stats.get('updates'):
+                    seq_new = seq_stats.get('new', 0)
+                    seq_changed = seq_stats.get('changed', 0)
+                    print(f"     SEQ: {seq_new:,} new + {seq_changed:,} changed = {seq_new + seq_changed:,} updated")
+                if mp4_stats and mp4_stats.get('updates'):
+                    mp4_new = mp4_stats.get('new', 0)
+                    mp4_changed = mp4_stats.get('changed', 0)
+                    print(f"     MP4: {mp4_new:,} new + {mp4_changed:,} changed = {mp4_new + mp4_changed:,} updated")
+                print(f"     Total written: {total_changes:,}")
+            finally:
+                conn.close()
 
     # ------------------------------------------------------------------
     # SEQ field analysis (incremental — only new files)
     # ------------------------------------------------------------------
     if not args.dry_run and not args.skip_analysis:
-        print("\n" + "="*60)
-        print("SEQ FIELD ANALYSIS")
-        print("="*60)
+        _section("SEQ analysis")
         if not seq_analysis_available:
             print("[SKIP] analyze_seq_fields not found — skipping")
         else:
@@ -848,12 +884,30 @@ Examples:
                 assert _seq_existing_keys is not None
                 assert _analyze_seq_dir is not None
                 assert _write_seq_analysis is not None
+                assert _seq_canonical_map is not None
                 skip_keys = _seq_existing_keys(args.db)
                 if skip_keys:
-                    print(f"[INFO] {len(skip_keys)} entries already in DB — scanning only new files")
-                df = _analyze_seq_dir(seq_root_path, skip_keys=skip_keys)
+                    print(f"[INFO] {len(skip_keys)} entries already in DB - scanning only new files")
+                canonical_map = _seq_canonical_map(args.db)
+                df = _analyze_seq_dir(
+                    seq_root_path,
+                    skip_keys=skip_keys,
+                    canonical_camera_map=canonical_map,
+                )
                 if not df.empty:
                     _write_seq_analysis(df, args.db)
+                else:
+                    print("[OK] No new SEQ files needed analysis.")
+    elif args.dry_run:
+        _section("SEQ analysis")
+        print("[DRY RUN] Skipped; analysis writes to seq_enriched only during real runs.")
+    else:
+        _section("SEQ analysis")
+        print("[SKIP] SEQ field analysis disabled.")
+
+    elapsed = time.time() - start_time
+    _section("Done")
+    print(f"[OK] Finished in {elapsed:.1f} seconds.")
 
 
 if __name__ == "__main__":

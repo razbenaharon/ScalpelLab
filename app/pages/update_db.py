@@ -119,7 +119,7 @@ def update_db_page() -> None:
         def start_update(dry_run: bool) -> None:
             if not _validate_inputs():
                 return
-            name = "Update DB Dry Run" if dry_run else "Update DB"
+            name = "Preview DB Changes" if dry_run else "Update DB + IDX"
             if not manager.start(
                 name,
                 _args(dry_run),
@@ -130,7 +130,7 @@ def update_db_page() -> None:
             ui.notify(f"{name} started.", type="positive")
 
         with ui.row().classes("items-center gap-2"):
-            dry_button = ui.button("Dry run", icon="search", on_click=lambda: start_update(True)).props("color=primary")
+            dry_button = ui.button("Preview changes", icon="search", on_click=lambda: start_update(True)).props("color=primary")
             update_button = ui.button(
                 "Update database",
                 icon="sync",
