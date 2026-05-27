@@ -357,6 +357,11 @@ def _load_camera_canonical_map(db_path: str) -> dict[tuple[str, int, str], str]:
         return {}
 
 
+def load_camera_canonical_map(db_path: str) -> dict[tuple[str, int, str], str]:
+    """Public wrapper used by callers that want camera-name case folding."""
+    return _load_camera_canonical_map(db_path)
+
+
 # ---------------------------------------------------------------------------
 # Directory scan
 # ---------------------------------------------------------------------------
@@ -417,7 +422,7 @@ def analyze_directory(
         skipped_db = 0
 
     if not seq_files:
-        msg = "[✓] No new .seq files to process"
+        msg = "[OK] No new .seq files to process"
         if skipped_db:
             msg += f" ({skipped_db} already in DB)"
         print(msg)
@@ -430,7 +435,7 @@ def analyze_directory(
     if skipped_db:
         suffix_parts.append(f"{skipped_db} already in DB")
     suffix = f"  ({', '.join(suffix_parts)})" if suffix_parts else ""
-    print(f"Found {total} new .seq files — scanning …{suffix}")
+    print(f"Found {total} new .seq files - scanning...{suffix}")
 
     rows = []
     substitutions: list[tuple[str, str, str, str]] = []  # (date, case_no, raw_cam, canon_cam)
@@ -587,7 +592,7 @@ def write_to_db(df: pd.DataFrame, db_path: str) -> None:
     writable = df[df["recording_date"].notna() & df["case_no"].notna() & df["camera_name"].notna()].copy()
     skipped  = len(df) - len(writable)
     if skipped:
-        print(f"  [WARN] {skipped} row(s) skipped — could not parse recording_date/case_no/camera_name from path")
+        print(f"  [WARN] {skipped} row(s) skipped: could not parse recording_date/case_no/camera_name from path")
 
     if writable.empty:
         print("  Nothing to write.")
@@ -654,14 +659,22 @@ def write_to_db(df: pd.DataFrame, db_path: str) -> None:
             cur.execute(sql, values)
             rows_written += 1
         conn.commit()
-        print(f"  Wrote {rows_written} rows → {SEQ_ANALYSIS_TABLE} in {db_path}")
+        if rows_written:
+            print(f"  [OK] Wrote {rows_written} row(s) to {SEQ_ANALYSIS_TABLE}.")
+        elif rows_missing_parent:
+            print(
+                f"  [WARN] Wrote 0 rows to {SEQ_ANALYSIS_TABLE}: "
+                f"all {len(rows_missing_parent)} candidate row(s) were skipped."
+            )
+        else:
+            print(f"  [OK] Nothing new to write to {SEQ_ANALYSIS_TABLE}.")
 
         if rows_collided:
             print(f"  [WARN] {len(rows_collided)} row(s) overwrote existing seq_enriched entries:")
             for k in rows_collided:
                 print(f"    {k}")
         if rows_missing_parent:
-            print(f"  [WARN] {len(rows_missing_parent)} row(s) skipped — no matching seq_status parent:")
+            print(f"  [WARN] {len(rows_missing_parent)} row(s) skipped: no matching seq_status parent.")
             for k, f in rows_missing_parent:
                 print(f"    {k}  file={f}")
     finally:
