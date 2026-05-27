@@ -29,6 +29,25 @@ model.
 - `inspect_osnet.py`: prints OSNet layer names, parameter counts, and feature
   shapes.
 
+## Artifact Layout
+
+Heavy SimCLR artifacts are stored outside the repo under
+`F:\Room_8_Data\SIMCLR`. The repo keeps only lightweight context, reports,
+metrics, plots, and DB summaries.
+
+- External heavyweight root: `F:\Room_8_Data\SIMCLR\experiments`
+- `CV/SimCLR_reid/1_OPTUNA_15_EPOCH`: lightweight record for the 15-epoch Optuna search.
+- `CV/SimCLR_reid/2_LR_SWEEP`: lightweight record for the 50-epoch LR sweep.
+
+Canonical backbone paths:
+
+- `1_OPTUNA_15_EPOCH`: `F:\Room_8_Data\SIMCLR\experiments\1_OPTUNA_15_EPOCH\trial_0074_best_backbone.pt`
+- `2_LR_SWEEP`: `F:\Room_8_Data\SIMCLR\experiments\2_LR_SWEEP\<run>\best_backbone.pt`
+
+Do not commit `.pt` files or full optimizer checkpoints from SimCLR
+experiments. Keep only report/context files, CSV/JSON summaries, plots, and
+small SQLite metric databases in the repo.
+
 ## Dependencies
 
 Install the project dependencies from the repository root:
@@ -216,6 +235,10 @@ Each run directory may contain:
 
 `best_checkpoint.pt` includes model, optimizer, AMP scaler, scheduler, epoch,
 loss, and config state.
+
+For long-running experiments, copy only lightweight summaries back into the repo
+experiment folder and move the selected `best_backbone.pt` to
+`F:\Room_8_Data\SIMCLR\experiments\<experiment_name>`.
 
 ## Validate
 

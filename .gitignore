@@ -38,3 +38,4 @@ logs/
 # SimCLR generated run outputs
 CV/SimCLR_reid/simclr_output/
 CV/SimCLR_reid/test_output_dry_run/
+experiments_output/

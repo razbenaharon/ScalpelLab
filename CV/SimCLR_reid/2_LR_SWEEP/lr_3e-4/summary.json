@@ -1,0 +1,20 @@
+{
+  "run_name": "lr_3e-4",
+  "config_hash": "b15258aa59cce2a1",
+  "seed": 42,
+  "status": "completed",
+  "unstable_reason": null,
+  "best_epoch": 45,
+  "best_val_loss": 2.7341207595971913,
+  "final_train_loss": 0.12580161983243734,
+  "final_val_loss": 2.7387619412862336,
+  "completed_epochs": 50,
+  "downstream": null,
+  "wall_clock_sec": 58747.08307349996,
+  "gpu_info": {
+    "cuda_available": true,
+    "device_count": 1,
+    "device_name": "NVIDIA RTX A2000 12GB",
+    "total_memory_gb": 11.99
+  }
+}

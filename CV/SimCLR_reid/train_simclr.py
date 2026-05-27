@@ -6,6 +6,7 @@ Default mode launches a resumable Optuna study backed by SQLite. Use
 """
 
 import argparse
+import csv
 import gc
 import json
 import math
@@ -30,6 +31,10 @@ try:
     import optuna
 except ImportError:
     optuna = None
+
+from _metrics_db import upsert_epoch
+from _seeding import DEFAULT_SEED, set_seed
+from _stability import StabilityGuard, UnstableRunError
 
 
 # ============================================================================
@@ -68,6 +73,8 @@ DEFAULT_CONFIG = {
     "weight_decay": 1e-4,
     "warmup_epochs": 5,
     "accumulation_steps": 1,
+    "seed": DEFAULT_SEED,
+    "deterministic": True,
 
     # SimCLR
     "temperature": 0.07,
@@ -85,6 +92,14 @@ DEFAULT_CONFIG = {
     # OSNet AIN structure: conv1, maxpool, conv2, pool2, conv3, pool3, conv4, conv5.
     "freeze_early_layers": True,
     "freeze_layers": ["conv1", "maxpool", "conv2", "pool2"],
+    "staged_unfreeze": False,
+
+    # Early-abort stability guard
+    "stability_warmup_epochs": 3,
+    "stability_nan_inf": True,
+    "stability_explosion_factor": 5.0,
+    "stability_absolute_max": 50.0,
+    "stability_max_oom_retries": 3,
 }
 
 
@@ -655,7 +670,180 @@ def _clear_cuda_after_error():
     gc.collect()
 
 
-def run_training(config, dataset_dir, output_dir, run_name="run", trial=None, patience=10):
+METRICS_HEADER = ["epoch", "train_loss", "val_loss", "lr"]
+
+
+def _ensure_metrics_csv(metrics_path, fresh=False):
+    metrics_path = Path(metrics_path)
+    if fresh or not metrics_path.exists():
+        with metrics_path.open("w", newline="", encoding="utf-8") as file:
+            writer = csv.writer(file)
+            writer.writerow(METRICS_HEADER)
+
+
+def _append_metrics_csv(metrics_path, epoch, train_loss, val_loss, lr):
+    with Path(metrics_path).open("a", newline="", encoding="utf-8") as file:
+        writer = csv.writer(file)
+        writer.writerow([epoch, train_loss, val_loss, lr])
+
+
+def _load_metric_histories(metrics_path):
+    train_loss_history = []
+    val_loss_history = []
+    lr_history = []
+    metrics_path = Path(metrics_path)
+    if not metrics_path.exists():
+        return train_loss_history, val_loss_history, lr_history
+
+    with metrics_path.open("r", newline="", encoding="utf-8") as file:
+        for row in csv.DictReader(file):
+            try:
+                train_loss_history.append(float(row["train_loss"]))
+                val_loss_history.append(float(row["val_loss"]))
+                lr_history.append(float(row["lr"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+    return train_loss_history, val_loss_history, lr_history
+
+
+def _capture_rng_state(train_generator=None):
+    rng_state = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+        "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+    }
+    if train_generator is not None:
+        rng_state["train_generator"] = train_generator.get_state()
+    return rng_state
+
+
+def _restore_rng_state(rng_state, train_generator=None):
+    if not rng_state:
+        return
+    if "python" in rng_state:
+        random.setstate(rng_state["python"])
+    if "numpy" in rng_state:
+        np.random.set_state(rng_state["numpy"])
+    if "torch" in rng_state:
+        torch.set_rng_state(rng_state["torch"])
+    if torch.cuda.is_available() and rng_state.get("cuda") is not None:
+        torch.cuda.set_rng_state_all(rng_state["cuda"])
+    if train_generator is not None and rng_state.get("train_generator") is not None:
+        train_generator.set_state(rng_state["train_generator"])
+
+
+def _torch_load_checkpoint(path, map_location):
+    try:
+        return torch.load(path, map_location=map_location, weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location=map_location)
+
+
+def _write_curves(run_dir, train_loss_history, val_loss_history, lr_history):
+    if not train_loss_history and not val_loss_history:
+        return
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as exc:
+        print(f"[Plot] Could not write curves.png: {exc}")
+        return
+
+    epochs = list(range(1, max(len(train_loss_history), len(val_loss_history)) + 1))
+    fig, ax_loss = plt.subplots(figsize=(9, 5))
+    if train_loss_history:
+        ax_loss.plot(epochs[: len(train_loss_history)], train_loss_history, label="train_loss")
+    if val_loss_history:
+        ax_loss.plot(epochs[: len(val_loss_history)], val_loss_history, label="val_loss")
+    ax_loss.set_xlabel("Epoch")
+    ax_loss.set_ylabel("NT-Xent loss")
+    ax_loss.grid(True, alpha=0.25)
+
+    ax_lr = ax_loss.twinx()
+    if lr_history:
+        ax_lr.plot(epochs[: len(lr_history)], lr_history, color="tab:green", alpha=0.5, label="lr")
+    ax_lr.set_ylabel("Learning rate")
+
+    handles, labels = ax_loss.get_legend_handles_labels()
+    lr_handles, lr_labels = ax_lr.get_legend_handles_labels()
+    ax_loss.legend(handles + lr_handles, labels + lr_labels, loc="best")
+    fig.tight_layout()
+    fig.savefig(Path(run_dir) / "curves.png", dpi=160)
+    plt.close(fig)
+
+
+def _set_backbone_layers_requires_grad(model, layer_names, requires_grad):
+    changed = 0
+    layer_names = list(layer_names or [])
+    if not layer_names:
+        return changed
+    for name, param in model.backbone.named_parameters():
+        if any(name.startswith(layer_name) for layer_name in layer_names):
+            param.requires_grad = requires_grad
+            changed += param.numel()
+    state = "trainable" if requires_grad else "frozen"
+    print(f"[StagedUnfreeze] Marked {changed:,} stem params as {state}: {layer_names}")
+    return changed
+
+
+def _save_training_checkpoint(
+    checkpoint_path,
+    model,
+    optimizer,
+    scheduler,
+    scaler,
+    epoch,
+    config,
+    best_val_loss,
+    best_epoch,
+    train_loss,
+    val_loss,
+    train_loss_history,
+    val_loss_history,
+    lr_history,
+    patience_counter,
+    no_step_epochs,
+    stopped_early,
+    train_generator,
+):
+    torch.save(
+        {
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
+            "scaler_state_dict": scaler.state_dict(),
+            "loss": best_val_loss,
+            "best_val_loss": best_val_loss,
+            "best_epoch": best_epoch,
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "config": config,
+            "train_loss_history": train_loss_history,
+            "val_loss_history": val_loss_history,
+            "lr_history": lr_history,
+            "patience_counter": patience_counter,
+            "no_step_epochs": no_step_epochs,
+            "stopped_early": stopped_early,
+            "rng_state": _capture_rng_state(train_generator),
+        },
+        checkpoint_path,
+    )
+
+
+def run_training(
+    config,
+    dataset_dir,
+    output_dir,
+    run_name="run",
+    trial=None,
+    patience=10,
+    resume_from=None,
+    metrics_conn=None,
+):
     """Execute training, automatically retrying with smaller batches after CUDA OOM."""
     current_batch_size = int(config["batch_size"])
     min_batch_size = int(config.get("min_batch_size", 128))
@@ -666,15 +854,32 @@ def run_training(config, dataset_dir, output_dir, run_name="run", trial=None, pa
         attempt_config = config.copy()
         attempt_config["batch_size"] = current_batch_size
         attempt_config["attempted_batch_sizes"] = attempted_batches + [current_batch_size]
+        attempt_config["oom_retries_so_far"] = len(attempted_batches)
 
         try:
-            return _run_training_once(attempt_config, dataset_dir, output_dir, run_name, trial, patience)
+            return _run_training_once(
+                attempt_config,
+                dataset_dir,
+                output_dir,
+                run_name,
+                trial,
+                patience,
+                resume_from=resume_from,
+                metrics_conn=metrics_conn,
+                oom_retries_so_far=len(attempted_batches),
+            )
         except (torch.OutOfMemoryError, RuntimeError) as exc:
+            if isinstance(exc, UnstableRunError):
+                raise
             if not _is_cuda_oom_error(exc):
                 raise
 
             attempted_batches.append(current_batch_size)
             _clear_cuda_after_error()
+
+            max_oom_retries = int(config.get("stability_max_oom_retries", 3))
+            if len(attempted_batches) >= max_oom_retries:
+                raise UnstableRunError("repeated_oom_during_warmup") from exc
 
             next_batch_size = _reduced_batch_size(current_batch_size, min_batch_size)
             if not auto_reduce or next_batch_size is None:
@@ -693,11 +898,30 @@ def run_training(config, dataset_dir, output_dir, run_name="run", trial=None, pa
             current_batch_size = next_batch_size
 
 
-def _run_training_once(config, dataset_dir, output_dir, run_name="run", trial=None, patience=10):
+def _run_training_once(
+    config,
+    dataset_dir,
+    output_dir,
+    run_name="run",
+    trial=None,
+    patience=10,
+    resume_from=None,
+    metrics_conn=None,
+    oom_retries_so_far=0,
+):
     """Execute a SimCLR training run and return the best validation loss."""
+    config = config.copy()
+    config["seed"] = int(config.get("seed", DEFAULT_SEED))
+    config["deterministic"] = bool(config.get("deterministic", True))
+    set_seed(config["seed"], deterministic=config["deterministic"])
+    run_start_monotonic = time.monotonic()
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     run_dir = Path(output_dir) / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
+    metrics_path = run_dir / "metrics.csv"
+    fresh_metrics = resume_from is None
+    _ensure_metrics_csv(metrics_path, fresh=fresh_metrics)
 
     print(f"\n{'=' * 70}")
     print(f"TRAINING RUN: {run_name}")
@@ -712,6 +936,9 @@ def _run_training_once(config, dataset_dir, output_dir, run_name="run", trial=No
         effective_batch = config["batch_size"] * config["accumulation_steps"]
         print(f"[Train] Gradient accumulation: physical={config['batch_size']} effective={effective_batch}")
         print("[Train] NT-Xent negatives still come only from the physical mini-batch.")
+
+    train_generator = torch.Generator()
+    train_generator.manual_seed(config["seed"])
 
     transform = get_simclr_transform(
         image_size=config["image_size"],
@@ -745,6 +972,7 @@ def _run_training_once(config, dataset_dir, output_dir, run_name="run", trial=No
         weights=sample_weights,
         num_samples=len(train_dataset),
         replacement=True,
+        generator=train_generator,
     )
 
     train_batch_size = min(config["batch_size"], len(train_dataset))
@@ -759,6 +987,7 @@ def _run_training_once(config, dataset_dir, output_dir, run_name="run", trial=No
         pin_memory=pin_memory,
         drop_last=train_drop_last,
         persistent_workers=False,
+        generator=train_generator,
     )
     val_loader = DataLoader(
         val_dataset,
@@ -784,7 +1013,8 @@ def _run_training_once(config, dataset_dir, output_dir, run_name="run", trial=No
         allow_downloads=False,
     ).to(device)
 
-    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    staged_unfreeze = bool(config.get("staged_unfreeze", False))
+    trainable_params = list(model.parameters()) if staged_unfreeze else [p for p in model.parameters() if p.requires_grad]
     print(f"[Optimizer] Trainable parameters: {sum(p.numel() for p in trainable_params):,}")
 
     optimizer = torch.optim.AdamW(
@@ -812,20 +1042,66 @@ def _run_training_once(config, dataset_dir, output_dir, run_name="run", trial=No
     stopped_early = False
     train_loss_history = []
     val_loss_history = []
+    lr_history = []
+    start_epoch = 0
 
-    for epoch in range(config["epochs"]):
-        train_loss, optimizer_steps = train_one_epoch(
-            model,
-            train_loader,
-            criterion,
-            optimizer,
-            scaler,
-            device,
-            epoch,
-            config["epochs"],
-            accumulation_steps=max(1, config["accumulation_steps"]),
-        )
-        if not math.isfinite(train_loss):
+    if resume_from is not None:
+        resume_path = Path(resume_from)
+        if not resume_path.exists():
+            raise FileNotFoundError(f"Resume checkpoint not found: {resume_path}")
+        checkpoint = _torch_load_checkpoint(resume_path, map_location=device)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+        scaler.load_state_dict(checkpoint["scaler_state_dict"])
+        start_epoch = int(checkpoint.get("epoch", 0))
+        best_val_loss = float(checkpoint.get("best_val_loss", checkpoint.get("loss", best_val_loss)))
+        best_epoch = checkpoint.get("best_epoch", best_epoch)
+        train_loss_history = list(checkpoint.get("train_loss_history", []))
+        val_loss_history = list(checkpoint.get("val_loss_history", []))
+        lr_history = list(checkpoint.get("lr_history", []))
+        if not train_loss_history or not val_loss_history:
+            train_loss_history, val_loss_history, lr_history = _load_metric_histories(metrics_path)
+        patience_counter = int(checkpoint.get("patience_counter", patience_counter))
+        no_step_epochs = int(checkpoint.get("no_step_epochs", no_step_epochs))
+        stopped_early = bool(checkpoint.get("stopped_early", stopped_early))
+        _restore_rng_state(checkpoint.get("rng_state"), train_generator)
+        print(f"[Resume] Loaded {resume_path}; continuing at epoch {start_epoch + 1}.")
+
+    if staged_unfreeze and start_epoch >= int(config.get("warmup_epochs", 0)):
+        _set_backbone_layers_requires_grad(model, config.get("freeze_layers"), True)
+
+    guard = StabilityGuard(
+        warmup_epochs=config.get("stability_warmup_epochs", 3),
+        nan_inf=config.get("stability_nan_inf", True),
+        explosion_factor=config.get("stability_explosion_factor", 5.0),
+        absolute_max=config.get("stability_absolute_max", 50.0),
+        max_oom_retries=config.get("stability_max_oom_retries", 3),
+    )
+    if train_loss_history:
+        guard.loss_at_epoch_0 = train_loss_history[0]
+
+    for epoch in range(start_epoch, config["epochs"]):
+        if staged_unfreeze and epoch == int(config.get("warmup_epochs", 0)):
+            _set_backbone_layers_requires_grad(model, config.get("freeze_layers"), True)
+
+        try:
+            train_loss, optimizer_steps = train_one_epoch(
+                model,
+                train_loader,
+                criterion,
+                optimizer,
+                scaler,
+                device,
+                epoch,
+                config["epochs"],
+                accumulation_steps=max(1, config["accumulation_steps"]),
+            )
+        except RuntimeError as exc:
+            if epoch < guard.warmup_epochs and "All batches were skipped" in str(exc):
+                raise UnstableRunError(f"nonfinite_loss_epoch_{epoch}") from exc
+            raise
+        if not math.isfinite(train_loss) and epoch >= guard.warmup_epochs:
             raise RuntimeError(f"Non-finite average training loss at epoch {epoch + 1}: {train_loss}")
 
         if optimizer_steps > 0:
@@ -838,45 +1114,114 @@ def _run_training_once(config, dataset_dir, output_dir, run_name="run", trial=No
                 print("  [WARNING] AMP appears unstable for this run; disabling AMP and continuing in FP32.")
                 scaler = torch.amp.GradScaler("cuda", enabled=False)
 
-        val_loss = validate_one_epoch(
-            model,
-            val_loader,
-            criterion,
-            device,
-            epoch,
-            config["epochs"],
-            amp_enabled=scaler.is_enabled(),
-        )
-        if not math.isfinite(val_loss):
+        try:
+            val_loss = validate_one_epoch(
+                model,
+                val_loader,
+                criterion,
+                device,
+                epoch,
+                config["epochs"],
+                amp_enabled=scaler.is_enabled(),
+            )
+        except RuntimeError as exc:
+            if epoch < guard.warmup_epochs and "All validation batches were skipped" in str(exc):
+                raise UnstableRunError(f"nonfinite_loss_epoch_{epoch}") from exc
+            raise
+        if not math.isfinite(val_loss) and epoch >= guard.warmup_epochs:
             raise RuntimeError(f"Non-finite average validation loss at epoch {epoch + 1}: {val_loss}")
 
         train_loss_history.append(train_loss)
         val_loss_history.append(val_loss)
         current_lr = optimizer.param_groups[0]["lr"]
+        lr_history.append(current_lr)
         print(
             f"  => Epoch {epoch + 1}/{config['epochs']} | "
             f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | LR: {current_lr:.6f}"
         )
 
+        _append_metrics_csv(metrics_path, epoch + 1, train_loss, val_loss, current_lr)
+        if metrics_conn is not None:
+            upsert_epoch(
+                metrics_conn,
+                run_name,
+                epoch + 1,
+                train_loss,
+                val_loss,
+                current_lr,
+                config.get("seed"),
+                config.get("batch_size"),
+                "running",
+                time.monotonic() - run_start_monotonic,
+            )
+
         if val_loss < best_val_loss - 1e-6:
             best_val_loss = val_loss
             best_epoch = epoch + 1
             patience_counter = 0
-            torch.save({
-                "epoch": epoch + 1,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "scaler_state_dict": scaler.state_dict(),
-                "scheduler_state_dict": scheduler.state_dict(),
-                "loss": best_val_loss,
-                "val_loss": best_val_loss,
-                "train_loss": train_loss,
-                "config": config,
-            }, run_dir / "best_checkpoint.pt")
+            _save_training_checkpoint(
+                run_dir / "best_checkpoint.pt",
+                model,
+                optimizer,
+                scheduler,
+                scaler,
+                epoch + 1,
+                config,
+                best_val_loss,
+                best_epoch,
+                train_loss,
+                val_loss,
+                train_loss_history,
+                val_loss_history,
+                lr_history,
+                patience_counter,
+                no_step_epochs,
+                stopped_early,
+                train_generator,
+            )
             torch.save(model.get_backbone_state_dict(), run_dir / "best_backbone.pt")
             print(f"  => New best validation loss ({best_val_loss:.4f}) - checkpoint saved")
         else:
             patience_counter += 1
+
+        _save_training_checkpoint(
+            run_dir / "last_checkpoint.pt",
+            model,
+            optimizer,
+            scheduler,
+            scaler,
+            epoch + 1,
+            config,
+            best_val_loss,
+            best_epoch,
+            train_loss,
+            val_loss,
+            train_loss_history,
+            val_loss_history,
+            lr_history,
+            patience_counter,
+            no_step_epochs,
+            stopped_early,
+            train_generator,
+        )
+        _write_curves(run_dir, train_loss_history, val_loss_history, lr_history)
+
+        unstable_reason = guard.check(epoch, train_loss, val_loss, oom_retries_so_far)
+        if unstable_reason is not None:
+            if metrics_conn is not None:
+                upsert_epoch(
+                    metrics_conn,
+                    run_name,
+                    epoch + 1,
+                    train_loss,
+                    val_loss,
+                    current_lr,
+                    config.get("seed"),
+                    config.get("batch_size"),
+                    "unstable",
+                    time.monotonic() - run_start_monotonic,
+                )
+            raise UnstableRunError(unstable_reason)
 
         if trial is not None:
             trial.report(val_loss, epoch)
@@ -895,6 +1240,7 @@ def _run_training_once(config, dataset_dir, output_dir, run_name="run", trial=No
     results = {
         "run_name": run_name,
         "config": config,
+        "seed": config.get("seed"),
         "best_loss": best_val_loss,
         "best_val_loss": best_val_loss,
         "best_epoch": best_epoch,
@@ -904,6 +1250,7 @@ def _run_training_once(config, dataset_dir, output_dir, run_name="run", trial=No
         "loss_history": val_loss_history,
         "train_loss_history": train_loss_history,
         "val_loss_history": val_loss_history,
+        "lr_history": lr_history,
         "train_video_indices": split_info["train_video_indices"],
         "val_video_indices": split_info["val_video_indices"],
         "train_bursts": split_info["train_bursts"],
@@ -1083,6 +1430,15 @@ def parse_args():
     # Training
     parser.add_argument("--epochs", type=int, default=DEFAULT_CONFIG["epochs"])
     parser.add_argument("--patience", type=int, default=10)
+    parser.add_argument("--seed", type=int, default=DEFAULT_CONFIG["seed"])
+    parser.add_argument(
+        "--no_deterministic",
+        action="store_true",
+        help=(
+            "Skip cuDNN deterministic flags. Deterministic mode is the default "
+            "and may be roughly 10-20% slower."
+        ),
+    )
     parser.add_argument("--burst_gap_threshold", type=int, default=DEFAULT_CONFIG["burst_gap_threshold"])
     parser.add_argument(
         "--val_video_indices",
@@ -1124,6 +1480,8 @@ def main():
     config["pin_memory"] = args.pin_memory
     config["accumulation_steps"] = args.accumulation_steps
     config["epochs"] = args.epochs
+    config["seed"] = args.seed
+    config["deterministic"] = not args.no_deterministic
     config["burst_gap_threshold"] = args.burst_gap_threshold
     config["val_video_indices"] = parse_video_indices(args.val_video_indices)
     config["val_split_modulo"] = args.val_split_modulo

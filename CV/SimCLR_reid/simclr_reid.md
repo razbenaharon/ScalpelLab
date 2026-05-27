@@ -24,7 +24,26 @@ learning, and compares the fine-tuned model against a baseline ReID model.
 - `resize_images.py`: resizes every image in a directory to `256x128`.
 - `inspect_osnet.py`: prints OSNet layer names, parameter counts, and feature
   shapes.
-- `simclr_output/single_run/config.json`: example training configuration.
+
+## Artifact Layout
+
+Heavy SimCLR artifacts are stored outside the repo under
+`F:\Room_8_Data\SIMCLR`. Keep repo experiment folders lightweight: context,
+reports, metrics, plots, JSON summaries, and small SQLite DBs only.
+
+- `F:\Room_8_Data\SIMCLR\experiments\1_OPTUNA_15_EPOCH`: canonical
+  heavyweight folder for `CV/SimCLR_reid/1_OPTUNA_15_EPOCH`.
+- `F:\Room_8_Data\SIMCLR\experiments\2_LR_SWEEP`: canonical heavyweight
+  folder for `CV/SimCLR_reid/2_LR_SWEEP`.
+- `CV/SimCLR_reid/1_OPTUNA_15_EPOCH`: lightweight report for the 15-epoch Optuna search.
+- `CV/SimCLR_reid/2_LR_SWEEP`: lightweight report for the 50-epoch LR sweep.
+
+Canonical backbones:
+
+- `F:\Room_8_Data\SIMCLR\experiments\1_OPTUNA_15_EPOCH\trial_0074_best_backbone.pt`
+- `F:\Room_8_Data\SIMCLR\experiments\2_LR_SWEEP\<run>\best_backbone.pt`
+
+Do not store SimCLR `.pt` files in the repo experiment folders.
 
 ## Dependencies
 
@@ -145,6 +164,10 @@ Outputs are written under the selected output directory. Each run may contain:
 
 Note: the current `main()` in `train_simclr.py` always calls `run_grid_search`,
 even when `--grid_search` is not passed.
+
+After a run, move the selected `best_backbone.pt` into
+`F:\Room_8_Data\SIMCLR\experiments\<experiment_name>` and keep only lightweight
+reports and metric files under `CV/SimCLR_reid/<experiment_name>`.
 
 ## Validate
 

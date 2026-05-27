@@ -49,7 +49,8 @@ SimCLR_reid/
 ├── validate_model.py               # evaluation on held-out tracks
 ├── inspect_osnet.py                # poke at OSNet feature distributions
 ├── visualize_simclr_dataset.py     # sanity-check dataset crops
-└── simclr_output/                  # checkpoints, logs (gitignored content)
+├── 1_OPTUNA_15_EPOCH/              # lightweight 15-epoch Optuna summary
+└── 2_LR_SWEEP/                     # lightweight 50-epoch LR sweep summary
 ```
 
 Has its own `simclr_reid.md` — prefer that for run instructions.
@@ -62,3 +63,5 @@ Has its own `simclr_reid.md` — prefer that for run instructions.
   when running in production.
 - Model weights are large; `simclr_output/` and similar artifact dirs should
   not be committed (check `.gitignore` before adding new artifact directories).
+- SimCLR backbones and checkpoints live under `F:\Room_8_Data\SIMCLR`; repo
+  experiment folders keep only summaries, metrics, plots, and context.
