@@ -106,8 +106,9 @@ Routing — read the relevant context file before editing:
 - **JUNK rows**: any `camera_name` ending in `_JUNK` / `_Junk` is a failed or
   undersized recording. Filter out for stats and visualizations.
 - **Drift outliers**: `seq_enriched.time_drift_ms` has corrupt values (~2e12
-  ms) from broken IDX timestamps. Always clip to ±5–10 s before plotting
-  (see `app/pages/quality.py::DRIFT_LIMIT_MS`).
+  ms) from broken IDX timestamps. Always clip or bucket large `|drift|` before
+  plotting (see the `DRIFT_SMALL_MS` / `DRIFT_MEDIUM_MS` bucketing in
+  `app/pages/seq.py`).
 - **`n_counter_resets > 0`** is normal ring-buffer behavior, not an overrun
   signal on its own.
 - **Schema changes**: applied directly with `sqlite3` against the live DB

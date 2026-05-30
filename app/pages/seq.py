@@ -1,8 +1,10 @@
 """SEQ dashboard — inventory + time-drift analysis.
 
 Combines the raw SEQ inventory (presence, size, JUNK summary, coverage)
-with per-file time-drift dashboards from ``seq_enriched``. Outliers from
-corrupted IDX timestamps are clipped to ±10 s before plotting.
+with per-file time-drift dashboards from ``seq_enriched``. Files are bucketed
+by ``|time_drift_ms|`` (see ``DRIFT_SMALL_MS`` / ``DRIFT_MEDIUM_MS``), so the
+corrupted-IDX outliers (~2e12 ms) simply fall into the "Large" bucket rather
+than skewing a continuous axis.
 
 Sources: ``seq_status``, ``seq_enriched``.
 """

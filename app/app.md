@@ -8,18 +8,24 @@ database. Entry point is `run_app.py` at the project root, which spawns
 
 ```
 app/
-├── app.py              # entry; defines Home dashboard + main()
-├── layout.py           # page_frame() — header, grouped drawer navigation
+├── app.py              # entry; defines Home dashboard + Configuration panel + main()
+├── layout.py           # page_frame() — header, grouped drawer navigation (NAV_SECTIONS)
 ├── state.py            # paths + dark-mode persisted in app.storage.general
 ├── theme.py            # PALETTE, CHART_SEQ, global CSS (surface-1, kpi-card…)
 ├── utils.py            # connect(), list_tables(), list_views(), load_table()
 ├── charts.py           # query_df, kpi_card, kpi_with_spark, echart helpers
+├── config_paths.py     # browse/validate/persist DB, SEQ, MP4, SequenceViewer paths
+├── script_jobs.py      # single-slot background job manager for launcher pages
 └── pages/
     ├── anesthesiology.py  — /anesthesiology (cur_seniority + recording_details)
     ├── database.py        — /database  (table CRUD + ERD viewer)
-    ├── mp4.py             — /mp4       (mp4_status + cur_mp4_* — stats + coverage)
-    ├── seq.py             — /seq       (seq_status — inventory + coverage)
-    └── seq_advanced.py    — /seq-advanced (seq_enriched: header + IDX integrity)
+    ├── mp4.py             — /mp4        (mp4_status + cur_mp4_* — stats + coverage)
+    ├── seq.py             — /seq        (seq_status inventory + seq_enriched time-drift)
+    ├── boris.py           — /boris      (boris_events — START/STOP pairing + intervals)
+    ├── nuk_export.py      — /seq-curation (launcher for 1_seq_curation.py)
+    ├── update_db.py       — /update-db  (launcher for 2_update_db.py + IDX creation)
+    ├── seq_to_mp4.py      — /seq-to-mp4 (launcher for 3_seq_to_mp4_convert.py)
+    └── script_common.py   — shared job-panel / log widgets for launcher pages (no route)
 ```
 
 ## Page contract
@@ -123,8 +129,9 @@ Ventilator_Monitor, Injection_Port`. Older data sometimes has `_JUNK` /
 
 ## Pitfalls
 
-- `seq_enriched.time_drift_ms` has corrupt outliers (~2e12 ms). Always clip or
-  filter to ±5–10 s before plotting (see `quality.py::DRIFT_LIMIT_MS`).
+- `seq_enriched.time_drift_ms` has corrupt outliers (~2e12 ms). Always clip,
+  filter, or bucket large `|drift|` before plotting (see the
+  `DRIFT_SMALL_MS` / `DRIFT_MEDIUM_MS` bucketing in `pages/seq.py`).
 - BORIS pairing status (computed in [pages/boris.py](pages/boris.py)) takes
   the values `PAIRED`, `MISSING_STOP`, `ERROR_DOUBLE_START`. Most charts
   should filter to `PAIRED`.
