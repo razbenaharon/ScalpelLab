@@ -67,24 +67,33 @@ persist the DB, SEQ root, MP4 root, and NorPix SequenceViewer paths.
 
 The dashboard lives under [`app/`](app/) and currently includes:
 
-- [`app/app.py`](app/app.py): entry point, landing page, DB selector, and ERD
-  preview from `docs/ERD.pdf`.
+- [`app/app.py`](app/app.py): entry point, Home dashboard, DB selector, and
+  the Configuration panel for editing/persisting paths.
 - [`app/pages/database.py`](app/pages/database.py): browse tables, inspect
-  schema, insert rows, delete rows.
-- [`app/pages/status_summary.py`](app/pages/status_summary.py): per-camera
-  MP4 / SEQ presence summaries.
-- [`app/pages/mp4_statistics.py`](app/pages/mp4_statistics.py): interactive
-  analytics for `cur_mp4_status_statistics`.
+  schema, insert rows, delete rows, and view the ERD from `docs/ERD.pdf`.
+- [`app/pages/anesthesiology.py`](app/pages/anesthesiology.py): roster and
+  seniority view over `cur_seniority` + `recording_details`.
+- [`app/pages/mp4.py`](app/pages/mp4.py): MP4 coverage and statistics over
+  `mp4_status` and the `cur_mp4_*` views.
+- [`app/pages/seq.py`](app/pages/seq.py): SEQ inventory plus `seq_enriched`
+  time-drift analysis.
+- [`app/pages/boris.py`](app/pages/boris.py): BORIS event START/STOP pairing
+  and interval analysis.
+- Launcher pages for the processing pipeline:
+  [`nuk_export.py`](app/pages/nuk_export.py) (SEQ Curation),
+  [`update_db.py`](app/pages/update_db.py) (Update DB + IDX), and
+  [`seq_to_mp4.py`](app/pages/seq_to_mp4.py) (SEQ → MP4).
 
 The sidebar is organized into **Dashboards & Monitoring** for read/inspection
 pages and **Processing Pipeline** for operational actions.
 
-### Database And Migrations
+### Database And Schema
 
 - [`ScalpelDatabase.sqlite`](ScalpelDatabase.sqlite) is the local working
   database expected by default in the project root.
-- [`migrations/`](migrations/) contains SQLite migration scripts. Back up the
-  database before running migrations.
+- There is no migration framework. Schema changes are applied directly with
+  `sqlite3` against the live database — back up first, then re-export the
+  schema with `scripts/helpers/sqlite_to_dbdiagram.py`.
 - [`docs/scalpel_dbdiagram.txt`](docs/scalpel_dbdiagram.txt) is a dbdiagram.io
   schema export.
 - [`docs/project_context/`](docs/project_context/) contains deeper notes on the
@@ -241,8 +250,6 @@ ScalpelLab/
 │   ├── scalpel_dbdiagram.txt
 │   ├── redaction_tracking.json
 │   └── seq_idx_repair_tracking.json
-├── migrations/
-│   └── 001_fk_renames_cleanup.sql
 ├── MPV_Multiviewer/
 │   ├── docs/
 │   ├── lib/

@@ -16,7 +16,6 @@ on the user's task — do not preemptively load them all.
 | Helpers (SEQ field analysis, IDX repair, redaction, compare)| [scripts/helpers/helpers.md](scripts/helpers/helpers.md) |
 | The Tkinter+MPV multi-camera viewer                         | [MPV_Multiviewer/mpv_multiviewer.md](MPV_Multiviewer/mpv_multiviewer.md) |
 | YOLO pose / SimCLR ReID experiments                         | [CV/cv.md](CV/cv.md)                          |
-| SQLite schema migrations                                    | [migrations/migrations.md](migrations/migrations.md) |
 | Schema references, NorPix format docs, ERD                  | [docs/docs.md](docs/docs.md)                  |
 
 When the user's request spans multiple areas, load the relevant context files

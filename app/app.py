@@ -1,8 +1,8 @@
 """ScalpelLab Database Manager — NiceGUI native desktop app.
 
-Entry point. Defines the home dashboard and imports the four sub-pages
-so their `@ui.page` decorators register routes. The ERD lives on the
-Database page (Schema expansion). Run with ``python run_app.py``.
+Entry point. Defines the Home dashboard and imports the dashboard and
+pipeline sub-pages so their `@ui.page` decorators register routes. The ERD
+lives on the Database page (Schema expansion). Run with ``python run_app.py``.
 """
 
 import os
