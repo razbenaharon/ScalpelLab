@@ -25,12 +25,14 @@ coverage.xml
 
 # Temporary Claude Code files
 tmpclaude-*-cwd
+.claude/scheduled_tasks.lock
 
 # NiceGUI runtime storage (app.storage.general etc.)
 .nicegui/
 
-# Pipeline logs (local operational output)
+# Pipeline logs and generated helper output (local operational output)
 logs/
+out/
 
 # Local Codex safety backups
 .codex_pull_backups/
