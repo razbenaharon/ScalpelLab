@@ -50,7 +50,8 @@ SimCLR_reid/
 ├── inspect_osnet.py                # poke at OSNet feature distributions
 ├── visualize_simclr_dataset.py     # sanity-check dataset crops
 ├── 1_OPTUNA_15_EPOCH/              # lightweight 15-epoch Optuna summary
-└── 2_LR_SWEEP/                     # lightweight 50-epoch LR sweep summary
+├── 2_LR_SWEEP/                     # lightweight 50-epoch LR sweep summary
+└── 3_AUGMENTATION_OPTUNA/          # lightweight 15-epoch augmentation Optuna summary
 ```
 
 Has its own `simclr_reid.md` — prefer that for run instructions.

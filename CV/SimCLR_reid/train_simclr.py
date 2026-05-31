@@ -84,7 +84,11 @@ DEFAULT_CONFIG = {
     # Augmentation
     "color_jitter_strength": 0.5,
     "random_erasing_prob": 0.3,
+    "random_erasing_scale_max": 0.25,
     "crop_scale_min": 0.7,
+    "grayscale_prob": 0.2,
+    "gaussian_blur_prob": 1.0,
+    "solarization_prob": 0.0,
 
     # Architecture
     "backbone": "osnet_ain_x1_0",
@@ -340,32 +344,50 @@ def get_simclr_transform(
     image_size=(256, 128),
     color_jitter_strength=0.5,
     random_erasing_prob=0.3,
+    random_erasing_scale_max=0.25,
     crop_scale_min=0.7,
+    grayscale_prob=0.2,
+    gaussian_blur_prob=1.0,
+    solarization_prob=0.0,
 ):
     """SimCLR augmentation pipeline tuned for person ReID crops."""
     color_jitter = transforms.ColorJitter(
-        brightness=0.4 * color_jitter_strength,
-        contrast=0.4 * color_jitter_strength,
-        saturation=0.4 * color_jitter_strength,
-        hue=0.1 * color_jitter_strength,
+        # Keep color perturbation moderate: surgical clothing/PPE color can be
+        # identity signal, but exact OR lighting should not be.
+        brightness=0.35 * color_jitter_strength,
+        contrast=0.35 * color_jitter_strength,
+        saturation=0.25 * color_jitter_strength,
+        hue=0.06 * color_jitter_strength,
     )
 
-    return transforms.Compose([
+    pil_transforms = [
         transforms.RandomResizedCrop(
             size=image_size,
             scale=(crop_scale_min, 1.0),
-            ratio=(0.4, 0.7),
+            ratio=(0.4, 0.75),
         ),
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomApply([color_jitter], p=0.8),
-        transforms.RandomGrayscale(p=0.2),
-        transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
+        transforms.RandomGrayscale(p=grayscale_prob),
+        transforms.RandomApply(
+            [transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.5))],
+            p=gaussian_blur_prob,
+        ),
+    ]
+    if solarization_prob > 0:
+        pil_transforms.append(transforms.RandomSolarize(threshold=160, p=solarization_prob))
+
+    return transforms.Compose([
+        *pil_transforms,
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         transforms.RandomErasing(
             p=random_erasing_prob,
-            scale=(0.02, 0.25),
+            # Erasing is the main anti-shortcut transform for OR monitors,
+            # bed rails, walls, and other burst-stable background patches.
+            scale=(0.02, random_erasing_scale_max),
             ratio=(0.3, 3.3),
+            value="random",
         ),
     ])
 
@@ -944,7 +966,11 @@ def _run_training_once(
         image_size=config["image_size"],
         color_jitter_strength=config["color_jitter_strength"],
         random_erasing_prob=config["random_erasing_prob"],
+        random_erasing_scale_max=config.get("random_erasing_scale_max", 0.25),
         crop_scale_min=config["crop_scale_min"],
+        grayscale_prob=config.get("grayscale_prob", 0.2),
+        gaussian_blur_prob=config.get("gaussian_blur_prob", 1.0),
+        solarization_prob=config.get("solarization_prob", 0.0),
     )
     dataset = BurstSimCLRDataset(
         root_dir=dataset_dir,
@@ -1225,7 +1251,7 @@ def _run_training_once(
 
         if trial is not None:
             trial.report(val_loss, epoch)
-            if trial.should_prune():
+            if epoch + 1 >= 3 and trial.should_prune():
                 if optuna is None:
                     raise RuntimeError("Optuna is required for pruning.")
                 raise optuna.TrialPruned()

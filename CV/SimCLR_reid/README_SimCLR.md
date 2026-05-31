@@ -38,11 +38,13 @@ metrics, plots, and DB summaries.
 - External heavyweight root: `F:\Room_8_Data\SIMCLR\experiments`
 - `CV/SimCLR_reid/1_OPTUNA_15_EPOCH`: lightweight record for the 15-epoch Optuna search.
 - `CV/SimCLR_reid/2_LR_SWEEP`: lightweight record for the 50-epoch LR sweep.
+- `CV/SimCLR_reid/3_AUGMENTATION_OPTUNA`: lightweight record for the 15-epoch augmentation Optuna sweep.
 
 Canonical backbone paths:
 
 - `1_OPTUNA_15_EPOCH`: `F:\Room_8_Data\SIMCLR\experiments\1_OPTUNA_15_EPOCH\trial_0074_best_backbone.pt`
 - `2_LR_SWEEP`: `F:\Room_8_Data\SIMCLR\experiments\2_LR_SWEEP\<run>\best_backbone.pt`
+- `3_AUGMENTATION_OPTUNA`: `F:\Room_8_Data\SIMCLR\experiments\3_AUGMENTATION_OPTUNA\trial_0019\best_backbone.pt`
 
 Do not commit `.pt` files or full optimizer checkpoints from SimCLR
 experiments. Keep only report/context files, CSV/JSON summaries, plots, and

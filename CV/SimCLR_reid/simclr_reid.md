@@ -35,13 +35,17 @@ reports, metrics, plots, JSON summaries, and small SQLite DBs only.
   heavyweight folder for `CV/SimCLR_reid/1_OPTUNA_15_EPOCH`.
 - `F:\Room_8_Data\SIMCLR\experiments\2_LR_SWEEP`: canonical heavyweight
   folder for `CV/SimCLR_reid/2_LR_SWEEP`.
+- `F:\Room_8_Data\SIMCLR\experiments\3_AUGMENTATION_OPTUNA`: canonical
+  heavyweight folder for `CV/SimCLR_reid/3_AUGMENTATION_OPTUNA`.
 - `CV/SimCLR_reid/1_OPTUNA_15_EPOCH`: lightweight report for the 15-epoch Optuna search.
 - `CV/SimCLR_reid/2_LR_SWEEP`: lightweight report for the 50-epoch LR sweep.
+- `CV/SimCLR_reid/3_AUGMENTATION_OPTUNA`: lightweight report for the 15-epoch augmentation Optuna sweep.
 
 Canonical backbones:
 
 - `F:\Room_8_Data\SIMCLR\experiments\1_OPTUNA_15_EPOCH\trial_0074_best_backbone.pt`
 - `F:\Room_8_Data\SIMCLR\experiments\2_LR_SWEEP\<run>\best_backbone.pt`
+- `F:\Room_8_Data\SIMCLR\experiments\3_AUGMENTATION_OPTUNA\trial_0019\best_backbone.pt`
 
 Do not store SimCLR `.pt` files in the repo experiment folders.
 
