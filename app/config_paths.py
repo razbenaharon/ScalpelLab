@@ -54,6 +54,7 @@ def save_config_paths(
     db_path: str,
     seq_root: str,
     mp4_root: str,
+    analyses_root: str,
     norpix_sequence_viewer: str,
 ) -> None:
     """Rewrite only the path constants in config.py."""
@@ -62,6 +63,7 @@ def save_config_paths(
         r"^DB_PATH\s*=.*$": _db_assignment(db_path),
         r"^SEQ_ROOT\s*=.*$": f"SEQ_ROOT = {_py_raw_string(seq_root)}",
         r"^MP4_ROOT\s*=.*$": f"MP4_ROOT = {_py_raw_string(mp4_root)}",
+        r"^ANALYSES_ROOT\s*=.*$": f"ANALYSES_ROOT = {_py_raw_string(analyses_root)}",
         r"^NORPIX_SEQUENCE_VIEWER_PATH\s*=.*$": (
             f"NORPIX_SEQUENCE_VIEWER_PATH = {_py_raw_string(norpix_sequence_viewer)}"
         ),

@@ -10,6 +10,7 @@ from nicegui import app
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import (
+    get_analyses_root,
     get_db_path,
     get_mp4_root,
     get_norpix_sequence_viewer_path,
@@ -20,6 +21,7 @@ from config import (
 DB_PATH_KEY = "db_path"
 SEQ_ROOT_KEY = "seq_root"
 MP4_ROOT_KEY = "mp4_root"
+ANALYSES_ROOT_KEY = "analyses_root"
 NORPIX_SEQUENCE_VIEWER_KEY = "norpix_sequence_viewer"
 DARK_MODE_KEY = "dark_mode"
 
@@ -34,6 +36,10 @@ def default_seq_root() -> str:
 
 def default_mp4_root() -> str:
     return os.environ.get("SCALPEL_MP4_ROOT", get_mp4_root())
+
+
+def default_analyses_root() -> str:
+    return os.environ.get("SCALPEL_ANALYSES_ROOT", get_analyses_root())
 
 
 def default_norpix_sequence_viewer() -> str:
@@ -65,6 +71,14 @@ def get_mp4() -> str:
 
 def set_mp4(value: str) -> None:
     app.storage.general[MP4_ROOT_KEY] = value
+
+
+def get_analyses() -> str:
+    return app.storage.general.get(ANALYSES_ROOT_KEY) or default_analyses_root()
+
+
+def set_analyses(value: str) -> None:
+    app.storage.general[ANALYSES_ROOT_KEY] = value
 
 
 def get_norpix_sequence_viewer() -> str:

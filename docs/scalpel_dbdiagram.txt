@@ -1,4 +1,4 @@
-//// ScalpelLab Database, exported 2026-05-11
+//// ScalpelLab Database, exported 2026-06-07
 //// Paste into https://dbdiagram.io
 
 //// System table from SQLite. Usually not modeled, included here for completeness.
@@ -23,17 +23,86 @@ Table anesthesiology {
 }
 
 Table boris_events {
-  event_id          int [pk]
-  subject           varchar
-  behavior          varchar
-  behavior_type     varchar
-  modifier_1        varchar
-  modifier_2        varchar
-  modifier_3        varchar
-  time_s            decimal
+  event_id            int [pk]
+  subject             varchar
+  behavior            varchar
+  behavior_type       varchar
+  modifier_1          varchar
+  modifier_2          varchar
+  modifier_3          varchar
+  time_s              decimal
+  source_file         varchar [not null]
+  source_row_number   int [not null]
+  imported_at         varchar [not null, default: `CURRENT_TIMESTAMP`]
+  recording_date      varchar
+  case_no             int
+  behavioral_category varchar
+  absolute_timestamp  varchar
+}
+
+Table monitor_case_summary {
+  recording_date          varchar [pk]
+  case_no                 int [pk]
+  source_file             varchar [not null]
+  sample_count            int [not null, default: 0]
+  duration_s              decimal
+  imported_at             varchar [not null, default: `CURRENT_TIMESTAMP`]
+  hr_bpm_count            int [not null, default: 0]
+  spo2_pct_count          int [not null, default: 0]
+  pulse_index_count       int [not null, default: 0]
+  pr_bpm_count            int [not null, default: 0]
+  etco2_mmhg_count        int [not null, default: 0]
+  rr_bpm_count            int [not null, default: 0]
+  fico2_mmhg_count        int [not null, default: 0]
+  nibp_sys_mmhg_count     int [not null, default: 0]
+  nibp_dia_mmhg_count     int [not null, default: 0]
+  nibp_mean_mmhg_count    int [not null, default: 0]
+  temp_c_count            int [not null, default: 0]
+  hr_alert_count          int [not null, default: 0]
+  spo2_alert_count        int [not null, default: 0]
+  pulse_index_alert_count int [not null, default: 0]
+  pr_alert_count          int [not null, default: 0]
+  etco2_alert_count       int [not null, default: 0]
+  rr_alert_count          int [not null, default: 0]
+  fico2_alert_count       int [not null, default: 0]
+  nibp_sys_alert_count    int [not null, default: 0]
+  nibp_dia_alert_count    int [not null, default: 0]
+  nibp_mean_alert_count   int [not null, default: 0]
+  temp_alert_count        int [not null, default: 0]
+}
+
+Table monitor_samples {
+  recording_date    varchar [pk]
+  case_no           int [pk]
+  sample_index      int [pk]
+  frame             varchar
+  frame_no          int
+  timestamp_text    varchar
+  elapsed_s         decimal
   source_file       varchar [not null]
-  source_row_number int [not null]
   imported_at       varchar [not null, default: `CURRENT_TIMESTAMP`]
+  hr_bpm            decimal
+  spo2_pct          decimal
+  pulse_index       decimal
+  pr_bpm            decimal
+  etco2_mmhg        decimal
+  rr_bpm            decimal
+  fico2_mmhg        decimal
+  nibp_sys_mmhg     decimal
+  nibp_dia_mmhg     decimal
+  nibp_mean_mmhg    decimal
+  temp_c            decimal
+  hr_alert          varchar
+  spo2_alert        varchar
+  pulse_index_alert varchar
+  pr_alert          varchar
+  etco2_alert       varchar
+  rr_alert          varchar
+  fico2_alert       varchar
+  nibp_sys_alert    varchar
+  nibp_dia_alert    varchar
+  nibp_mean_alert   varchar
+  temp_alert        varchar
 }
 
 Table mp4_status {
@@ -70,39 +139,43 @@ Table recording_details {
 }
 
 Table seq_enriched {
-  recording_date       varchar [pk] // FK to seq_status.recording_date
-  case_no              int [pk] // FK to seq_status.case_no
-  camera_name          varchar [pk] // FK to seq_status.camera_name
-  file                 varchar
-  size_mb              decimal
-  has_idx              int
-  header_ok            int
-  description          varchar
-  width                int
-  height               int
-  allocated_frames     int
-  fps                  decimal
-  compression_fmt      int
-  rec_timestamp        int
-  exposure_ns          int
-  idx_frames           int
-  dropped_frames       int
-  drop_rate            decimal
-  first_frame_no       int
-  last_frame_no        int
-  frame_span           int
-  n_duplicates         int
-  n_counter_resets     int
-  first_frame_time     decimal
-  last_frame_time      decimal
-  first_frame_datetime varchar
-  last_frame_datetime  varchar
-  actual_duration      decimal
-  expected_duration    decimal
-  time_drift_ms        decimal
-  max_time_gap_ms      decimal
-  idx_file_size        int
-  idx_cached_at        varchar
+  recording_date                          varchar [pk] // FK to seq_status.recording_date
+  case_no                                 int [pk] // FK to seq_status.case_no
+  camera_name                             varchar [pk] // FK to seq_status.camera_name
+  file                                    varchar
+  size_mb                                 decimal
+  has_idx                                 int
+  header_ok                               int
+  description                             varchar
+  width                                   int
+  height                                  int
+  allocated_frames                        int
+  fps                                     decimal
+  compression_fmt                         int
+  rec_timestamp                           int
+  exposure_ns                             int
+  idx_frames                              int
+  dropped_frames                          int
+  drop_rate                               decimal
+  first_frame_no                          int
+  last_frame_no                           int
+  frame_span                              int
+  n_duplicates                            int
+  n_counter_resets                        int
+  first_frame_time                        decimal
+  last_frame_time                         decimal
+  first_frame_datetime                    varchar
+  last_frame_datetime                     varchar
+  actual_duration                         decimal
+  expected_duration                       decimal
+  time_drift_ms                           decimal
+  max_time_gap_ms                         decimal
+  idx_file_size                           int
+  idx_cached_at                           varchar
+  first_frame_date_matches_recording_date int
+  last_frame_date_matches_recording_date  int
+  frame_dates_match_recording_date        int
+  frame_date_mismatch_reason              varchar
 }
 
 Table seq_status {

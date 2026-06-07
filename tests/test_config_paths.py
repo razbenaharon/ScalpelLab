@@ -20,6 +20,7 @@ def test_save_config_paths_preserves_raw_windows_paths(tmp_path, monkeypatch):
                 'DB_PATH = PROJECT_ROOT / "ScalpelDatabase.sqlite"',
                 'SEQ_ROOT = r"F:\\OldSeq"',
                 'MP4_ROOT = r"F:\\OldMp4"',
+                'ANALYSES_ROOT = r"F:\\OldAnalyses"',
                 'NORPIX_SEQUENCE_VIEWER_PATH = r"C:\\Old\\SequenceViewer.exe"',
                 "",
             ]
@@ -32,12 +33,14 @@ def test_save_config_paths_preserves_raw_windows_paths(tmp_path, monkeypatch):
         str(Path("X:/Data/ScalpelDatabase.sqlite")),
         r"F:\Room_8_Data\Sequence_Backup",
         r"F:\Room_8_Data\Recordings",
+        r"F:\Room_8_Data\Analyses_Finale",
         r"C:\Program Files\Common Files\NorPix\SequenceViewer.exe",
     )
 
     text = temp_config.read_text(encoding="utf-8")
     assert 'SEQ_ROOT = r"F:\\Room_8_Data\\Sequence_Backup"' in text
     assert 'MP4_ROOT = r"F:\\Room_8_Data\\Recordings"' in text
+    assert 'ANALYSES_ROOT = r"F:\\Room_8_Data\\Analyses_Finale"' in text
     assert (
         'NORPIX_SEQUENCE_VIEWER_PATH = '
         'r"C:\\Program Files\\Common Files\\NorPix\\SequenceViewer.exe"'

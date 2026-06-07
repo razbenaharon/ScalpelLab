@@ -30,9 +30,11 @@ from app.charts import kpi_with_spark as _kpi_with_spark, query_df as _query  # 
 from app.config_paths import browse_directory, browse_file, path_status, save_config_paths  # noqa: E402
 from app.layout import page_frame  # noqa: E402
 from app.pages import (  # noqa: F401,E402
+    analysis_import,
     anesthesiology,
     boris,
     database,
+    monitor_data,
     mp4,
     nuk_export,
     seq,
@@ -97,6 +99,11 @@ def _configuration_panel() -> None:
         db_input = ui.input("SQLite database", value=state.get()).props("outlined dense").classes("w-full")
         seq_input = ui.input("SEQ root", value=state.get_seq()).props("outlined dense").classes("w-full")
         mp4_input = ui.input("MP4 root", value=state.get_mp4()).props("outlined dense").classes("w-full")
+        analyses_input = (
+            ui.input("Analyses root", value=state.get_analyses())
+            .props("outlined dense")
+            .classes("w-full")
+        )
         viewer_input = (
             ui.input("NorPix SequenceViewer", value=state.get_norpix_sequence_viewer())
             .props("outlined dense")
@@ -108,11 +115,13 @@ def _configuration_panel() -> None:
             state.set_(str(db_input.value or ""))
             state.set_seq(str(seq_input.value or ""))
             state.set_mp4(str(mp4_input.value or ""))
+            state.set_analyses(str(analyses_input.value or ""))
             state.set_norpix_sequence_viewer(str(viewer_input.value or ""))
 
         db_input.on_value_change(lambda e: state.set_(e.value))
         seq_input.on_value_change(lambda e: state.set_seq(e.value))
         mp4_input.on_value_change(lambda e: state.set_mp4(e.value))
+        analyses_input.on_value_change(lambda e: state.set_analyses(e.value))
         viewer_input.on_value_change(lambda e: state.set_norpix_sequence_viewer(e.value))
 
         with ui.row().classes("items-center gap-2"):
@@ -137,6 +146,12 @@ def _configuration_panel() -> None:
                     mp4_input.set_value(selected)
                     state.set_mp4(selected)
 
+            def pick_analyses() -> None:
+                selected = browse_directory("Select analyses root", analyses_input.value or None)
+                if selected:
+                    analyses_input.set_value(selected)
+                    state.set_analyses(selected)
+
             def pick_viewer() -> None:
                 selected = browse_file(
                     "Select NorPix SequenceViewer executable",
@@ -153,6 +168,7 @@ def _configuration_panel() -> None:
                         state.get(),
                         state.get_seq(),
                         state.get_mp4(),
+                        state.get_analyses(),
                         state.get_norpix_sequence_viewer(),
                     )
                 except Exception as exc:
@@ -163,6 +179,7 @@ def _configuration_panel() -> None:
             ui.button("Browse DB", icon="storage", on_click=pick_db).props("outline")
             ui.button("Browse SEQ", icon="folder_open", on_click=pick_seq).props("outline")
             ui.button("Browse MP4", icon="folder_open", on_click=pick_mp4).props("outline")
+            ui.button("Browse Analyses", icon="analytics", on_click=pick_analyses).props("outline")
             ui.button("Browse Viewer", icon="movie_creation", on_click=pick_viewer).props("outline")
             ui.button("Save to config.py", icon="save", on_click=save_config).props("color=primary")
 
@@ -170,15 +187,17 @@ def _configuration_panel() -> None:
             db_ok, db_msg = path_status(str(db_input.value or ""), "file")
             seq_ok, seq_msg = path_status(str(seq_input.value or ""), "directory")
             mp4_ok, mp4_msg = path_status(str(mp4_input.value or ""), "directory")
+            analyses_ok, analyses_msg = path_status(str(analyses_input.value or ""), "directory")
             viewer_ok, viewer_msg = path_status(str(viewer_input.value or ""), "file")
             status_label.set_text(
-                f"DB: {db_msg}  |  SEQ: {seq_msg}  |  MP4: {mp4_msg}  |  Viewer: {viewer_msg}"
+                f"DB: {db_msg}  |  SEQ: {seq_msg}  |  MP4: {mp4_msg}  |  "
+                f"Analyses: {analyses_msg}  |  Viewer: {viewer_msg}"
             )
             status_label.classes(
                 remove="text-negative text-positive",
                 add=(
                     "text-positive"
-                    if db_ok and seq_ok and mp4_ok and viewer_ok
+                    if db_ok and seq_ok and mp4_ok and analyses_ok and viewer_ok
                     else "text-negative"
                 ),
             )

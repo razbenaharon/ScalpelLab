@@ -53,15 +53,20 @@ def _parse_source_file(name: str) -> tuple[str | None, int | None]:
 def _load_events(db_path: str) -> pd.DataFrame:
     df = query_df(
         db_path,
-        "SELECT event_id, subject, behavior, behavior_type, "
-        "       modifier_1, modifier_2, modifier_3, time_s, source_file "
-        "FROM boris_events",
+        "SELECT * FROM boris_events",
     )
     if df.empty:
         return df
-    parsed = df["source_file"].fillna("").map(_parse_source_file)
-    df["recording_date"] = [p[0] for p in parsed]
-    df["case_no"] = [p[1] for p in parsed]
+    if "recording_date" not in df.columns or "case_no" not in df.columns:
+        parsed = df["source_file"].fillna("").map(_parse_source_file)
+        df["recording_date"] = [p[0] for p in parsed]
+        df["case_no"] = [p[1] for p in parsed]
+    else:
+        missing_key = df["recording_date"].isna() | df["case_no"].isna()
+        if missing_key.any():
+            parsed = df.loc[missing_key, "source_file"].fillna("").map(_parse_source_file)
+            df.loc[missing_key, "recording_date"] = [p[0] for p in parsed]
+            df.loc[missing_key, "case_no"] = [p[1] for p in parsed]
     df = df.dropna(subset=["recording_date", "case_no"])
     df["case_no"] = df["case_no"].astype(int)
     df["case_key"] = df["recording_date"] + " · Case " + df["case_no"].astype(str)

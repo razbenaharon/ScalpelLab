@@ -24,6 +24,7 @@ NAV_SECTIONS = [
             ("MP4", "/mp4", "movie", "MP4"),
             ("SEQ", "/seq", "folder_open", "SEQ"),
             ("BORIS", "/boris", "label", "BORIS Tags"),
+            ("Monitor Data", "/monitor-data", "monitor_heart", "Monitor Data"),
         ],
     ),
     (
@@ -32,6 +33,7 @@ NAV_SECTIONS = [
             ("SEQ Curation", "/seq-curation", "drive_folder_upload", "SEQ Curation"),
             ("Update DB + IDX", "/update-db", "sync", "Update DB"),
             ("SEQ → MP4", "/seq-to-mp4", "movie_filter", "SEQ → MP4"),
+            ("Analysis Import", "/analysis-import", "analytics", "Analysis Import"),
         ],
     ),
 ]

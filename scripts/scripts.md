@@ -11,6 +11,7 @@ scripts/
 ├── 2_update_db.py              # walks SEQ_ROOT and MP4_ROOT, upserts seq_status / mp4_status / seq_enriched
 ├── 3_seq_to_mp4_convert.py     # SEQ → MP4 via raw H.264 + mkvmerge VFR + FFmpeg fps=30 CFR
 ├── import_boris_tags.py        # BORIS TSV → boris_events (+ link analysis_information.event_id)
+├── import_analysis_finale.py   # Analyses_Finale BORIS CSV + monitor vitals import
 └── helpers/                    # see scripts/helpers/helpers.md
 ```
 
@@ -106,6 +107,15 @@ because there are no trusted per-frame timestamps. Use
   view was removed because its join through `analysis_information.event_id`
   collapsed the result to ~one row per case.
 - Always run with `--dry-run` first when working on this file.
+
+### `import_analysis_finale.py` — finalized analyses importer
+- Reads `ANALYSES_ROOT/DATA_YY-MM-DD/CaseN/Boris/*_standardized.csv` and
+  `ANALYSES_ROOT/DATA_YY-MM-DD/CaseN/Monitor/motior_data.csv`.
+- BORIS import replaces existing `boris_events` rows and relinks
+  `analysis_information.event_id` to the first imported event per case.
+- Monitor import is idempotent per case, writing `monitor_samples` plus
+  `monitor_case_summary` for the dashboard.
+- Always run with `--dry-run` first; the app launcher is `/analysis-import`.
 
 ## Conventions
 

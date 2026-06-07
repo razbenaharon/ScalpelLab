@@ -18,8 +18,10 @@ app/
 ├── script_jobs.py      # single-slot background job manager for launcher pages
 └── pages/
     ├── anesthesiology.py  — /anesthesiology (cur_seniority + recording_details)
+    ├── analysis_import.py — /analysis-import (launcher for finalized BORIS/monitor import)
     ├── database.py        — /database  (table CRUD + ERD viewer)
     ├── mp4.py             — /mp4        (mp4_status + cur_mp4_* — stats + coverage)
+    ├── monitor_data.py    — /monitor-data (monitor_samples + monitor_case_summary vitals)
     ├── seq.py             — /seq        (seq_status inventory + seq_enriched time-drift)
     ├── boris.py           — /boris      (boris_events — START/STOP pairing + intervals)
     ├── nuk_export.py      — /seq-curation (launcher for 1_seq_curation.py)
@@ -70,10 +72,11 @@ After creating the page, register it in two places:
 
 The sidebar is split into two visually separated groups:
 
-- **Dashboards & Monitoring**: Home, Database, Anesthesiology, MP4, SEQ, BORIS.
+- **Dashboards & Monitoring**: Home, Database, Anesthesiology, MP4, SEQ, BORIS, Monitor Data.
 - **Processing Pipeline**: SEQ Curation, Update DB + IDX, SEQ to MP4. The
   underlying pipeline contract includes Analyze SEQ Fields after DB update;
   add a dedicated page here if it is split out from the DB update flow.
+  Analysis Import is the launcher for finalized BORIS and monitor CSV imports.
 
 Keep read-only dashboards in the first group and pages that launch real
 filesystem or database work in the second group.
@@ -89,6 +92,8 @@ script launcher pages:
 - NorPix SequenceViewer executable
   (`config.NORPIX_SEQUENCE_VIEWER_PATH`, overridable by
   `SCALPEL_NORPIX_SEQUENCE_VIEWER`).
+- Finalized analyses root (`config.ANALYSES_ROOT`, overridable by
+  `SCALPEL_ANALYSES_ROOT`).
 
 The default SequenceViewer path is
 `C:\Program Files\Common Files\NorPix\SequenceViewer.exe`. The Home page can
@@ -112,7 +117,8 @@ browse to a different executable and persist it back to `config.py`.
 
 Tables: `mp4_status`, `mp4_times`, `seq_status`, `seq_enriched` (rich
 per-file frame analysis), `boris_events`, `analysis_information`,
-`anesthesiology`, `recording_details`.
+`monitor_samples`, `monitor_case_summary`, `anesthesiology`,
+`recording_details`.
 
 Views (read-only — don't write to these):
 - `cur_mp4_missing` — pivot of cameras present per (date, case)
