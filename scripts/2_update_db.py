@@ -54,6 +54,7 @@ _analyze_seq_dir: Callable[..., Any] | None = None
 _write_seq_analysis: Callable[..., Any] | None = None
 _seq_existing_keys: Callable[[str], set[tuple[str, int, str]]] | None = None
 _seq_canonical_map: Callable[[str], dict[tuple[str, int, str], str]] | None = None
+_ensure_seq_analysis_table: Callable[[str], None] | None = None
 seq_analysis_available = False
 
 try:
@@ -61,6 +62,7 @@ try:
     from helpers.analyze_seq_fields import write_to_db as _write_seq_analysis
     from helpers.analyze_seq_fields import load_existing_keys as _seq_existing_keys
     from helpers.analyze_seq_fields import load_camera_canonical_map as _seq_canonical_map
+    from helpers.analyze_seq_fields import ensure_analysis_table as _ensure_seq_analysis_table
     seq_analysis_available = True
 except ImportError:
     pass
@@ -115,6 +117,47 @@ def _entry_label(recording_date: str, case_no: int, camera_name: str) -> str:
 def _print_inventory_counts(label: str, total: int, new: int, changed: int) -> None:
     unchanged = total - new - changed
     print(f"[OK] {label}: total {total:,} | new {new:,} | changed {changed:,} | unchanged {unchanged:,}")
+
+
+def _warn_missing_recording_details(
+    conn: sqlite3.Connection,
+    keys: set[tuple[str, int, str]],
+) -> None:
+    """Warn when status rows are not anchored in recording_details yet."""
+    if not keys:
+        return
+
+    try:
+        existing_cases = {
+            (row[0], int(row[1]))
+            for row in conn.execute("SELECT recording_date, case_no FROM recording_details")
+        }
+    except sqlite3.OperationalError:
+        return
+
+    update_cases = {(recording_date, case_no) for recording_date, case_no, _ in keys}
+    missing_cases = sorted(update_cases - existing_cases)
+    if not missing_cases:
+        return
+
+    print(
+        f"[WARN] {len(missing_cases):,} case(s) are not present in recording_details; "
+        "status rows will still be written."
+    )
+    for recording_date, case_no in missing_cases:
+        print(f"       - {recording_date} Case{case_no}")
+
+
+def _planned_update_keys(stats: dict | None) -> set[tuple[str, int, str]]:
+    """Return keys that were reported as new or changed."""
+    if not stats:
+        return set()
+    keys: set[tuple[str, int, str]] = set()
+    for entry in stats.get('new_entries', []):
+        keys.add((entry[0], entry[1], entry[2]))
+    for entry in stats.get('changed_entries', []):
+        keys.add((entry[0], entry[1], entry[2]))
+    return keys
 
 
 def _print_seq_changes(
@@ -317,7 +360,6 @@ def update_seq_status(db_path: str, seq_root: Path, threshold_mb: int, dry_run: 
 
     # Check for changes
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA foreign_keys = ON")
     try:
         if not dry_run:
             ensure_seq_table_exists(conn)
@@ -563,7 +605,6 @@ def update_mp4_status(db_path: str, mp4_root: Path, threshold_mb: int,
     # preserving duration values when --skip-duration is used.
     existing_all = {}
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA foreign_keys = ON")
     try:
         if not dry_run:
             ensure_mp4_table_exists(conn)
@@ -660,7 +701,6 @@ def update_mp4_status(db_path: str, mp4_root: Path, threshold_mb: int,
 
     # Check for changes (only read managed columns)
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA foreign_keys = ON")
     try:
         if not existing_all:
             if not dry_run:
@@ -819,15 +859,23 @@ Examples:
 
             # Write to database
             conn = sqlite3.connect(args.db)
-            conn.execute("PRAGMA foreign_keys = ON")
             try:
                 ensure_seq_table_exists(conn)
                 ensure_mp4_table_exists(conn)
+                # The live schema contains legacy FKs from status tables to
+                # recording_details, but inventory discovery often sees SEQ/MP4
+                # files before case metadata has been entered there.
+                seq_update_keys = _planned_update_keys(seq_stats)
+                mp4_update_keys = _planned_update_keys(mp4_stats)
+                _warn_missing_recording_details(conn, seq_update_keys)
+                _warn_missing_recording_details(conn, mp4_update_keys)
                 cur = conn.cursor()
 
                 # Write SEQ updates (only updates managed columns: size_mb, path)
                 if seq_stats and 'updates' in seq_stats:
                     for (recording_date, case_no, camera_name), (status, size_mb, file_path) in seq_stats['updates'].items():
+                        if (recording_date, case_no, camera_name) not in seq_update_keys:
+                            continue
                         cur.execute('''
                             INSERT INTO "seq_status"
                             (recording_date, case_no, camera_name, size_mb, path)
@@ -841,6 +889,8 @@ Examples:
                 # Write MP4 updates (only updates managed columns: size_mb, duration_minutes, path)
                 if mp4_stats and 'updates' in mp4_stats:
                     for (recording_date, case_no, camera_name), (status, size_mb, duration, file_path) in mp4_stats['updates'].items():
+                        if (recording_date, case_no, camera_name) not in mp4_update_keys:
+                            continue
                         # Use INSERT ... ON CONFLICT DO UPDATE to only update managed columns
                         # This preserves all other columns (present and future)
                         cur.execute('''
@@ -885,6 +935,8 @@ Examples:
                 assert _analyze_seq_dir is not None
                 assert _write_seq_analysis is not None
                 assert _seq_canonical_map is not None
+                assert _ensure_seq_analysis_table is not None
+                _ensure_seq_analysis_table(args.db)
                 skip_keys = _seq_existing_keys(args.db)
                 if skip_keys:
                     print(f"[INFO] {len(skip_keys)} entries already in DB - scanning only new files")

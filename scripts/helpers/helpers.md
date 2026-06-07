@@ -34,6 +34,9 @@ Parses raw NorPix SEQ headers and IDX records:
 - Derived metrics: `dropped_frames`, `drop_rate`, `frame_span`,
   `n_duplicates`, `n_counter_resets`, `actual_duration`,
   `expected_duration`, `time_drift_ms`, `max_time_gap_ms`.
+- Date sanity metrics: first/last IDX frame datetimes are compared against the
+  path-derived `recording_date`; mismatches are written as explicit flags in
+  `seq_enriched` and excluded by `cur_sync_status`.
 
 Primary key in `seq_enriched`: `(recording_date, case_no, camera_name)`.
 

@@ -59,14 +59,14 @@ keys as useful schema intent, not as proof that all existing rows are clean.
 | `seq_status` | 1,440 | `recording_date`, `case_no`, `camera_name` | SEQ file presence, size, and relative path. |
 | `mp4_status` | 1,444 | `recording_date`, `case_no`, `camera_name` | MP4 file presence, size, duration, redaction segment metadata, offset, and relative path. |
 | `mp4_times` | 125 | `case_no`, `recording_date` | Manual or curated case timing ranges used by redaction workflows. |
-| `seq_enriched` | 812 | `recording_date`, `case_no`, `camera_name` | Parsed SEQ header and IDX metadata cache. Foreign-keyed to `seq_status` (`ON DELETE CASCADE`). See [`seq_enriched_table_reference.md`](./seq_enriched_table_reference.md). |
+| `seq_enriched` | 830 | `recording_date`, `case_no`, `camera_name` | Parsed SEQ header and IDX metadata cache. Foreign-keyed to `seq_status` (`ON DELETE CASCADE`). See [`seq_enriched_table_reference.md`](./seq_enriched_table_reference.md). |
 
 ## Views
 
 | View | Rows | Meaning |
 |---|---:|---|
 | `cur_mp4_missing` | 185 | Per-case camera matrix showing MP4 rows with both `size_mb` and `duration_minutes`. |
-| `cur_sync_status` | 812 | Per-(date, case, camera) `is_syncable` flag derived from `seq_enriched` using the `3_seq_to_mp4_convert.py` planning gates (has_idx, header_ok, idx_frames > 0, frame timestamps in 2015–2030, duration ≤ 250000s, size_mb ≥ 50). Excludes `_JUNK`/`_Junk` cameras. |
+| `cur_sync_status` | 830 | Per-(date, case, camera) `is_syncable` flag derived from `seq_enriched` using the `3_seq_to_mp4_convert.py` planning gates (has_idx, header_ok, idx_frames > 0, frame timestamps in 2015–2030, duration ≤ 250000s, size_mb ≥ 50, and first/last frame dates matching `recording_date`). Excludes `_JUNK`/`_Junk` cameras. |
 | `cur_seniority` | 73 | Current anesthesiology seniority and attending/resident status derived from dates. |
 | `cur_mp4_status_statistics` | 162 | Recording-level camera counts used by the MP4 statistics dashboard. |
 

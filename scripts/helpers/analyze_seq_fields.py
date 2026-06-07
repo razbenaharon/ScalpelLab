@@ -127,6 +127,68 @@ def _unix_to_iso(ts: float | None) -> str | None:
         return None
 
 
+def _frame_date_check(
+    recording_date: str | None,
+    first_frame_datetime: str | None,
+    last_frame_datetime: str | None,
+) -> dict[str, int | str | None]:
+    """
+    Compare the path-derived recording date with first/last IDX frame dates.
+
+    Returns SQLite-friendly booleans (1/0) plus a short reason string.  Missing
+    or unparsable frame datetimes keep the match value NULL because absence of
+    IDX timing is different from a known date mismatch.
+    """
+    result: dict[str, int | str | None] = {
+        "first_frame_date_matches_recording_date": None,
+        "last_frame_date_matches_recording_date": None,
+        "frame_dates_match_recording_date": None,
+        "frame_date_mismatch_reason": None,
+    }
+
+    if not recording_date:
+        result["frame_date_mismatch_reason"] = "recording_date_missing"
+        return result
+
+    def _date_part(value: str | None) -> str | None:
+        if not value or len(value) < 10:
+            return None
+        candidate = value[:10]
+        return candidate if re.fullmatch(r"\d{4}-\d{2}-\d{2}", candidate) else None
+
+    first_date = _date_part(first_frame_datetime)
+    last_date = _date_part(last_frame_datetime)
+    reasons: list[str] = []
+
+    if first_date is None:
+        reasons.append("first_frame_datetime_missing")
+    else:
+        first_match = int(first_date == recording_date)
+        result["first_frame_date_matches_recording_date"] = first_match
+        if not first_match:
+            reasons.append(f"first_frame_date={first_date}")
+
+    if last_date is None:
+        reasons.append("last_frame_datetime_missing")
+    else:
+        last_match = int(last_date == recording_date)
+        result["last_frame_date_matches_recording_date"] = last_match
+        if not last_match:
+            reasons.append(f"last_frame_date={last_date}")
+
+    if (
+        result["first_frame_date_matches_recording_date"] is not None
+        and result["last_frame_date_matches_recording_date"] is not None
+    ):
+        result["frame_dates_match_recording_date"] = int(
+            bool(result["first_frame_date_matches_recording_date"])
+            and bool(result["last_frame_date_matches_recording_date"])
+        )
+
+    result["frame_date_mismatch_reason"] = "; ".join(reasons) if reasons else None
+    return result
+
+
 # ---------------------------------------------------------------------------
 # SEQ header parser
 # ---------------------------------------------------------------------------
@@ -492,6 +554,11 @@ def analyze_directory(
         # Human-readable datetime strings derived from first/last frame timestamps
         row["first_frame_datetime"] = _unix_to_iso(row["first_frame_time"])
         row["last_frame_datetime"]  = _unix_to_iso(row["last_frame_time"])
+        row.update(_frame_date_check(
+            row["recording_date"],
+            row["first_frame_datetime"],
+            row["last_frame_datetime"],
+        ))
 
         # IDX cache provenance (used by 3_seq_to_mp4_convert.py for staleness check)
         if idx_path.exists():
@@ -548,6 +615,10 @@ _DB_COLUMNS: list[tuple[str, str]] = [
     ("last_frame_time",      "REAL"),
     ("first_frame_datetime", "TEXT"),
     ("last_frame_datetime",  "TEXT"),
+    ("first_frame_date_matches_recording_date", "INTEGER"),
+    ("last_frame_date_matches_recording_date",  "INTEGER"),
+    ("frame_dates_match_recording_date",        "INTEGER"),
+    ("frame_date_mismatch_reason",              "TEXT"),
     ("actual_duration",      "REAL"),
     ("expected_duration",    "REAL"),
     ("time_drift_ms",        "REAL"),
@@ -557,8 +628,90 @@ _DB_COLUMNS: list[tuple[str, str]] = [
 ]
 
 
+_SYNC_STATUS_VIEW_SQL = """
+    CREATE VIEW cur_sync_status AS
+    SELECT
+        e.recording_date,
+        e.case_no,
+        e.camera_name,
+        CASE
+          WHEN e.has_idx = 1
+           AND e.header_ok = 1
+           AND e.idx_frames > 0
+           AND e.first_frame_time BETWEEN 1420070400 AND 1924905600
+           AND e.last_frame_time  BETWEEN 1420070400 AND 1924905600
+           AND (e.last_frame_time - e.first_frame_time) BETWEEN 0 AND 250000
+           AND e.size_mb >= 50
+           AND e.frame_dates_match_recording_date = 1
+          THEN 1 ELSE 0
+        END AS is_syncable
+      FROM seq_enriched e
+     WHERE e.camera_name NOT LIKE '%_JUNK'
+       AND e.camera_name NOT LIKE '%_Junk'
+"""
+
+
+def _backfill_frame_date_checks(conn: sqlite3.Connection) -> None:
+    """Populate date-match columns for rows already in seq_enriched."""
+    cur = conn.cursor()
+    rows = cur.execute(f"""
+        SELECT recording_date, case_no, camera_name,
+               first_frame_time, last_frame_time,
+               first_frame_datetime, last_frame_datetime
+          FROM "{SEQ_ANALYSIS_TABLE}"
+    """).fetchall()
+
+    for (
+        recording_date,
+        case_no,
+        camera_name,
+        first_frame_time,
+        last_frame_time,
+        first_frame_datetime,
+        last_frame_datetime,
+    ) in rows:
+        if first_frame_datetime is None:
+            first_frame_datetime = _unix_to_iso(first_frame_time)
+        if last_frame_datetime is None:
+            last_frame_datetime = _unix_to_iso(last_frame_time)
+
+        check = _frame_date_check(
+            recording_date,
+            first_frame_datetime,
+            last_frame_datetime,
+        )
+        cur.execute(f"""
+            UPDATE "{SEQ_ANALYSIS_TABLE}"
+               SET first_frame_datetime = ?,
+                   last_frame_datetime = ?,
+                   first_frame_date_matches_recording_date = ?,
+                   last_frame_date_matches_recording_date = ?,
+                   frame_dates_match_recording_date = ?,
+                   frame_date_mismatch_reason = ?
+             WHERE recording_date = ?
+               AND case_no = ?
+               AND camera_name = ?
+        """, (
+            first_frame_datetime,
+            last_frame_datetime,
+            check["first_frame_date_matches_recording_date"],
+            check["last_frame_date_matches_recording_date"],
+            check["frame_dates_match_recording_date"],
+            check["frame_date_mismatch_reason"],
+            recording_date,
+            case_no,
+            camera_name,
+        ))
+
+
+def _ensure_sync_status_view(conn: sqlite3.Connection) -> None:
+    """Keep cur_sync_status aligned with the current syncability gates."""
+    conn.execute("DROP VIEW IF EXISTS cur_sync_status")
+    conn.execute(_SYNC_STATUS_VIEW_SQL)
+
+
 def _ensure_analysis_table(conn: sqlite3.Connection) -> None:
-    """Create seq_enriched if absent, then add any missing columns."""
+    """Create seq_enriched if absent, then add/backfill any missing columns."""
     cur = conn.cursor()
     cur.execute(f"""
         CREATE TABLE IF NOT EXISTS "{SEQ_ANALYSIS_TABLE}" (
@@ -583,7 +736,20 @@ def _ensure_analysis_table(conn: sqlite3.Connection) -> None:
             cur.execute(
                 f'ALTER TABLE "{SEQ_ANALYSIS_TABLE}" ADD COLUMN {col_name} {col_type}'
             )
+            existing_cols.add(col_name)
+    _backfill_frame_date_checks(conn)
+    _ensure_sync_status_view(conn)
     conn.commit()
+
+
+def ensure_analysis_table(db_path: str) -> None:
+    """Public schema/backfill entrypoint for callers that may have no new SEQs."""
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        _ensure_analysis_table(conn)
+    finally:
+        conn.close()
 
 
 def write_to_db(df: pd.DataFrame, db_path: str) -> None:
