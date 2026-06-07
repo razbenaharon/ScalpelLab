@@ -178,9 +178,30 @@
       "PowerShell($py = 'C:\\\\Users\\\\user\\\\.conda\\\\envs\\\\PythonProject\\\\python.exe'; & $py -c \"import shutil; print\\('ffmpeg:', shutil.which\\('ffmpeg'\\)\\); print\\('ffprobe:', shutil.which\\('ffprobe'\\)\\); print\\('mkvmerge:', shutil.which\\('mkvmerge'\\)\\)\")",
       "PowerShell(C:\\\\Users\\\\user\\\\.conda\\\\envs\\\\PythonProject\\\\python.exe -c \"import psutil; print\\('psutil', psutil.__version__\\)\")",
       "PowerShell($env:SCALPEL_DB = 'C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Temp\\\\throwaway.sqlite'; $py = 'C:\\\\Users\\\\user\\\\.conda\\\\envs\\\\PythonProject\\\\python.exe'; $stage = 'C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Temp\\\\flat_dbg'; if \\(Test-Path $stage\\) { Remove-Item $stage -Recurse -Force }; New-Item -ItemType Directory $stage -Force | Out-Null; Get-ChildItem 'C:\\\\Users\\\\user\\\\scalpel_test_sample\\\\DATA_24-12-30\\\\Case1\\\\Cart_RT_1' -File | ForEach-Object { Copy-Item $_.FullName \"$stage\\\\Cart_RT_1_$\\($_.Name\\)\" }; Get-ChildItem $stage | Format-Table Name -AutoSize; $dst = 'C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Temp\\\\seq_dbg'; if \\(Test-Path $dst\\) { Remove-Item $dst -Recurse -Force }; New-Item -ItemType Directory $dst -Force | Out-Null; & $py F:\\\\Projects\\\\ScalpelLab\\\\scripts\\\\1_seq_curation.py --source $stage --dest $dst --workers 2 --auto-confirm 2>&1 | Select-Object -Last 40)",
-      "PowerShell($env:SCALPELLAB_TEST_SAMPLE_DIR = 'C:\\\\Users\\\\user\\\\scalpel_test_sample'; $py = 'C:\\\\Users\\\\user\\\\.conda\\\\envs\\\\PythonProject\\\\python.exe'; & $py -m pytest -v tests/ 2>&1 | Select-Object -Last 25)"
+      "PowerShell($env:SCALPELLAB_TEST_SAMPLE_DIR = 'C:\\\\Users\\\\user\\\\scalpel_test_sample'; $py = 'C:\\\\Users\\\\user\\\\.conda\\\\envs\\\\PythonProject\\\\python.exe'; & $py -m pytest -v tests/ 2>&1 | Select-Object -Last 25)",
+      "PowerShell(\\(Get-Command python\\).Source; C:\\\\ProgramData\\\\anaconda3\\\\python.exe -c \"import numpy; print\\('numpy', numpy.__version__\\)\")",
+      "PowerShell(& \"C:\\\\ProgramData\\\\anaconda3\\\\python.exe\" scripts/helpers/align_old_new_mp4.py --help)",
+      "PowerShell(& \"C:\\\\ProgramData\\\\anaconda3\\\\python.exe\" scripts/helpers/align_old_new_mp4.py --dry-run --out-csv logs/align/dry_run_sample.csv 2>&1)",
+      "PowerShell(& \"C:\\\\ProgramData\\\\anaconda3\\\\python.exe\" scripts/helpers/align_old_new_mp4.py --date 2025-10-12 --case 1 --samples 9 --debug 2>&1)",
+      "PowerShell(& \"C:\\\\ProgramData\\\\anaconda3\\\\python.exe\" scripts/helpers/align_old_new_mp4.py --date 2025-10-12 --case 1 --samples 9 2>&1)",
+      "PowerShell(& \"C:\\\\ProgramData\\\\anaconda3\\\\python.exe\" scripts/helpers/validate_mapping_formulas.py --cases \"2025-10-12:1\" --cameras Patient_Monitor Cart_RT_1 --samples 5 --local-radius 5 --out-detailed-csv logs/align/v2_smoke_detailed.csv --out-summary-csv logs/align/v2_smoke_summary.csv 2>&1)",
+      "PowerShell(python -c \"import ast; ast.parse\\(open\\(r'f:\\\\Projects\\\\ScalpelLab\\\\scripts\\\\helpers\\\\validate_mapping_formulas.py', encoding='utf-8'\\).read\\(\\)\\); print\\('PARSE_OK'\\)\")",
+      "PowerShell(python -c \"import sys; sys.path.insert\\(0, r'f:\\\\Projects\\\\ScalpelLab\\\\scripts\\\\helpers'\\); import validate_mapping_formulas as m; print\\('IMPORT_OK'\\); print\\('G_HYPOTHESES =', [n for n, _ in m.G_HYPOTHESES]\\)\")",
+      "PowerShell(conda info --envs 2>$null; \\(Get-Command python\\).Source; \\(Get-Command python\\).Source -replace 'python\\\\.exe$', '')",
+      "PowerShell(& \"C:\\\\Users\\\\user\\\\.conda\\\\envs\\\\PythonProject\\\\python.exe\" -c \"import numpy; print\\('numpy', numpy.__version__\\)\")",
+      "PowerShell(& \"C:\\\\Users\\\\user\\\\.conda\\\\envs\\\\ML\\\\python.exe\" -c \"import numpy; print\\('numpy', numpy.__version__\\)\")",
+      "PowerShell(& \"C:\\\\Users\\\\user\\\\.conda\\\\envs\\\\PythonProject\\\\python.exe\" f:\\\\Projects\\\\ScalpelLab\\\\scripts\\\\helpers\\\\validate_mapping_formulas.py --help)",
+      "Bash('C:\\\\Users\\\\user\\\\.conda\\\\envs\\\\PythonProject\\\\python.exe' -c ' *)",
+      "Bash(python scripts/helpers/h_curation_sync.py > /tmp/h_sync_live.log 2>&1; echo \"EXIT=$?\")",
+      "Bash(echo \"=== /tmp/h_sync_live.log ===\"; cat /tmp/h_sync_live.log 2>/dev/null; echo \"=== G log tail ===\"; tail -15 \"/g/Workstation_F_Backup_250819/H_curation_sync_20260607.log\" 2>/dev/null)",
+      "Read(//g/Workstation_F_Backup_250819/**)",
+      "Bash(powershell -NoProfile -Command \"Get-Process python -ErrorAction SilentlyContinue | Select-Object Id,StartTime | Format-Table -AutoSize\")",
+      "PowerShell($h = \"H:\\\\Data_Curation\"; \"H file count \\(should still be 69\\): \" + \\(Get-ChildItem $h -Recurse -File -EA SilentlyContinue\\).Count)"
     ],
     "deny": [],
-    "ask": []
+    "ask": [],
+    "additionalDirectories": [
+      "\\tmp"
+    ]
   }
 }
