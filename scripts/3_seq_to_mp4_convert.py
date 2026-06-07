@@ -212,6 +212,20 @@ class PlanDiagnostics:
     timeline_extended: int = 0
 
 
+def _timestamp_problem(t_start: float, t_end: float) -> Optional[str]:
+    """Return why an IDX timestamp pair is unsafe for synchronization."""
+    if t_start < EPOCH_MIN or t_start > EPOCH_MAX:
+        return f"t_start year {_utc_year(t_start)}"
+    if t_end < EPOCH_MIN or t_end > EPOCH_MAX:
+        return f"t_end year {_utc_year(t_end)}"
+    duration = t_end - t_start
+    if duration < 0:
+        return f"negative duration {duration:.0f}s"
+    if duration > MAX_VALID_DURATION_SECONDS:
+        return f"duration {duration / 86400:.1f} days"
+    return None
+
+
 # =========================
 # Utility Functions
 # =========================
@@ -901,22 +915,23 @@ def build_session_groups(
 
         # Optional early epoch check using seq_enriched frame timestamps
         # (avoids IDX parse entirely for obviously corrupt cameras)
-        if sfa and sfa['first_frame_time'] and sfa['last_frame_time']:
+        if sfa and sfa['cache_valid'] and sfa['first_frame_time'] and sfa['last_frame_time']:
             ft, lt = sfa['first_frame_time'], sfa['last_frame_time']
-            if ft < EPOCH_MIN or ft > EPOCH_MAX or lt < EPOCH_MIN or lt > EPOCH_MAX:
-                bad_ts = ft if (ft < EPOCH_MIN or ft > EPOCH_MAX) else lt
-                bad_year = _utc_year(bad_ts)
-                detail = f"{date} Case{case} {camera}: first/last year {bad_year}"
+            problem = _timestamp_problem(ft, lt)
+            if problem:
+                detail = f"{date} Case{case} {camera}: {problem}"
                 if diagnostics is not None:
                     diagnostics.corrupt_timestamps.append(detail)
                 if verbose:
                     print(f"  ⚠️  CORRUPT TIMESTAMPS: {camera} — "
-                          f"first/last_frame_time decodes to year {bad_year}, "
-                          f"valid range is 2015–2030 — skipping (would poison group timeline)")
+                          f"{problem}; valid range is 2015–2030 and duration must be sane "
+                          f"— skipping (would poison group timeline)")
                 continue
 
         # Parse IDX — use cached values if seq_enriched has a valid cache, else fast scan
-        if sfa and sfa['cache_valid'] and sfa['frame_count']:
+        if (sfa and sfa['cache_valid'] and sfa['frame_count']
+                and sfa['first_frame_time'] is not None
+                and sfa['last_frame_time'] is not None):
             meta = {
                 'frame_count': sfa['frame_count'],
                 't_start': sfa['first_frame_time'],
@@ -946,25 +961,17 @@ def build_session_groups(
         t_start = meta['t_start']
         t_end = meta['t_end']
 
-        # Epoch validation: reject cameras with IDX timestamps outside 2015–2030
-        # This prevents a corrupt camera from poisoning the shared global timeline.
-        if t_start < EPOCH_MIN or t_start > EPOCH_MAX:
-            bad_year = _utc_year(t_start)
-            detail = f"{date} Case{case} {camera}: t_start year {bad_year}"
+        # Reject cameras with unusable IDX timestamps. This prevents a corrupt
+        # camera from poisoning the shared global timeline.
+        problem = _timestamp_problem(t_start, t_end)
+        if problem:
+            detail = f"{date} Case{case} {camera}: {problem}"
             if diagnostics is not None:
                 diagnostics.corrupt_timestamps.append(detail)
             if verbose:
-                print(f"  ⚠️  CORRUPT TIMESTAMPS: {camera} — t_start decodes to year {bad_year}, "
-                      f"valid range is 2015–2030 — skipping (would poison group timeline)")
-            continue
-        if t_end < EPOCH_MIN or t_end > EPOCH_MAX:
-            bad_year = _utc_year(t_end)
-            detail = f"{date} Case{case} {camera}: t_end year {bad_year}"
-            if diagnostics is not None:
-                diagnostics.corrupt_timestamps.append(detail)
-            if verbose:
-                print(f"  ⚠️  CORRUPT TIMESTAMPS: {camera} — t_end decodes to year {bad_year}, "
-                      f"valid range is 2015–2030 — skipping (would poison group timeline)")
+                print(f"  ⚠️  CORRUPT TIMESTAMPS: {camera} — {problem}; "
+                      f"valid range is 2015–2030 and duration must be sane "
+                      f"— skipping (would poison group timeline)")
             continue
 
         # Resolution: prefer seq_enriched (no subprocess), fall back to ffprobe
@@ -994,16 +1001,6 @@ def build_session_groups(
             _cached_frame_count=meta['frame_count'],
         )
 
-        # Sanity check: skip cameras with corrupted IDX timestamps
-        if cam_timeline.duration > MAX_VALID_DURATION_SECONDS:
-            detail = f"{date} Case{case} {camera}: {cam_timeline.duration/86400:.1f} days"
-            if diagnostics is not None:
-                diagnostics.corrupt_duration.append(detail)
-            if verbose:
-                print(f"  ⚠️  CORRUPTED timestamps: {camera} "
-                      f"(duration={cam_timeline.duration:.0f}s / {cam_timeline.duration/86400:.1f} days) — skipping")
-            continue
-
         session.cameras[camera] = cam_timeline
 
         if cam_timeline.t_start < session.t_global_start:
@@ -1032,7 +1029,9 @@ def build_session_groups(
             idx_path = build_idx_path(seq_path) if seq_path else None
             sfa = get_seq_enriched_metadata(DB_PATH, date, case, cam_name, idx_path)
             meta = None
-            if sfa and sfa['cache_valid'] and sfa['frame_count']:
+            if (sfa and sfa['cache_valid'] and sfa['frame_count']
+                    and sfa['first_frame_time'] is not None
+                    and sfa['last_frame_time'] is not None):
                 meta = {
                     't_start': sfa['first_frame_time'],
                     't_end': sfa['last_frame_time'],
@@ -1048,8 +1047,7 @@ def build_session_groups(
             if meta:
                 t_start = meta['t_start']
                 t_end = meta['t_end']
-                # Validate epoch range
-                if t_start < EPOCH_MIN or t_start > EPOCH_MAX or t_end < EPOCH_MIN or t_end > EPOCH_MAX:
+                if _timestamp_problem(t_start, t_end):
                     continue
                 if t_start < session.t_global_start:
                     session.t_global_start = t_start
@@ -1070,7 +1068,7 @@ def build_not_syncable_fallbacks(
     diagnostics: PlanDiagnostics | None = None,
     verbose: bool = False,
 ) -> List[NotSyncableCamera]:
-    """Find missing-IDX SEQs that FFmpeg can still decode as raw H.264.
+    """Find unsyncable SEQs that FFmpeg can still decode as raw H.264.
 
     These outputs are intentionally excluded from synchronized groups because
     there are no trusted per-frame timestamps. They are useful archive MP4s,
@@ -1087,8 +1085,29 @@ def build_not_syncable_fallbacks(
         if seq_path is None or not seq_path.exists():
             continue
 
-        if build_idx_path(seq_path) is not None:
-            continue
+        idx_path = build_idx_path(seq_path)
+        reason = "missing IDX; direct FFmpeg conversion; timing is approximate"
+        if idx_path is not None:
+            sfa = get_seq_enriched_metadata(DB_PATH, date, case, camera, idx_path)
+            meta = None
+            if (sfa and sfa['cache_valid'] and sfa['frame_count']
+                    and sfa['first_frame_time'] is not None
+                    and sfa['last_frame_time'] is not None):
+                meta = {
+                    'frame_count': sfa['frame_count'],
+                    't_start': sfa['first_frame_time'],
+                    't_end': sfa['last_frame_time'],
+                }
+            else:
+                meta = parse_idx_metadata_fast(idx_path)
+
+            if not meta or meta.get('frame_count', 0) == 0:
+                reason = "empty/unreadable IDX; direct FFmpeg conversion; timing is approximate"
+            else:
+                problem = _timestamp_problem(meta['t_start'], meta['t_end'])
+                if not problem:
+                    continue
+                reason = f"corrupt IDX timestamps ({problem}); direct FFmpeg conversion; timing is approximate"
 
         stream = probe_h264_stream(seq_path, ffprobe_path)
         if stream is None:
@@ -1103,7 +1122,7 @@ def build_not_syncable_fallbacks(
         source_fps = _parse_fps(sfa.get('fps') if sfa else None, TARGET_FPS)
         if verbose:
             print(f"  ⚠️  NOT SYNCABLE fallback: {date} Case{case} {camera} — "
-                  f"missing IDX, direct H.264 decode {stream['width']}x{stream['height']} "
+                  f"{reason}, direct H.264 decode {stream['width']}x{stream['height']} "
                   f"@ assumed {source_fps:.3f}fps")
 
         fallbacks.append(NotSyncableCamera(
@@ -1115,7 +1134,7 @@ def build_not_syncable_fallbacks(
             height=stream['height'],
             pix_fmt=stream['pix_fmt'],
             source_fps=source_fps,
-            reason="missing IDX; direct FFmpeg conversion; timing is approximate",
+            reason=reason,
         ))
 
     return fallbacks
@@ -1491,7 +1510,7 @@ def process_camera_not_syncable(
         "-cq", "27",
         "-pix_fmt", "yuv420p",
         "-r", str(TARGET_FPS),
-        "-metadata", "comment=NOT_SYNCABLE: missing IDX; direct FFmpeg conversion; timing is approximate",
+        "-metadata", f"comment=NOT_SYNCABLE: {cam.reason}",
         "-movflags", "+faststart",
         str(out_path),
     ]
@@ -1756,14 +1775,14 @@ def display_session_plan(groups: List[SessionGroup]):
 
 
 def display_not_syncable_plan(cameras: List[NotSyncableCamera], verbose: bool = False):
-    """Print the direct-conversion plan for missing-IDX files."""
+    """Print the direct-conversion plan for unsyncable files."""
     if not cameras:
         return
 
     print("\n" + "=" * 90)
     print("NOT SYNCABLE FALLBACK PLAN")
     print("=" * 90)
-    print("Missing-IDX files that can be archived as *_NOT_SYNCABLE.mp4.")
+    print("Files with missing or unusable IDX timing that can be archived as *_NOT_SYNCABLE.mp4.")
 
     if not verbose:
         grouped: Dict[Tuple[str, int], List[str]] = {}
@@ -1821,7 +1840,7 @@ Examples:
                         help="Build the synchronization plan and print it, then exit without encoding")
     parser.add_argument("--include-not-syncable", action=argparse.BooleanOptionalAction,
                         default=True,
-                        help=("Also convert missing-IDX SEQs that FFmpeg can decode directly "
+                        help=("Also convert SEQs with missing or unusable IDX timing that FFmpeg can decode directly "
                               "(default: enabled). Outputs are marked *_NOT_SYNCABLE.mp4 "
                               "and are not synchronized. Use --no-include-not-syncable "
                               "for syncable-only runs."))
@@ -1959,7 +1978,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     print_plan_diagnostics(diagnostics, include_not_syncable=args.include_not_syncable)
 
     if not session_groups and not not_syncable_cameras:
-        print("❌ No valid session groups found (missing IDX files?)")
+        print("❌ No syncable groups or NOT_SYNCABLE fallbacks found")
         _emit("plan", total=0, sessions=0)
         _emit("done", ok=0, fail=0, skip=0, error="no valid sessions")
         return 1
@@ -2117,7 +2136,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if not_syncable_cameras:
         print(f"\n{'─' * 90}")
-        print(f"[NOT SYNCABLE FALLBACK] {len(not_syncable_cameras)} missing-IDX cameras")
+        print(f"[NOT SYNCABLE FALLBACK] {len(not_syncable_cameras)} unsyncable cameras")
         print(f"{'─' * 90}")
 
         tasks = []
