@@ -70,3 +70,18 @@ Substituting `K_seq = i_old` into Part B gives the complete OLD → NEW map:
 ```python
 new_frame = new_pre_roll_frames + round((idx_timestamp[i_old] - idx_timestamp[0]) * 30)
 ```
+
+
+
+
+the only videos which not applied are :
+
+
+DATA_23-09-26,Case1,7
+DATA_23-09-27,Case2,7
+DATA_24-01-01,Case1,4
+,,
+DATA_24-01-08,Case2,4
+DATA_24-02-06,Case1,3
+,,
+DATA_24-02-20,Case1,6
