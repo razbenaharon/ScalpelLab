@@ -378,11 +378,14 @@ def copy_orphaned_files(orphaned_files, dest_root, source_root, progress_callbac
     
     # Copy orphaned files using the same threading approach
     log_with_time(f"Copying orphaned files with 8 workers...")
-    successful_copies, failed_copies = copy_files_with_threads(
+    successful_copies, failed_copies, skipped_copies = copy_files_with_threads(
         {'file_operations': orphaned_operations}, 8, progress_callback
     )
     
-    log_with_time(f"Orphaned files copy completed: {successful_copies} successful, {failed_copies} failed")
+    log_with_time(
+        f"Orphaned files copy completed: {successful_copies} copied, "
+        f"{skipped_copies} skipped, {failed_copies} failed"
+    )
     
     return successful_copies, failed_copies, orphaned_operations
 
@@ -590,19 +593,54 @@ def atomic_copy_file(src_path, dest_path, max_retries=3):
     # Create destination directory if it doesn't exist
     dest.parent.mkdir(parents=True, exist_ok=True)
     
-    # Generate unique destination if file exists
+    # Existing destination files are deliberate idempotency checks. Do not
+    # create suffixed duplicates on reruns.
     if dest.exists():
-        stem = dest.stem
-        suffix = dest.suffix
-        parent = dest.parent
-        i = 1
-        while True:
-            new_name = f"{stem}_{i}{suffix}"
-            candidate = parent / new_name
-            if not candidate.exists():
-                dest = candidate
-                break
-            i += 1
+        try:
+            src_size = src.stat().st_size
+            dest_size = dest.stat().st_size
+        except Exception as e:
+            logger.error(f"Failed to inspect existing destination for {src} -> {dest}: {e}\n{traceback.format_exc()}")
+            return False, f"Failed to inspect existing destination: {e}", None
+
+        if src_size != dest_size:
+            return (
+                False,
+                f"Destination already exists with different size ({dest_size} != {src_size}); refusing to overwrite or duplicate",
+                {
+                    'source_size': src_size,
+                    'destination_size': dest_size,
+                    'match': False,
+                    'skipped': False,
+                },
+            )
+
+        try:
+            src_hash = calculate_file_hash(src)
+            dest_hash = calculate_file_hash(dest)
+        except Exception as e:
+            logger.error(f"Failed to verify existing destination for {src} -> {dest}: {e}\n{traceback.format_exc()}")
+            return False, f"Failed to verify existing destination: {e}", None
+
+        hash_match = src_hash == dest_hash
+        if hash_match:
+            return True, None, {
+                'source_hash': src_hash,
+                'destination_hash': dest_hash,
+                'match': True,
+                'skipped': True,
+            }
+
+        return (
+            False,
+            "Destination already exists with same size but different hash; refusing to overwrite or duplicate",
+            {
+                'source_hash': src_hash,
+                'destination_hash': dest_hash,
+                'match': False,
+                'skipped': False,
+            },
+        )
     
     # Calculate source hash
     try:
@@ -618,16 +656,30 @@ def atomic_copy_file(src_path, dest_path, max_retries=3):
         try:
             with open(src, 'rb') as fsrc, open(tmp_dest, 'wb') as fdst:
                 shutil.copyfileobj(fsrc, fdst)
+            if dest.exists():
+                try:
+                    tmp_dest.unlink()
+                except Exception as e2:
+                    logger.warning(f"Failed to remove temp file {tmp_dest}: {e2}")
+                return False, "Destination appeared during copy; refusing to overwrite", None
             os.replace(tmp_dest, dest)
             
             # Verify copy with hash
             try:
                 dest_hash = calculate_file_hash(dest)
                 hash_match = src_hash == dest_hash
+                if not hash_match:
+                    return False, "Hash verification failed after copy", {
+                        'source_hash': src_hash,
+                        'destination_hash': dest_hash,
+                        'match': False,
+                        'skipped': False,
+                    }
                 return True, None, {
                     'source_hash': src_hash,
                     'destination_hash': dest_hash,
-                    'match': hash_match
+                    'match': True,
+                    'skipped': False,
                 }
             except Exception as e:
                 logger.error(f"Failed to verify copy for {src} -> {dest}: {e}\n{traceback.format_exc()}")
@@ -654,10 +706,11 @@ def copy_files_with_threads(file_operations, max_workers=8, progress_callback=No
     total_files = len(file_operations['file_operations'])
     completed_files = 0
     successful_copies = 0
+    skipped_copies = 0
     failed_copies = 0
     
     def copy_single_file(operation):
-        nonlocal completed_files, successful_copies, failed_copies
+        nonlocal completed_files, successful_copies, skipped_copies, failed_copies
         
         try:
             success, error_msg, hash_verification = atomic_copy_file(
@@ -665,12 +718,15 @@ def copy_files_with_threads(file_operations, max_workers=8, progress_callback=No
                 operation['destination_path']
             )
             
-            operation['status'] = 'completed' if success else 'failed'
+            skipped = bool(hash_verification and hash_verification.get('skipped'))
+            operation['status'] = 'skipped' if skipped else ('completed' if success else 'failed')
             operation['error_message'] = error_msg
             operation['hash_verification'] = hash_verification
             
             completed_files += 1
-            if success:
+            if skipped:
+                skipped_copies += 1
+            elif success:
                 successful_copies += 1
                 # logger.info(f"Copied: {operation['source_path']} -> {operation['destination_path']}")
             else:
@@ -679,7 +735,7 @@ def copy_files_with_threads(file_operations, max_workers=8, progress_callback=No
             
             if progress_callback:
                 progress_callback(completed_files, total_files, 
-                                f"Copied {completed_files}/{total_files}")
+                                f"Processed {completed_files}/{total_files}")
             
             return operation
         except Exception as e:
@@ -690,7 +746,7 @@ def copy_files_with_threads(file_operations, max_workers=8, progress_callback=No
             failed_copies += 1
             if progress_callback:
                 progress_callback(completed_files, total_files, 
-                                f"Copied {completed_files}/{total_files}")
+                                f"Processed {completed_files}/{total_files}")
             return operation
     
     # Use ThreadPoolExecutor for parallel copying
@@ -711,7 +767,42 @@ def copy_files_with_threads(file_operations, max_workers=8, progress_callback=No
                 operation['status'] = 'failed'
                 operation['error_message'] = str(e)
     
-    return successful_copies, failed_copies
+    return successful_copies, failed_copies, skipped_copies
+
+
+def summarize_destination_state(file_operations):
+    """Summarize planned copy destinations before a run.
+
+    Existing same-size files are expected on reruns and will be hash-checked
+    during execution. Existing different-size files are conflicts.
+    """
+    bytes_to_copy = 0
+    existing_same_size = 0
+    conflicts = []
+
+    for operation in file_operations['file_operations']:
+        dest = Path(operation['destination_path'])
+        source_size = operation['file_size']
+
+        if not dest.exists():
+            bytes_to_copy += source_size
+            continue
+
+        try:
+            dest_size = dest.stat().st_size
+        except OSError as e:
+            conflicts.append((operation, f"could not inspect destination: {e}"))
+            continue
+
+        if dest_size == source_size:
+            existing_same_size += 1
+        else:
+            conflicts.append((
+                operation,
+                f"destination size differs ({dest_size} != {source_size})",
+            ))
+
+    return bytes_to_copy, existing_same_size, conflicts
 
 
 def run_curation(
@@ -770,6 +861,20 @@ def run_curation(
 
     total_files = file_operations['metadata']['total_files']
     print(f"\nPlanning to copy {total_files} files.")
+
+    bytes_to_copy, existing_same_size, destination_conflicts = summarize_destination_state(file_operations)
+    if existing_same_size:
+        print(
+            f"Found {existing_same_size} existing destination files with matching size; "
+            "they will be hash-verified and skipped."
+        )
+    if destination_conflicts:
+        print("\n[ERROR] Destination conflicts found. Refusing to overwrite or create duplicates.")
+        for operation, reason in destination_conflicts[:10]:
+            print(f"  {operation['source_path']} -> {operation['destination_path']} ({reason})")
+        if len(destination_conflicts) > 10:
+            print(f"  ... and {len(destination_conflicts) - 10} more conflicts.")
+        return
     
     # Check orphaned
     print("Scanning for orphaned companion files...")
@@ -779,10 +884,9 @@ def run_curation(
         print(f"Found {total_orphaned} orphaned companion files.")
     
     # Check disk space
-    total_size = sum(op['file_size'] for op in file_operations['file_operations'])
     try:
         free_space = psutil.disk_usage(dest_dir).free
-        if free_space < total_size + 100*1024*1024: # 100MB buffer
+        if free_space < bytes_to_copy + 100*1024*1024: # 100MB buffer
             print(f"\n[ERROR] Insufficient disk space in {dest_dir}!")
             return
     except:
@@ -793,8 +897,9 @@ def run_curation(
     print(f"Source:      {root_dir}")
     print(f"Destination: {dest_dir}")
     print(f"Files:       {total_files}")
+    print(f"Existing:    {existing_same_size}")
     print(f"Orphaned:    {total_orphaned}")
-    print(f"Total size:  {total_size / (1024 ** 3):,.2f} GB")
+    print(f"To copy:     {bytes_to_copy / (1024 ** 3):,.2f} GB")
 
     if dry_run:
         print("\n[DRY RUN] No files were copied.")
@@ -810,7 +915,7 @@ def run_curation(
 
     # Execute
     print(f"\nStarting copy with {max_workers} workers...")
-    successful, failed = copy_files_with_threads(file_operations, max_workers, print_progress)
+    successful, failed, skipped = copy_files_with_threads(file_operations, max_workers, print_progress)
     print("\nCopy finished.")
     
     # Reports (output files no longer generated as per user request)
@@ -822,8 +927,9 @@ def run_curation(
         print("\nOrphaned files processed.")
 
     print(f"\nOperation Complete.")
-    print(f"Successful: {successful}")
-    print(f"Failed:     {failed}")
+    print(f"Copied:  {successful}")
+    print(f"Skipped: {skipped}")
+    print(f"Failed:  {failed}")
     print(f"Detailed logs in: {dest_dir}")
 
 
