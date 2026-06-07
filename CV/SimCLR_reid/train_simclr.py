@@ -1456,6 +1456,13 @@ def parse_args():
     # Training
     parser.add_argument("--epochs", type=int, default=DEFAULT_CONFIG["epochs"])
     parser.add_argument("--patience", type=int, default=10)
+    parser.add_argument("--run_name", type=str, default="single_run")
+    parser.add_argument(
+        "--resume_from",
+        type=str,
+        default=None,
+        help="Resume a single run from best_checkpoint.pt or last_checkpoint.pt.",
+    )
     parser.add_argument("--seed", type=int, default=DEFAULT_CONFIG["seed"])
     parser.add_argument(
         "--no_deterministic",
@@ -1480,6 +1487,12 @@ def parse_args():
     parser.add_argument("--temperature", type=float, default=None)
     parser.add_argument("--projection_dim", type=int, default=None)
     parser.add_argument("--color_jitter", type=float, default=None)
+    parser.add_argument("--crop_scale_min", type=float, default=None)
+    parser.add_argument("--random_erasing_prob", type=float, default=None)
+    parser.add_argument("--random_erasing_scale_max", type=float, default=None)
+    parser.add_argument("--grayscale_prob", type=float, default=None)
+    parser.add_argument("--gaussian_blur_prob", type=float, default=None)
+    parser.add_argument("--solarization_prob", type=float, default=None)
     parser.add_argument(
         "--freeze_early_layers",
         action=argparse.BooleanOptionalAction,
@@ -1521,6 +1534,12 @@ def main():
             ("temperature", args.temperature),
             ("projection_dim", args.projection_dim),
             ("color_jitter_strength", args.color_jitter),
+            ("crop_scale_min", args.crop_scale_min),
+            ("random_erasing_prob", args.random_erasing_prob),
+            ("random_erasing_scale_max", args.random_erasing_scale_max),
+            ("grayscale_prob", args.grayscale_prob),
+            ("gaussian_blur_prob", args.gaussian_blur_prob),
+            ("solarization_prob", args.solarization_prob),
         ]:
             if value is not None:
                 config[key] = value
@@ -1528,9 +1547,10 @@ def main():
             config,
             args.dataset_dir,
             args.output_dir,
-            run_name="single_run",
+            run_name=args.run_name,
             trial=None,
             patience=args.patience,
+            resume_from=args.resume_from,
         )
     else:
         run_optuna_study(args, config)
