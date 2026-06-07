@@ -52,6 +52,10 @@ SEQ_ROOT = r"F:\Room_8_Data\Sequence_Backup"
 # Expected structure: MP4_ROOT/DATA_YY-MM-DD/CaseN/CameraName/*.mp4
 MP4_ROOT = r"F:\Room_8_Data\Recordings"
 
+# Root directory for finalized BORIS and monitor analysis CSVs.
+# Expected structure: ANALYSES_ROOT/DATA_YY-MM-DD/CaseN/{Boris,Monitor}/
+ANALYSES_ROOT = r"F:\Room_8_Data\Analyses_Finale"
+
 # NorPix SequenceViewer executable used by the IDX creation workflow.
 # Opening a .seq file with this tool creates or refreshes the companion .seq.idx.
 NORPIX_SEQUENCE_VIEWER_PATH = r"C:\Program Files\Common Files\NorPix\SequenceViewer.exe"
@@ -113,6 +117,11 @@ def get_mp4_root() -> str:
     return MP4_ROOT
 
 
+def get_analyses_root() -> str:
+    """Get the finalized analyses root directory as a string."""
+    return ANALYSES_ROOT
+
+
 def get_norpix_sequence_viewer_path() -> str:
     """Get the NorPix SequenceViewer executable path as a string.
 
@@ -159,6 +168,11 @@ def validate_paths() -> Dict[str, Dict[str, Any]]:
             'exists': Path(MP4_ROOT).exists(),
             'type': 'directory'
         },
+        'analyses_root': {
+            'path': ANALYSES_ROOT,
+            'exists': Path(ANALYSES_ROOT).exists(),
+            'type': 'directory'
+        },
         'norpix_sequence_viewer': {
             'path': NORPIX_SEQUENCE_VIEWER_PATH,
             'exists': Path(NORPIX_SEQUENCE_VIEWER_PATH).is_file(),
@@ -196,6 +210,7 @@ def print_config() -> None:
     print(f"Database:      {DB_PATH}")
     print(f"SEQ Root:      {SEQ_ROOT}")
     print(f"MP4 Root:      {MP4_ROOT}")
+    print(f"Analyses Root: {ANALYSES_ROOT}")
     print(f"SequenceViewer: {NORPIX_SEQUENCE_VIEWER_PATH}")
     print("=" * 70)
 
