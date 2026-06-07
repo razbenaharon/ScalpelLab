@@ -88,6 +88,10 @@ These columns are computed from the parsed IDX timestamps and the SEQ header FPS
 |---|---|---|---|
 | `first_frame_datetime` | `TEXT` | UTC formatting of `first_frame_time` | Human-readable UTC timestamp string in the form `YYYY-MM-DD HH:MM:SS.ffffff`. The code does not append a timezone suffix even though the value is generated in UTC. |
 | `last_frame_datetime` | `TEXT` | UTC formatting of `last_frame_time` | Human-readable UTC timestamp string for the last frame, using the same format as `first_frame_datetime`. |
+| `first_frame_date_matches_recording_date` | `INTEGER` | `date(first_frame_datetime) == recording_date` | Boolean-like flag: `1` when the first IDX frame's UTC calendar date matches the path-derived `recording_date`, `0` when it differs, `NULL` when the first frame datetime is missing. |
+| `last_frame_date_matches_recording_date` | `INTEGER` | `date(last_frame_datetime) == recording_date` | Boolean-like flag for the last IDX frame's UTC calendar date. |
+| `frame_dates_match_recording_date` | `INTEGER` | first flag AND last flag | Overall date sanity flag. `cur_sync_status` requires this to be `1`, so SEQs whose IDX timestamps land on the wrong date are not treated as syncable. |
+| `frame_date_mismatch_reason` | `TEXT` | Date-check details | `NULL` when both frame dates match. Otherwise a compact reason such as `last_frame_date=2025-01-16` or `first_frame_datetime_missing`. |
 | `actual_duration` | `REAL` | `last_frame_time - first_frame_time` | Observed elapsed time across the indexed recording, in seconds. |
 | `expected_duration` | `REAL` | `idx_frames / fps` | Expected duration in seconds using the number of IDX records and the SEQ header FPS. This reflects the script's implementation exactly. |
 | `time_drift_ms` | `REAL` | `(actual_duration - expected_duration) * 1000` | Difference between observed duration and FPS-derived expected duration, in milliseconds. Positive means the timestamp span is longer than expected. |
@@ -108,7 +112,7 @@ These columns are used so other scripts can reuse IDX parse results without repa
 |---|---|
 | No `.idx` file exists | All IDX-derived, duration, datetime, and cache columns |
 | Invalid / corrupt SEQ header | `description`, `width`, `height`, `allocated_frames`, `fps`, `compression_fmt`, `rec_timestamp`, `exposure_ns` |
-| Partial row created by `3_seq_to_mp4_convert.py` before full enrichment | Most non-key columns except `idx_frames`, `first_frame_time`, `last_frame_time`, `idx_file_size`, `idx_cached_at` |
+| Partial row created by `3_seq_to_mp4_convert.py` before full enrichment | Most non-key columns except `idx_frames`, `first_frame_time`, `last_frame_time`, `idx_file_size`, `idx_cached_at`. The next `2_update_db.py` analysis pass backfills frame datetime/date-check columns even if no new SEQs are found. |
 
 ## Quick source map
 
