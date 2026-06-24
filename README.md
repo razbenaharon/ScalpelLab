@@ -1,8 +1,8 @@
 # ScalpelLab
 
 ScalpelLab is a Windows-focused Python workspace for managing surgical video
-recordings, tracking SEQ and MP4 assets in SQLite, running privacy redaction and
-review workflows, and exploring computer-vision pipelines for room-camera data.
+recordings, tracking SEQ and MP4 assets in SQLite, and running privacy redaction
+and review workflows.
 
 ## What Is In This Repo
 
@@ -15,8 +15,8 @@ review workflows, and exploring computer-vision pipelines for room-camera data.
 - A multi-video MPV review tool for synchronized case playback.
 - Helper utilities for database comparison, backup validation, video cutting,
   SEQ IDX repair, and schema export.
-- Computer-vision research code under `CV/`, including YOLO and SimCLR/ReID
-  experiments.
+- Remapping of BORIS event timing from the OLD MP4 timeline onto the
+  converted NEW MP4 timeline (`scripts/helpers/boris_remap_to_new_mp4.py`).
 
 ## Quick Start
 
@@ -32,6 +32,7 @@ Edit [`config.py`](config.py) and set:
 
 - `SEQ_ROOT` to your organized SEQ root
 - `MP4_ROOT` to your MP4 recordings root
+- `ANALYSES_ROOT` to your finalized per-case analysis root (`Case_Analyses`)
 - `NORPIX_SEQUENCE_VIEWER_PATH` to the NorPix SequenceViewer executable used
   to create `.seq.idx` files
 
@@ -42,8 +43,35 @@ Sequence_Backup/                    Recordings/
 └── DATA_YY-MM-DD/                  └── DATA_YY-MM-DD/
     └── CaseN/                          └── CaseN/
         └── CameraName/                     └── CameraName/
-            └── *.seq                           └── *.mp4
+            ├── *.seq                           └── *.mp4
+            └── *.seq.idx
 ```
+
+`Case_Analyses/` holds the finalized, per-case analysis artifacts (behavioral
+labels and monitor vitals) that sit alongside the raw video:
+
+```text
+Case_Analyses/
+└── DATA_YY-MM-DD/
+    └── CaseN/
+        ├── Boris/
+        │   ├── <date>-caseN_raw.csv                  # raw BORIS export (OLD MP4 timeline)
+        │   ├── <date>-caseN_standardized.csv         # cleaned/standardized events
+        │   └── <date>-caseN_*_new_mp4.csv            # events remapped to the NEW MP4 timeline
+        └── Monitor/
+            └── motior_data.csv                       # per-case monitor vitals time series
+```
+
+File types:
+
+- `*_raw.csv` — direct BORIS observation export; `Time`/`Image index` are on the
+  OLD per-camera MP4 timeline (one frame per SEQ frame).
+- `*_standardized.csv` — the same events after cleanup/normalization, used for
+  downstream analysis.
+- `*_new_mp4.csv` — produced by `scripts/helpers/boris_remap_to_new_mp4.py`;
+  adds NEW-MP4 frame/time columns via `docs/new recordings formula.md`.
+- `motior_data.csv` — exported patient-monitor vital signs for the case
+  (imported by `scripts/import_analysis_finale.py`).
 
 ### 3. Validate configuration
 
@@ -148,6 +176,9 @@ logs/
   while preserving source structure.
 - [`scripts/helpers/cut_video.py`](scripts/helpers/cut_video.py): cut video
   segments with FFmpeg stream copy.
+- [`scripts/helpers/boris_remap_to_new_mp4.py`](scripts/helpers/boris_remap_to_new_mp4.py):
+  remap BORIS event frame/time from the OLD MP4 to the NEW MP4 timeline, writing
+  `*_new_mp4.csv` next to each source CSV (single `--csv` or `--all`).
 - [`scripts/helpers/sqlite_to_dbdiagram.py`](scripts/helpers/sqlite_to_dbdiagram.py):
   export the SQLite schema to dbdiagram.io format.
 - [`scripts/helpers/compare/compare_databases.py`](scripts/helpers/compare/compare_databases.py):
@@ -169,14 +200,6 @@ python MPV_Multiviewer/run_viewer.py
 
 See [`MPV_Multiviewer/docs/user-guide.md`](MPV_Multiviewer/docs/user-guide.md)
 for usage notes.
-
-### Computer Vision
-
-Computer-vision experiments live under [`CV/`](CV/):
-
-- `CV/yolo/`: pose, tracking, calibration, and overlay scripts.
-- `CV/SimCLR_reid/`: SimCLR/ReID dataset, training, validation, and inspection
-  scripts.
 
 ## Common Commands
 
@@ -240,9 +263,6 @@ ScalpelLab/
 │   ├── app.py
 │   ├── utils.py
 │   └── pages/
-├── CV/
-│   ├── SimCLR_reid/
-│   └── yolo/
 ├── docs/
 │   ├── project_context/
 │   ├── ERD.pdf
