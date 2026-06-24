@@ -10,8 +10,8 @@ ScalpelLab is a Windows-focused Python workspace for managing surgical video
 recordings from an 8-camera operating room. Raw NorPix StreamPix `.seq` files
 are organized on disk, catalogued in `ScalpelDatabase.sqlite`, optionally
 converted to MP4, and surfaced through a NiceGUI desktop dashboard. Side
-workflows: BORIS behavioral labeling, batch redaction, multi-camera
-synchronized playback, and CV experiments (YOLO, SimCLR ReID).
+workflows: BORIS behavioral labeling, batch redaction, and multi-camera
+synchronized playback.
 
 The SQLite database at the repo root is the **single source of truth**. Every
 other component is a producer or consumer of it.
@@ -23,11 +23,10 @@ other component is a producer or consumer of it.
   `python-envs.defaultEnvManager: ms-python.python:conda`).
 - **Dashboard**: NiceGUI ≥ 2.0 + pywebview (native window). Charts via
   ECharts; legacy Plotly only on the `mp4-stats` page.
-- **Data**: SQLite (stdlib `sqlite3`), pandas, numpy, pyarrow (Parquet for CV).
+- **Data**: SQLite (stdlib `sqlite3`), pandas, numpy.
 - **Video**: FFmpeg + ffprobe + mkvmerge (must be on PATH); NVIDIA NVENC for
   GPU encode; NorPix SequenceViewer for IDX creation; NorPix `CLExport` as
   fallback. `mpv.exe` for the multiviewer.
-- **CV (optional)**: PyTorch, ultralytics (YOLOv8), OpenCV.
 - **OS**: Windows 11. Console codepage is CP1252 — see §9 for the UTF-8
   stdout snippet required in any script that prints non-ASCII.
 
@@ -44,7 +43,6 @@ Install: `pip install -r requirements.txt`. Validate paths: `python config.py`.
 | `scripts/1_…`, `2_…`, `3_…`         | SEQ→DB→MP4 pipeline — see [scripts/scripts.md](scripts/scripts.md) |
 | `scripts/helpers/`                  | SEQ/IDX parsing, redaction, comparison — see [scripts/helpers/helpers.md](scripts/helpers/helpers.md) |
 | `MPV_Multiviewer/`                  | Tkinter+libmpv viewer — see [MPV_Multiviewer/mpv_multiviewer.md](MPV_Multiviewer/mpv_multiviewer.md) |
-| `CV/`                               | YOLO + SimCLR experiments — see [CV/cv.md](CV/cv.md)     |
 | `docs/`                             | Schema/format refs, ERD, tracking JSONs — see [docs/docs.md](docs/docs.md) |
 
 Routing — read the relevant context file before editing:
@@ -55,7 +53,6 @@ Routing — read the relevant context file before editing:
 | `1_…/2_…/3_…` pipeline or BORIS import               | [scripts/scripts.md](scripts/scripts.md)              |
 | SEQ/IDX parsing, redaction, helpers                  | [scripts/helpers/helpers.md](scripts/helpers/helpers.md) |
 | Multi-camera viewer, sync offsets                    | [MPV_Multiviewer/mpv_multiviewer.md](MPV_Multiviewer/mpv_multiviewer.md) |
-| Pose / tracking / ReID                               | [CV/cv.md](CV/cv.md)                                  |
 | NorPix format spec, ERD, schema reference            | [docs/docs.md](docs/docs.md)                          |
 
 ## 4. Coding conventions
