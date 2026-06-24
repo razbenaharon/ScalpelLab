@@ -1,2 +1,0 @@
-experiment,best_trial,status,best_epoch,completed_epochs,best_val_loss,final_train_loss,final_val_loss,lr,temperature,projection_dim,color_jitter_strength,canonical_backbone
-1_OPTUNA_15_EPOCH,trial_0074,completed,14,15,2.8193627119064333,0.20426675496229613,2.821744306270893,0.0008431383991436538,0.06656606740912918,256,0.4711218462530183,F:\Room_8_Data\SIMCLR\experiments\1_OPTUNA_15_EPOCH\trial_0074_best_backbone.pt
