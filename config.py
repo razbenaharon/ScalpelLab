@@ -54,7 +54,7 @@ MP4_ROOT = r"F:\Room_8_Data\Recordings"
 
 # Root directory for finalized BORIS and monitor analysis CSVs.
 # Expected structure: ANALYSES_ROOT/DATA_YY-MM-DD/CaseN/{Boris,Monitor}/
-ANALYSES_ROOT = r"F:\Room_8_Data\Analyses_Finale"
+ANALYSES_ROOT = r"F:\Room_8_Data\Case_Analyses"
 
 # NorPix SequenceViewer executable used by the IDX creation workflow.
 # Opening a .seq file with this tool creates or refreshes the companion .seq.idx.

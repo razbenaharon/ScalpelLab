@@ -11,7 +11,7 @@ scripts/
 ├── 2_update_db.py              # walks SEQ_ROOT and MP4_ROOT, upserts seq_status / mp4_status / seq_enriched
 ├── 3_seq_to_mp4_convert.py     # SEQ → MP4 via raw H.264 + mkvmerge VFR + FFmpeg fps=30 CFR
 ├── import_boris_tags.py        # BORIS TSV → boris_events (+ link analysis_information.event_id)
-├── import_analysis_finale.py   # Analyses_Finale BORIS CSV + monitor vitals import
+├── import_analysis_finale.py   # Case_Analyses BORIS CSV + monitor vitals import
 └── helpers/                    # see scripts/helpers/helpers.md
 ```
 
