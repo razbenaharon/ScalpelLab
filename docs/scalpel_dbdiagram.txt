@@ -1,4 +1,4 @@
-//// ScalpelLab Database, exported 2026-06-07
+//// ScalpelLab Database, exported 2026-06-28
 //// Paste into https://dbdiagram.io
 
 //// System table from SQLite. Usually not modeled, included here for completeness.
@@ -22,99 +22,14 @@ Table anesthesiology {
   grade_a_date              varchar
 }
 
-Table boris_events {
-  event_id            int [pk]
-  subject             varchar
-  behavior            varchar
-  behavior_type       varchar
-  modifier_1          varchar
-  modifier_2          varchar
-  modifier_3          varchar
-  time_s              decimal
-  source_file         varchar [not null]
-  source_row_number   int [not null]
-  imported_at         varchar [not null, default: `CURRENT_TIMESTAMP`]
-  recording_date      varchar
-  case_no             int
-  behavioral_category varchar
-  absolute_timestamp  varchar
-}
-
-Table monitor_case_summary {
-  recording_date          varchar [pk]
-  case_no                 int [pk]
-  source_file             varchar [not null]
-  sample_count            int [not null, default: 0]
-  duration_s              decimal
-  imported_at             varchar [not null, default: `CURRENT_TIMESTAMP`]
-  hr_bpm_count            int [not null, default: 0]
-  spo2_pct_count          int [not null, default: 0]
-  pulse_index_count       int [not null, default: 0]
-  pr_bpm_count            int [not null, default: 0]
-  etco2_mmhg_count        int [not null, default: 0]
-  rr_bpm_count            int [not null, default: 0]
-  fico2_mmhg_count        int [not null, default: 0]
-  nibp_sys_mmhg_count     int [not null, default: 0]
-  nibp_dia_mmhg_count     int [not null, default: 0]
-  nibp_mean_mmhg_count    int [not null, default: 0]
-  temp_c_count            int [not null, default: 0]
-  hr_alert_count          int [not null, default: 0]
-  spo2_alert_count        int [not null, default: 0]
-  pulse_index_alert_count int [not null, default: 0]
-  pr_alert_count          int [not null, default: 0]
-  etco2_alert_count       int [not null, default: 0]
-  rr_alert_count          int [not null, default: 0]
-  fico2_alert_count       int [not null, default: 0]
-  nibp_sys_alert_count    int [not null, default: 0]
-  nibp_dia_alert_count    int [not null, default: 0]
-  nibp_mean_alert_count   int [not null, default: 0]
-  temp_alert_count        int [not null, default: 0]
-}
-
-Table monitor_samples {
-  recording_date    varchar [pk]
-  case_no           int [pk]
-  sample_index      int [pk]
-  frame             varchar
-  frame_no          int
-  timestamp_text    varchar
-  elapsed_s         decimal
-  source_file       varchar [not null]
-  imported_at       varchar [not null, default: `CURRENT_TIMESTAMP`]
-  hr_bpm            decimal
-  spo2_pct          decimal
-  pulse_index       decimal
-  pr_bpm            decimal
-  etco2_mmhg        decimal
-  rr_bpm            decimal
-  fico2_mmhg        decimal
-  nibp_sys_mmhg     decimal
-  nibp_dia_mmhg     decimal
-  nibp_mean_mmhg    decimal
-  temp_c            decimal
-  hr_alert          varchar
-  spo2_alert        varchar
-  pulse_index_alert varchar
-  pr_alert          varchar
-  etco2_alert       varchar
-  rr_alert          varchar
-  fico2_alert       varchar
-  nibp_sys_alert    varchar
-  nibp_dia_alert    varchar
-  nibp_mean_alert   varchar
-  temp_alert        varchar
-}
-
 Table mp4_status {
-  recording_date     varchar [pk] // FK to recording_details.recording_date
-  case_no            int [pk] // FK to recording_details.case_no
-  camera_name        varchar [pk]
-  size_mb            int
-  duration_minutes   decimal
-  pre_black_segment  decimal
-  post_black_segment decimal
-  path               varchar
-  offset_seconds     decimal
+  recording_date   varchar [pk] // FK to recording_details.recording_date
+  case_no          int [pk] // FK to recording_details.case_no
+  camera_name      varchar [pk]
+  size_mb          int
+  duration_minutes decimal
+  path             varchar
+  offset_seconds   decimal
 }
 
 Table mp4_times {
@@ -193,10 +108,10 @@ Ref: analysis_information.case_no > recording_details.case_no
 Ref: anesthesiology.anesthesiology_key > recording_details.anesthesiology_key
 Ref: recording_details.recording_date > seq_status.recording_date
 Ref: recording_details.case_no > seq_status.case_no
-Ref: recording_details.case_no > mp4_status.case_no
-Ref: recording_details.recording_date > mp4_status.recording_date
 Ref: seq_status.recording_date > seq_enriched.recording_date
 Ref: seq_status.case_no > seq_enriched.case_no
 Ref: seq_status.camera_name > seq_enriched.camera_name
 Ref: mp4_status.recording_date > mp4_times.recording_date
 Ref: mp4_status.case_no > mp4_times.case_no
+Ref: recording_details.case_no > mp4_status.case_no
+Ref: recording_details.recording_date > mp4_status.recording_date
