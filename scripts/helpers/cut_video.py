@@ -22,8 +22,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Add parent directory to path to import config
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add project root to path if this helper later needs repository imports.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 # FFmpeg possible locations
 FFMPEG_PATHS = [

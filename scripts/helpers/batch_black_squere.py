@@ -18,12 +18,14 @@ import re
 import sqlite3
 import subprocess
 import threading
+from pathlib import Path
 from datetime import datetime, timedelta
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any, Callable
 
-# Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add project root to path
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import get_db_path
 import pandas as pd
@@ -129,9 +131,20 @@ CONFIG = {
     'NUM_WORKERS': 8,
 
     # Tracking file to store processed files (prevents re-processing)
-    'TRACKING_FILE': 'F:/Room_8_Data/Scalpel_Raz/docs/redaction_tracking.json',
+    'TRACKING_FILE': str(PROJECT_ROOT / 'docs' / 'redaction_tracking.json'),
 }
 # ============================================================================
+
+
+def ensure_redaction_columns(conn: sqlite3.Connection) -> None:
+    """Create legacy redaction columns when older DB snapshots do not have them."""
+    existing = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(mp4_status)").fetchall()
+    }
+    for column in ("pre_black_segment", "post_black_segment"):
+        if column not in existing:
+            conn.execute(f"ALTER TABLE mp4_status ADD COLUMN {column} REAL")
 
 
 # ============================================================================
@@ -739,6 +752,7 @@ def update_mp4_status_black_segments(video_path, case_ranges, video_duration, db
     try:
         conn = sqlite3.connect(db_path)
         conn.execute("PRAGMA foreign_keys = ON")
+        ensure_redaction_columns(conn)
         cur = conn.cursor()
 
         for case_no, segments in black_segments.items():
@@ -832,8 +846,23 @@ def update_tracking(tracking_file, input_path, output_path, status="SUCCESS"):
     save_tracking_data(tracking_file, tracking_data)
 
 
+def print_usage() -> None:
+    print("usage: batch_black_squere.py [output_dir] [num_workers]")
+    print()
+    print("Batch-redact MP4 files using mp4_times joined to mp4_status.")
+    print("Runs interactively; tracking state is stored in docs/redaction_tracking.json.")
+    print()
+    print("positional arguments:")
+    print("  output_dir    Optional output directory; defaults to CONFIG['OUTPUT_DIR'].")
+    print("  num_workers   Optional worker count; defaults to CONFIG['NUM_WORKERS'].")
+
+
 def main():
     # Get configuration from command line or config
+    if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
+        print_usage()
+        return
+
     output_dir = None
     num_workers = CONFIG['NUM_WORKERS']
 

@@ -28,7 +28,7 @@ MPV_Multiviewer/
   videos and per-video offsets. The viewer also accepts plain `.mp4`, `.mkv`,
   `.avi`, and `.txt` (a list of paths).
 - **DB integration**: opens `ScalpelDatabase.sqlite` directly to populate the
-  case browser and to write `mp4_status.sync_offset_ms` when the user saves
+  case browser and to write `mp4_status.offset_seconds` when the user saves
   corrections. Path resolution differs from the NiceGUI app — check
   `lib/db_browser.py` before assuming behavior.
 - **External dep**: requires `mpv.exe` on PATH (or in a configured location).

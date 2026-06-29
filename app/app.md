@@ -115,10 +115,13 @@ browse to a different executable and persist it back to `config.py`.
 
 ## Data model quick reference
 
-Tables: `mp4_status`, `mp4_times`, `seq_status`, `seq_enriched` (rich
-per-file frame analysis), `boris_events`, `analysis_information`,
-`monitor_samples`, `monitor_case_summary`, `anesthesiology`,
-`recording_details`.
+Core tables in the current project-root DB: `recording_details`,
+`analysis_information`, `anesthesiology`, `seq_status`, `seq_enriched` (rich
+per-file frame analysis), `mp4_status`, and `mp4_times`.
+
+Importer-created optional tables: `boris_events`, `monitor_samples`, and
+`monitor_case_summary`. The BORIS and Monitor Data pages should show an
+import-first empty state when these tables are missing or empty.
 
 Views (read-only — don't write to these):
 - `cur_mp4_missing` — pivot of cameras present per (date, case)
@@ -128,7 +131,7 @@ Views (read-only — don't write to these):
 
 BORIS intervals are reconstructed in pandas inside [pages/boris.py](pages/boris.py) — there is no SQL view because the old `cur_boris_intervals` joined through `analysis_information.event_id` (which only stores one event per case) and truncated to ~one row per case.
 
-Camera names (use the `CAMERAS` constant defined in mp4/seq/quality):
+Camera names come from `config.DEFAULT_CAMERAS`:
 `Cart_Center_2, Cart_LT_4, Cart_RT_1, General_3, Monitor, Patient_Monitor,
 Ventilator_Monitor, Injection_Port`. Older data sometimes has `_JUNK` /
 `_Junk` suffixes — filter these out for visualizations.
@@ -141,7 +144,7 @@ Ventilator_Monitor, Injection_Port`. Older data sometimes has `_JUNK` /
 - BORIS pairing status (computed in [pages/boris.py](pages/boris.py)) takes
   the values `PAIRED`, `MISSING_STOP`, `ERROR_DOUBLE_START`. Most charts
   should filter to `PAIRED`.
-- The Windows console is CP1252; if a script prints UTF-8, set the wrapper
-  shown in `memory/MEMORY.md`. NiceGUI itself doesn't need this.
+- The Windows console is CP1252; scripts that print non-ASCII should
+  reconfigure stdout to UTF-8 early. NiceGUI itself doesn't need this.
 - `state.get()` returns the active DB path — call it inside the page handler,
   not at module import time, so the drawer's path input takes effect.

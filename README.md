@@ -71,7 +71,7 @@ File types:
 - `*_new_mp4.csv` — produced by `scripts/helpers/boris_remap_to_new_mp4.py`;
   adds NEW-MP4 frame/time columns via `docs/new recordings formula.md`.
 - `motior_data.csv` — exported patient-monitor vital signs for the case
-  (imported by `scripts/import_analysis_finale.py`).
+  (imported by `scripts/helpers/import_analysis_finale.py`).
 
 ### 3. Validate configuration
 
@@ -137,7 +137,7 @@ pages and **Processing Pipeline** for operational actions.
   `ffprobe`, enrich SEQ metadata, and preserve unmanaged DB columns.
 - [`scripts/3_seq_to_mp4_convert.py`](scripts/3_seq_to_mp4_convert.py): convert
   missing SEQ recordings to MP4, with GPU-first workflow and fallback behavior.
-- [`scripts/import_boris_tags.py`](scripts/import_boris_tags.py): import BORIS
+- [`scripts/helpers/import_boris_tags.py`](scripts/helpers/import_boris_tags.py): import BORIS
   TSV exports into `boris_events` and maintain BORIS-derived views.
 - [`scripts/helpers/batch_black_squere.py`](scripts/helpers/batch_black_squere.py):
   batch-redact videos from database timing data in `mp4_times`.
@@ -210,7 +210,7 @@ python scripts/1_seq_curation.py
 python scripts/2_update_db.py --dry-run
 python scripts/2_update_db.py --skip-duration
 python scripts/3_seq_to_mp4_convert.py
-python scripts/import_boris_tags.py --dry-run
+python scripts/helpers/import_boris_tags.py --dry-run
 python scripts/helpers/batch_black_squere.py
 python scripts/helpers/repair_seq_idx.py --dry-run
 python scripts/helpers/cut_video.py
@@ -225,12 +225,17 @@ python MPV_Multiviewer/run_viewer.py
 - `recording_details`: case-level recording metadata.
 - `analysis_information`: labeling metadata and optional BORIS event linkage.
 - `anesthesiology`: anesthesiology roster and career dates.
-- `boris_events`: imported BORIS behavioral event rows.
 - `seq_status`: SEQ presence, size, and path.
 - `seq_enriched`: parsed SEQ header and IDX metadata cache.
 - `mp4_status`: MP4 presence, size, duration, redaction metadata, sync offset,
   and path.
 - `mp4_times`: case timing ranges used by redaction workflows.
+
+Importer-created optional tables:
+
+- `boris_events`: imported BORIS behavioral event rows.
+- `monitor_samples`: imported per-sample monitor vitals.
+- `monitor_case_summary`: per-case monitor import summary.
 
 ### Common Views
 
@@ -279,8 +284,9 @@ ScalpelLab/
 │   ├── 1_seq_curation.py
 │   ├── 2_update_db.py
 │   ├── 3_seq_to_mp4_convert.py
-│   ├── import_boris_tags.py
 │   └── helpers/
+│       ├── import_boris_tags.py
+│       └── import_analysis_finale.py
 ├── config.py
 ├── run_app.py
 ├── requirements.txt

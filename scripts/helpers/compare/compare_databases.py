@@ -1,16 +1,14 @@
-"""
-Database Comparison Script
-Compares two SQLite databases and shows the differences
-"""
+"""Compare two SQLite databases and show table-level differences."""
 
+import argparse
 import sqlite3
 import sys
 import os
 from pathlib import Path
 from collections import defaultdict
 
-# Add parent directory to path to import config
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add project root to path to import config
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from config import get_db_path
 
 
@@ -238,27 +236,27 @@ def print_comparison_results(results, table_name, db1_name, db2_name):
 
     # Records only in DB1
     if results['only_in_db1']:
-        print(f"\n📋 Records ONLY in Database 1 ({len(results['only_in_db1'])} records):")
+        print(f"\nRecords ONLY in Database 1 ({len(results['only_in_db1'])} records):")
         print("-" * 80)
         for i, key in enumerate(results['only_in_db1'], 1):
             key_display = format_key_display(key, primary_keys, columns1)
             print(f"  {i}. {key_display}")
     else:
-        print(f"\n✓ No records unique to Database 1")
+        print(f"\n[OK] No records unique to Database 1")
 
     # Records only in DB2
     if results['only_in_db2']:
-        print(f"\n📋 Records ONLY in Database 2 ({len(results['only_in_db2'])} records):")
+        print(f"\nRecords ONLY in Database 2 ({len(results['only_in_db2'])} records):")
         print("-" * 80)
         for i, key in enumerate(results['only_in_db2'], 1):
             key_display = format_key_display(key, primary_keys, columns2)
             print(f"  {i}. {key_display}")
     else:
-        print(f"\n✓ No records unique to Database 2")
+        print(f"\n[OK] No records unique to Database 2")
 
     # Differences in common records
     if results['differences']:
-        print(f"\n⚠️  Differences in common records ({len(results['differences'])} records):")
+        print(f"\n[WARN] Differences in common records ({len(results['differences'])} records):")
         print("-" * 80)
         for i, (key, row1, row2) in enumerate(results['differences'], 1):
             key_display = format_key_display(key, primary_keys, columns1)
@@ -271,11 +269,24 @@ def print_comparison_results(results, table_name, db1_name, db2_name):
             print(f"     DB1: {row1_display}")
             print(f"     DB2: {row2_display}")
     else:
-        print(f"\n✓ No differences in common records")
+        print(f"\n[OK] No differences in common records")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Compare the configured ScalpelLab SQLite DB with another DB."
+    )
+    parser.add_argument(
+        "compare_db",
+        nargs="?",
+        help="Path to the database to compare against. If omitted, prompts interactively.",
+    )
+    return parser.parse_args()
 
 
 def main():
     """Main comparison function."""
+    args = parse_args()
     print("=" * 80)
     print("DATABASE COMPARISON TOOL")
     print("=" * 80)
@@ -284,27 +295,29 @@ def main():
     current_db = get_db_path()
     print(f"\nCurrent database: {current_db}")
 
-    # Ask for second database path
-    print("\nEnter the path to the database you want to compare with:")
-    compare_db = input("Database path: ").strip()
+    if args.compare_db:
+        compare_db = args.compare_db
+    else:
+        print("\nEnter the path to the database you want to compare with:")
+        compare_db = input("Database path: ").strip()
 
     # Remove quotes if user pasted path with quotes
     compare_db = compare_db.strip('"').strip("'")
 
     if not compare_db:
-        print("❌ No path provided!")
+        print("[ERROR] No path provided!")
         return
 
     # Check if both databases exist
     if not os.path.exists(current_db):
-        print(f"❌ Current database not found: {current_db}")
+        print(f"[ERROR] Current database not found: {current_db}")
         return
 
     if not os.path.exists(compare_db):
-        print(f"❌ Comparison database not found: {compare_db}")
+        print(f"[ERROR] Comparison database not found: {compare_db}")
         return
 
-    print(f"\n✓ Comparing databases:")
+    print(f"\n[OK] Comparing databases:")
     print(f"  Database 1: {current_db}")
     print(f"  Database 2: {compare_db}")
 
@@ -352,9 +365,9 @@ def main():
         tables_only_in_db2 = set(tables2) - set(tables1)
 
         if tables_only_in_db1:
-            print(f"\n⚠️  Tables only in Database 1: {', '.join(tables_only_in_db1)}")
+            print(f"\n[WARN] Tables only in Database 1: {', '.join(tables_only_in_db1)}")
         if tables_only_in_db2:
-            print(f"\n⚠️  Tables only in Database 2: {', '.join(tables_only_in_db2)}")
+            print(f"\n[WARN] Tables only in Database 2: {', '.join(tables_only_in_db2)}")
 
         # Compare all common tables
         if common_tables:
@@ -379,9 +392,9 @@ def main():
                     print_comparison_results(results, table, db1_name, db2_name)
 
                 except Exception as e:
-                    print(f"\n❌ Error comparing table '{table}': {e}")
+                    print(f"\n[ERROR] Error comparing table '{table}': {e}")
         else:
-            print("\n⚠️  No common tables found between databases")
+            print("\n[WARN] No common tables found between databases")
 
         # Close connections
         conn1.close()
@@ -392,7 +405,7 @@ def main():
         print(f"{'=' * 80}")
 
     except Exception as e:
-        print(f"\n❌ Error during comparison: {e}")
+        print(f"\n[ERROR] Error during comparison: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
@@ -402,10 +415,10 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n\n⚠️  Comparison interrupted by user")
+        print("\n\n[WARN] Comparison interrupted by user")
         sys.exit(1)
     except Exception as e:
-        print(f"\n\n❌ Error: {e}")
+        print(f"\n\n[ERROR] {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
