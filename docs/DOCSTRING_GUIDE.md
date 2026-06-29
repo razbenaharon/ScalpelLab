@@ -438,7 +438,7 @@ def pose_anesthesiologist_yolo(video_path: str, output_path: str = None) -> str:
 
 ### scripts/ Module Examples
 
-#### scripts/5_batch_blacken.py - Module-Level Docstring
+#### scripts/helpers/batch_black_squere.py - Module-Level Docstring
 
 ```python
 """GPU-accelerated batch video redaction with database integration.
@@ -502,10 +502,10 @@ Dependencies:
 Example:
     Command-line usage::
 
-        $ python scripts/5_batch_blacken.py
+        $ python scripts/helpers/batch_black_squere.py
         # Interactive mode: select files to process
 
-        $ python scripts/5_batch_blacken.py D:\\Output 6
+        $ python scripts/helpers/batch_black_squere.py D:\\Output 6
         # Custom output dir and 6 workers
 
     Programmatic usage::

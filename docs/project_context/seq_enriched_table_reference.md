@@ -6,8 +6,8 @@ The definitions below are based on:
 
 - [`norpix_seq_format_reference.md`](./norpix_seq_format_reference.md)
 - [`norpix_idx_format_reference.md`](./norpix_idx_format_reference.md)
-- [`scripts/helpers/analyze_seq_fields.py`](../scripts/helpers/analyze_seq_fields.py)
-- [`scripts/3_seq_to_mp4_convert.py`](../scripts/3_seq_to_mp4_convert.py)
+- [`scripts/helpers/analyze_seq_fields.py`](../../scripts/helpers/analyze_seq_fields.py)
+- [`scripts/3_seq_to_mp4_convert.py`](../../scripts/3_seq_to_mp4_convert.py)
 
 ## Row granularity
 

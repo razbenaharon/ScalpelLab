@@ -67,7 +67,9 @@ canonical SequenceViewer-based IDX creation path.
 ### `batch_black_squere.py` (note the typo — keep it)
 Reads timing ranges from `mp4_times` and applies a black-rectangle redaction
 to the MP4 frames. Driven entirely from the DB; no GUI. Tracking state goes
-to `docs/redaction_tracking.json`.
+to `docs/redaction_tracking.json`. It creates `mp4_status.pre_black_segment`
+and `mp4_status.post_black_segment` on demand when older DB snapshots do not
+yet have those columns.
 
 ### `cut_video.py`
 Thin wrapper around FFmpeg stream-copy (`-c copy`) for fast lossless cuts.

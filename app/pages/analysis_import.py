@@ -92,7 +92,7 @@ def analysis_import_page() -> None:
                 args.append("--skip-boris")
             if not include_monitor.value:
                 args.append("--skip-monitor")
-            return python_script_args("scripts/import_analysis_finale.py", args)
+            return python_script_args("scripts/helpers/import_analysis_finale.py", args)
 
         def start_import(dry_run: bool) -> None:
             if not _validate_inputs():

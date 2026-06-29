@@ -9,7 +9,7 @@ The importer is intentionally strict:
   - suspicious files are skipped and logged
 
 Run a dry run first:
-    python scripts/import_boris_tags.py --dry-run
+    python scripts/helpers/import_boris_tags.py --dry-run
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Iterable
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 try:

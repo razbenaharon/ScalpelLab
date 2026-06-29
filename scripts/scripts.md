@@ -10,9 +10,9 @@ scripts/
 ├── 1_seq_curation.py           # curate raw NorPix SEQ → DATA_YY-MM-DD/CaseN/CameraName/
 ├── 2_update_db.py              # walks SEQ_ROOT and MP4_ROOT, upserts seq_status / mp4_status / seq_enriched
 ├── 3_seq_to_mp4_convert.py     # SEQ → MP4 via raw H.264 + mkvmerge VFR + FFmpeg fps=30 CFR
-├── import_boris_tags.py        # BORIS TSV → boris_events (+ link analysis_information.event_id)
-├── import_analysis_finale.py   # Case_Analyses BORIS CSV + monitor vitals import
 └── helpers/                    # see scripts/helpers/helpers.md
+    ├── import_boris_tags.py        # BORIS TSV → boris_events (+ link analysis_information.event_id)
+    └── import_analysis_finale.py   # Case_Analyses BORIS CSV + monitor vitals import
 ```
 
 ## Pipeline contract — read before editing
@@ -47,7 +47,7 @@ else, so users can add columns to the schema without breaking re-runs.
 - `seq_status` managed columns: `size_mb`, `path`.
 - Implementation uses `INSERT … ON CONFLICT(pk) DO UPDATE SET <managed>=…`.
   Never switch this to a `REPLACE` or full overwrite — it would clobber
-  user-added columns like `sync_offset_ms`, redaction flags, etc.
+  user-added columns like `offset_seconds`, redaction flags, etc.
 - Optionally calls `helpers/analyze_seq_fields.py` to populate `seq_enriched`
   (parsed SEQ headers + IDX frame analysis). Skipped silently if the import
   fails — keep the import inside a `try/except ImportError`.
@@ -96,7 +96,7 @@ when it can decode the embedded H.264 stream. These outputs are named
 because there are no trusted per-frame timestamps. Use
 `--no-include-not-syncable` for a syncable-only run.
 
-### `import_boris_tags.py` — strict importer
+### `helpers/import_boris_tags.py` — strict importer
 - Filenames **must** match `YY-MM-DD-caseN.tsv`. Mismatches are skipped and
   logged.
 - Files must contain at least one BORIS event row.
@@ -108,7 +108,7 @@ because there are no trusted per-frame timestamps. Use
   collapsed the result to ~one row per case.
 - Always run with `--dry-run` first when working on this file.
 
-### `import_analysis_finale.py` — finalized analyses importer
+### `helpers/import_analysis_finale.py` — finalized analyses importer
 - Reads `ANALYSES_ROOT/DATA_YY-MM-DD/CaseN/Boris/*_standardized.csv` and
   `ANALYSES_ROOT/DATA_YY-MM-DD/CaseN/Monitor/motior_data.csv`.
 - BORIS import replaces existing `boris_events` rows and relinks
@@ -122,9 +122,15 @@ because there are no trusted per-frame timestamps. Use
 - All scripts import `config` via `sys.path.insert(0, parent)` shim and read
   paths through `get_db_path()` / `get_seq_root()` / `get_mp4_root()` /
   `get_norpix_sequence_viewer_path()`. Don't hardcode paths.
-- UTF-8 stdout reconfiguration (see auto-memory `MEMORY.md`) is required at
-  the top of any script that prints non-ASCII, since the Windows console is
-  CP1252.
+- UTF-8 stdout reconfiguration is required at the top of any script that
+  prints non-ASCII, since the Windows console is CP1252:
+
+  ```python
+  import io, sys
+  if hasattr(sys.stdout, "buffer") and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+      sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
+                                    errors="replace", line_buffering=True)
+  ```
 - Use raw strings (`r"…"`) for any new path literals.
 - `--dry-run` is the standard flag for previewing destructive changes — keep
   this convention when adding new scripts.

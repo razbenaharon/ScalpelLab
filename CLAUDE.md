@@ -36,7 +36,7 @@ Install: `pip install -r requirements.txt`. Validate paths: `python config.py`.
 
 | Path                                | Role                                                     |
 |-------------------------------------|----------------------------------------------------------|
-| `ScalpelDatabase.sqlite`            | Source of truth. **Never commit.**                       |
+| `ScalpelDatabase.sqlite`            | Source of truth. Tracked only through git-crypt.          |
 | `config.py`                         | `DB_PATH`, `SEQ_ROOT`, `MP4_ROOT`, `NORPIX_SEQUENCE_VIEWER_PATH`, `DEFAULT_CAMERAS` |
 | `run_app.py`                        | Launches NiceGUI dashboard via `python -m app.app`       |
 | `app/`                              | NiceGUI dashboard — see [app/app.md](app/app.md)         |
@@ -94,7 +94,7 @@ Routing — read the relevant context file before editing:
   Preserve this — the schema relies on it.
 - **Managed-columns contract** (`scripts/2_update_db.py`): only the
   documented columns are updated; everything else (user-added columns like
-  `sync_offset_ms`, redaction flags) must be preserved. Implementation uses
+  `offset_seconds`, redaction flags) must be preserved. Implementation uses
   `INSERT … ON CONFLICT(pk) DO UPDATE SET <managed>=…`. Never replace this
   with `INSERT OR REPLACE` or full overwrites.
 - **Views are read-only**: `cur_mp4_missing`, `cur_seniority`,
@@ -164,13 +164,19 @@ content as sensitive PHI-equivalent data.
 
 ## 8. Testing and validation
 
-There are **no automated tests, linters, or CI**. Validate manually:
+There is no CI or linter configured, but there are pytest suites under
+[`tests/`](tests/). Install dependencies first with `pip install -r
+requirements.txt`; dashboard smoke tests require `nicegui`.
 
 - **Path config**: `python config.py` — confirms DB / SEQ_ROOT / MP4_ROOT
   exist.
 - **Pipeline scripts**: every numbered script supports `--dry-run`. Run it
   before any write. For `2_update_db.py`, also try `--skip-duration` first
   for a fast scan.
+- **Fast tests**: `pytest -q tests/test_progress_parser.py
+  tests/test_pages_smoke.py tests/test_layout_nav.py tests/test_config_paths.py`.
+- **E2E tests**: see [`tests/README.md`](tests/README.md); they require a
+  scratch sample directory and may require FFmpeg, mkvmerge, and NVENC.
 - **DB sanity**: `sqlite3 ScalpelDatabase.sqlite` and inspect counts on the
   affected tables / views before and after a script run.
 - **Dashboard changes**: `python run_app.py` and click through the page —

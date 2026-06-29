@@ -1,4 +1,4 @@
-//// ScalpelLab Database, exported 2026-06-28
+//// ScalpelLab Database, exported 2026-06-29
 //// Paste into https://dbdiagram.io
 
 //// System table from SQLite. Usually not modeled, included here for completeness.
@@ -11,7 +11,7 @@ Table analysis_information {
   recording_date varchar [pk]
   case_no        int [pk]
   label_by       varchar
-  event_id       int // FK to boris_events.event_id
+  event_id       int
 }
 
 Table anesthesiology {
@@ -102,7 +102,6 @@ Table seq_status {
 }
 
 // Relationships detected from database, with documented diagram overrides:
-Ref: boris_events.event_id > analysis_information.event_id
 Ref: analysis_information.recording_date > recording_details.recording_date
 Ref: analysis_information.case_no > recording_details.case_no
 Ref: anesthesiology.anesthesiology_key > recording_details.anesthesiology_key

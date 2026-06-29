@@ -83,6 +83,12 @@ def sqlite_to_dbdiagram(db_path: str, output_path: str):
             if create_sql and create_sql[0]:
                 foreign_keys = parse_foreign_keys_from_sql(create_sql[0])
 
+        foreign_keys = [
+            (local_col, ref_table, ref_col)
+            for local_col, ref_table, ref_col in foreign_keys
+            if ref_table in all_tables
+        ]
+
         if foreign_keys:
             all_foreign_keys[table] = foreign_keys
 

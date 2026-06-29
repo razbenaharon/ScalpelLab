@@ -701,7 +701,7 @@ def boris_page() -> None:
         if events_all.empty:
             ui.label(
                 "boris_events is empty or missing. "
-                "Run scripts/import_boris_tags.py first."
+                "Run scripts/helpers/import_boris_tags.py first."
             ).classes("text-warning")
             return
 
