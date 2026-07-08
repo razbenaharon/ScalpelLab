@@ -12,7 +12,7 @@ scripts/
 ├── 3_seq_to_mp4_convert.py     # SEQ → MP4 via raw H.264 + mkvmerge VFR + FFmpeg fps=30 CFR
 └── helpers/                    # see scripts/helpers/helpers.md
     ├── import_boris_tags.py        # BORIS TSV → boris_events (+ link analysis_information.event_id)
-    └── import_analysis_finale.py   # Case_Analyses BORIS CSV + monitor vitals import
+    └── import_analysis_finale.py   # Case_Analyses_synced BORIS CSV + monitor vitals import
 ```
 
 ## Pipeline contract — read before editing

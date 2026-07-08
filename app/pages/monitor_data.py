@@ -1,4 +1,4 @@
-"""Monitor vitals dashboard for imported Case_Analyses CSV data."""
+"""Monitor vitals dashboard for imported Case_Analyses_synced CSV data."""
 
 from __future__ import annotations
 
@@ -282,7 +282,7 @@ def monitor_data_page() -> None:
     with page_frame("Monitor Data"):
         db_path = state.get()
         ui.label("Monitor Data").classes("section-h text-h5 text-weight-medium")
-        ui.label("Imported vitals from Case_Analyses monitor CSV files.") \
+        ui.label("Imported vitals from Case_Analyses_synced monitor CSV files.") \
             .classes("text-caption muted")
 
         summary = _load_summary(db_path)

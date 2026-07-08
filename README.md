@@ -32,7 +32,8 @@ Edit [`config.py`](config.py) and set:
 
 - `SEQ_ROOT` to your organized SEQ root
 - `MP4_ROOT` to your MP4 recordings root
-- `ANALYSES_ROOT` to your finalized per-case analysis root (`Case_Analyses`)
+- `ANALYSES_ROOT` to your finalized per-case analysis root
+  (`Analyses\Case_Analyses_synced`)
 - `NORPIX_SEQUENCE_VIEWER_PATH` to the NorPix SequenceViewer executable used
   to create `.seq.idx` files
 
@@ -47,19 +48,26 @@ Sequence_Backup/                    Recordings/
             └── *.seq.idx
 ```
 
-`Case_Analyses/` holds the finalized, per-case analysis artifacts (behavioral
-labels and monitor vitals) that sit alongside the raw video:
+`Analyses/Case_Analyses_synced/` holds the finalized, per-case analysis
+artifacts (behavioral labels and monitor vitals) whose BORIS events have been
+remapped onto the NEW MP4 timeline. Older, un-remapped analysis exports live
+under `Analyses/un_synced/`.
 
 ```text
-Case_Analyses/
-└── DATA_YY-MM-DD/
-    └── CaseN/
-        ├── Boris/
-        │   ├── <date>-caseN_raw.csv                  # raw BORIS export (OLD MP4 timeline)
-        │   ├── <date>-caseN_standardized.csv         # cleaned/standardized events
-        │   └── <date>-caseN_*_new_mp4.csv            # events remapped to the NEW MP4 timeline
-        └── Monitor/
-            └── motior_data.csv                       # per-case monitor vitals time series
+Analyses/
+├── Case_Analyses_synced/
+│   └── DATA_YY-MM-DD/
+│       └── CaseN/
+│           ├── Boris/
+│           │   ├── <date>-caseN_raw.csv           # raw BORIS export (OLD MP4 timeline)
+│           │   ├── <date>-caseN_standardized.csv  # cleaned/standardized events
+│           │   └── <date>-caseN_*_new_mp4.csv     # events remapped to the NEW MP4 timeline
+│           └── Monitor/
+│               └── motior_data.csv                # per-case monitor vitals time series
+└── un_synced/                                     # older analysis exports (not remapped)
+    ├── Analyses_1/
+    ├── Analyses_2/
+    └── Analyses_2026-03-18/
 ```
 
 File types:
