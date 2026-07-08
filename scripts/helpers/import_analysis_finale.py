@@ -37,7 +37,7 @@ except ImportError:
 
 
 DEFAULT_INPUT_ROOT = (
-    Path(get_analyses_root()) if get_analyses_root else Path(r"F:\Room_8_Data\Case_Analyses")
+    Path(get_analyses_root()) if get_analyses_root else Path(r"F:\Room_8_Data\Analyses\Case_Analyses_synced")
 )
 DEFAULT_DB_PATH = Path(get_db_path()) if get_db_path else PROJECT_ROOT / "ScalpelDatabase.sqlite"
 
@@ -629,7 +629,7 @@ def import_monitor(conn: sqlite3.Connection, files: list[MonitorFile], imported_
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Import finalized BORIS and monitor analysis CSVs")
-    parser.add_argument("--input-root", type=Path, default=DEFAULT_INPUT_ROOT, help="Case_Analyses root")
+    parser.add_argument("--input-root", type=Path, default=DEFAULT_INPUT_ROOT, help="Case_Analyses_synced root")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH, help="SQLite database path")
     parser.add_argument("--dry-run", action="store_true", help="Scan and report only; do not modify the database")
     parser.add_argument("--auto-confirm", action="store_true", help="Skip confirmation prompt for real imports")

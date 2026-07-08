@@ -18,7 +18,7 @@ The database defaults to the project root. `config.py` defines:
 - `DB_PATH = PROJECT_ROOT / "ScalpelDatabase.sqlite"`
 - `SEQ_ROOT = F:\Room_8_Data\Sequence_Backup`
 - `MP4_ROOT = F:\Room_8_Data\Recordings`
-- `ANALYSES_ROOT = F:\Room_8_Data\Case_Analyses`
+- `ANALYSES_ROOT = F:\Room_8_Data\Analyses\Case_Analyses_synced`
 - `NORPIX_SEQUENCE_VIEWER_PATH = C:\Program Files\Common Files\NorPix\SequenceViewer.exe`
 
 The NiceGUI app can point at alternate paths through the Home page

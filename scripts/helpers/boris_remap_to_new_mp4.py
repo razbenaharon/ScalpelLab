@@ -27,7 +27,7 @@ nothing is written into the repo.
 Usage:
     # one CSV
     python scripts/helpers/boris_remap_to_new_mp4.py \
-        --csv "F:\\Room_8_Data\\Case_Analyses\\DATA_24-02-08\\Case1\\Boris\\24_02_08-case1_standardized.csv"
+        --csv "F:\\Room_8_Data\\Analyses\\Case_Analyses_synced\\DATA_24-02-08\\Case1\\Boris\\24_02_08-case1_standardized.csv"
 
     # every BORIS CSV under the analyses root
     python scripts/helpers/boris_remap_to_new_mp4.py --all
