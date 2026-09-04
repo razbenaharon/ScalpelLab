@@ -1,0 +1,52 @@
+# Catches the two regressions that actually break this repo for someone else:
+# a syntax/import error that stops the dashboard booting, and a requirements.txt
+# that no longer installs.
+#
+# Windows, because the product is Windows - the pipeline shells out to ffmpeg,
+# NorPix SequenceViewer and mpv, and the scripts use drive-letter paths.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Installing the real file is half the point: it proves requirements.txt
+      # stays resolvable and stays honest about what the code imports.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      # The heavy end-to-end pipeline test skips itself without
+      # SCALPELLAB_TEST_SAMPLE_DIR and the external tools (ffmpeg, mkvmerge,
+      # NorPix). That is correct here - it needs real SEQ files, which are
+      # research data and are not in this repository.
+      - name: Test suite
+        run: python -m pytest tests/ -q
+
+      - name: Syntax sweep
+        run: python -m compileall -q app scripts config.py run_app.py MPV_Multiviewer
+
+      # config.py must stay importable and self-validating: it is the first
+      # thing the setup instructions tell a new user to run.
+      - name: Configuration module imports
+        run: python -c "import config; print(config.DB_PATH.name)"
