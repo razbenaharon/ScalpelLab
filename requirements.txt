@@ -1,81 +1,36 @@
-# ScalpelLab Project Dependencies
-# Install with: pip install -r requirements.txt
-# For full functionality, install with: pip install -r requirements.txt
+# ScalpelLab dependencies
+#
+#   pip install -r requirements.txt
+#
+# Every package below is imported by code in this repository. If you add one,
+# add the import too - an earlier version of this file pulled in PyTorch,
+# Ultralytics, torchreid and Optuna for a computer-vision directory that is not
+# part of the repo, which cost every new clone a multi-gigabyte download before
+# the dashboard would start.
 
-# ============================================================================
-# CORE WEB FRAMEWORK
-# ============================================================================
-nicegui>=2.0.0
-pywebview>=5.0                # Required for NiceGUI native=True desktop window
+# --- Desktop dashboard -------------------------------------------------------
+nicegui>=2.0.0                # app/ - the whole UI layer
+pywebview>=5.0                # required by NiceGUI native=True (run_app.py)
 
-# ============================================================================
-# DATA MANIPULATION AND ANALYSIS
-# ============================================================================
-pandas>=2.0.0
-numpy>=1.24.0
-numexpr>=2.10.2                 # Optional pandas acceleration; required by pandas 3.x
+# --- Data ---------------------------------------------------------------------
+pandas>=2.0.0                 # every dashboard page and most scripts/
+numpy>=1.24.0                 # SEQ header/IDX parsing, timing analysis
+plotly>=5.0.0                 # charts in app/charts.py
 
-# ============================================================================
-# DATA VISUALIZATION
-# ============================================================================
-plotly>=5.0.0
-graphviz>=0.20.0              # For database ERD diagram generation
+# --- Documents and images -----------------------------------------------------
+PyMuPDF>=1.26.0               # app/pages/database.py renders docs/ERD.pdf
+Pillow>=11.0.0                # image handling alongside PyMuPDF
 
-# ============================================================================
-# PDF AND IMAGE PROCESSING
-# ============================================================================
-PyMuPDF>=1.26.0               # PDF rendering in NiceGUI app
-Pillow>=11.0.0                # Image processing
+# --- System -------------------------------------------------------------------
+psutil>=5.9.0                 # pipeline job supervision in app/script_jobs.py
 
-# ============================================================================
-# VIDEO PROCESSING (required for scripts/ and yolo/)
-# ============================================================================
-opencv-python>=4.8.0          # Video I/O, image processing, calibration
-tqdm>=4.65.0                  # Progress bars for video processing
+# --- Tests --------------------------------------------------------------------
+pytest>=7.0                   # see tests/README.md for the opt-in sample data
 
-# ============================================================================
-# EXCEL FILE HANDLING (required for batch_blacken.py)
-# ============================================================================
-openpyxl>=3.1.0               # Excel file reading/writing
-
-# ============================================================================
-# PARQUET FILE SUPPORT (required for YOLO keypoint data)
-# ============================================================================
-pyarrow>=12.0.0               # Fast parquet serialization for pose tracking data
-
-# ============================================================================
-# MACHINE LEARNING / COMPUTER VISION (required for yolo/ directory)
-# ============================================================================
-torch>=2.0.0                  # PyTorch for deep learning
-torchvision>=0.15.0           # SimCLR image augmentations
-ultralytics>=8.0.0            # YOLOv8 pose estimation and tracking
-optuna>=3.6                   # Resumable hyperparameter studies for SimCLR
-torchreid>=0.2.5              # OSNet person ReID backbones
-gdown>=5.0.0                  # Required by torchreid imports
-yacs>=0.1.8                   # Required by torchreid config utilities
-matplotlib>=3.5.0             # Dataset/model visualization utilities
-
-# ============================================================================
-# SCIENTIFIC COMPUTING (required for track processing)
-# ============================================================================
-scipy>=1.10.0                 # Spatial distance calculations
-
-# ============================================================================
-# SYSTEM UTILITIES (required for file monitoring)
-# ============================================================================
-psutil>=5.9.0                 # Process and system monitoring
-
-# ============================================================================
-# TESTING (optional — for tests/ end-to-end harness)
-# ============================================================================
-pytest>=7.0                   # see tests/README.md for sample-data setup
-
-# ============================================================================
-# NOTES
-# ============================================================================
-# - sqlite3 is included with Python standard library (no installation needed)
-# - Other standard library modules (os, sys, datetime, subprocess, etc.) are built-in
-# - FFmpeg is required for video conversion but must be installed separately:
-#   https://ffmpeg.org/download.html
-# - MPV player is required for multiMPV functionality:
-#   https://mpv.io/installation/
+# --- Not installed by pip -----------------------------------------------------
+# sqlite3 and tkinter ship with CPython (tkinter powers MPV_Multiviewer).
+#
+# External executables, installed separately:
+#   ffmpeg / ffprobe          conversion, probing, redaction, cutting
+#   mpv                       synchronized multi-video review
+#   NorPix SequenceViewer     creates the .seq.idx companions
