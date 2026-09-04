@@ -44,3 +44,8 @@ experiments_output/
 
 # Local Claude Code settings (machine-specific tool allowlist, local paths)
 .claude/settings.local.json
+
+# Generated pipeline checkpoints: machine-local state holding absolute paths
+# into the research data tree. Both loaders recreate them when absent.
+docs/seq_idx_repair_tracking.json
+docs/redaction_tracking.json
