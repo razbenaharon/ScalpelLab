@@ -309,7 +309,7 @@ logs/
   optional SEQ field inspection used by the DB updater.
 - [`scripts/helpers/repair_seq_idx.py`](scripts/helpers/repair_seq_idx.py):
   audit and rebuild NorPix `.seq.idx` files from SEQ bodies, with checkpointing
-  in `docs/seq_idx_repair_tracking.json`.
+  in `docs/seq_idx_repair_tracking.json` (gitignored; created on first run).
 - [`scripts/helpers/backup_dir.py`](scripts/helpers/backup_dir.py): copy files
   while preserving source structure.
 - [`scripts/helpers/cut_video.py`](scripts/helpers/cut_video.py): cut video

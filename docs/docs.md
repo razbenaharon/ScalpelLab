@@ -13,8 +13,8 @@ docs/
 ├── mp4_statistics.pdf              # static report
 ├── scalpel_dbdiagram.txt           # dbdiagram.io DBML export of the live schema
 ├── sync_status_2026-03-10.md       # snapshot of sync coverage on that date
-├── redaction_tracking.json         # checkpoint state for batch_black_squere.py
-├── seq_idx_repair_tracking.json    # checkpoint state for repair_seq_idx.py
+├── redaction_tracking.json         # checkpoint state, gitignored - created on first run
+├── seq_idx_repair_tracking.json    # checkpoint state, gitignored - created on first run
 ├── Data_summary_guide.xlsx         # human reference
 └── project_context/
     ├── scalpel_database_sqlite_context.md   # authoritative table-by-table schema notes
@@ -47,6 +47,11 @@ docs/
 **checkpoint files** written by their respective helper scripts. Don't edit
 them by hand and don't delete them mid-run — you'll lose progress on long
 batch jobs.
+
+They are **gitignored**, so a clean clone does not have them and both
+scripts start a fresh ledger. That is deliberate: the entries are absolute
+paths into the research data tree, which is not something a public
+repository should publish, and the state is machine-local anyway.
 
 ## Operational logs
 
