@@ -41,3 +41,6 @@ out/
 CV/SimCLR_reid/simclr_output/
 CV/SimCLR_reid/test_output_dry_run/
 experiments_output/
+
+# Local Claude Code settings (machine-specific tool allowlist, local paths)
+.claude/settings.local.json
