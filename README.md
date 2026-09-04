@@ -1,23 +1,153 @@
 # ScalpelLab
 
-ScalpelLab is a Windows-focused Python workspace for managing surgical video
-recordings, tracking SEQ and MP4 assets in SQLite, and running privacy redaction
-and review workflows.
+**Research data infrastructure for a multi-camera operating room: turns raw proprietary camera output into synchronized, redacted, annotated video that behavioural researchers can actually analyse.**
 
-## What Is In This Repo
+Eight cameras record every case in the OR. They start at slightly different moments, write a proprietary NorPix `.seq` format, and produce footage that cannot be shared until the patient monitors in frame are redacted. Researchers then annotate behaviour in BORIS against those videos — and the annotations are only meaningful if every frame index still points at the same instant it did when the coder made the call.
 
-- A NiceGUI desktop dashboard for browsing, editing, and summarizing the SQLite
-  database.
-- File-system pipelines for SEQ ingestion, MP4 status updates, SEQ metadata
-  enrichment, and SEQ-to-MP4 conversion.
-- BORIS behavioral-tag import tooling.
-- Batch redaction tooling driven from database timing tables.
-- A multi-video MPV review tool for synchronized case playback.
-- Helper utilities for database comparison, backup validation, video cutting,
-  SEQ IDX repair, and schema export.
-- Remapping of BORIS event timing from the OLD MP4 timeline onto the
-  converted NEW MP4 timeline (`scripts/helpers/boris_remap_to_new_mp4.py`).
+ScalpelLab is the tooling that holds that chain together: ingestion, a SQLite catalog of what exists, format conversion, timeline reconciliation, privacy redaction, and a synchronized review tool.
 
+---
+
+## At a glance
+
+| | |
+|---|---|
+| **Scale** | ~18.9k lines of Python across 56 modules — dashboard, pipeline, and review tool |
+| **Cameras** | 8 per case, each on its own clock, reconciled to one synchronization group |
+| **Catalog** | SQLite: recordings, SEQ/MP4 status, parsed SEQ headers, BORIS events, monitor vitals |
+| **Privacy** | The database is **git-crypt encrypted** in this public repo; redaction is batch-driven from catalog timing tables |
+| **Validation** | 19 tests pass on a clean clone; CI runs the suite, a compileall sweep, and a config import on Windows |
+
+## The problem
+
+Recording surgery is the easy part. The problems come after:
+
+1. **Eight cameras, eight clocks.** Each starts when its operator hits record. "Frame 900" means a different moment on every camera unless the whole case is reconciled to one origin.
+2. **The source format is proprietary and fragile.** NorPix `.seq` files need a companion `.seq.idx` to be seekable. Those companions go missing or get truncated, and a `.seq` without a valid index cannot be converted or trusted.
+3. **Redaction is mandatory and mechanical.** Patient and ventilator monitors are in frame. Every case needs the same regions blacked out over the same time ranges — hundreds of files, driven from data, not by hand.
+4. **Re-encoding invalidates existing research.** Behavioural annotations were coded in BORIS against the *original* exports. Producing new synchronized MP4s moves every frame index. Without a remap, thousands of hours of coding silently stop pointing at the right moments.
+
+## Timeline reconciliation — the interesting part
+
+This is the constraint the rest of the system is built around.
+
+```mermaid
+flowchart TD
+    SEQ["NorPix .seq<br/>+ .seq.idx<br/>(per-frame timestamps)"]
+    OLD["OLD MP4<br/>what BORIS was coded against"]
+    NEW["NEW MP4<br/>synchronized, 30 fps"]
+    B1["BORIS events<br/>OLD timeline"]
+    B2["BORIS events<br/>NEW timeline"]
+
+    SEQ <-->|"identity: i_old == K_seq<br/>no resample, no drop"| OLD
+    SEQ -->|"pre-roll + timestamp scaling"| NEW
+    B1 -->|"boris_remap_to_new_mp4.py"| B2
+    OLD -.->|"annotations coded here"| B1
+    B2 -.->|"analysed against"| NEW
+
+    style B2 fill:#1f3a4a,stroke:#38a,color:#fff
+    style NEW fill:#1f3a4a,stroke:#38a,color:#fff
+```
+
+Two facts make the remap tractable, and both had to be *established* rather than assumed:
+
+- **OLD MP4 ↔ SEQ is the identity.** The original export preserved SEQ frames one-to-one — no resampling, no duplication, no dropped frames, no FPS conversion. So an annotation at OLD frame `i` refers to SEQ record `i`.
+- **SEQ → NEW MP4 is a timestamp projection**, not a frame copy. Each camera's frames are placed on a common 30 fps grid using the per-frame timestamps in its `.seq.idx`, offset by a pre-roll that aligns it to the earliest start in its synchronization group:
+
+  ```python
+  new_pre_roll_frames = round((first_frame_time - group_t_global_start) * 30)
+  new_frame = new_pre_roll_frames + round((idx_timestamp[i_old] - idx_timestamp[0]) * 30)
+  ```
+
+The pre-roll belongs *only* to the SEQ → NEW stage; applying it to the OLD ↔ SEQ mapping would shift every annotation by the camera's start offset. `scripts/helpers/boris_remap_to_new_mp4.py` writes remapped `*_new_mp4.csv` files alongside each source export rather than overwriting them, so the original coding stays intact and the remap stays auditable. Cases where the rules do not hold are enumerated as explicit exceptions in [`docs/new recordings formula.md`](docs/new%20recordings%20formula.md) instead of being quietly mapped anyway.
+
+## Key engineering challenges
+
+**Deciding what is even convertible.** A SEQ file is only safe to convert if its IDX exists, its header parses, its frame timestamps are sane, and it is large enough to be a real recording. Rather than scatter those checks through the converter, they are encoded once as a database view (`cur_sync_status.is_syncable`) that the conversion planner reads. The gate and the dashboard therefore cannot disagree.
+
+**Repairing proprietary index files.** `repair_seq_idx.py` audits `.seq.idx` companions and rebuilds them from the SEQ body when they are missing or truncated. It checkpoints per file, so an interrupted multi-hour pass over a thousand recordings resumes instead of restarting.
+
+**Redaction driven by data, not by hand.** `batch_black_squere.py` reads case timing ranges from `mp4_times` and applies the same masking across every affected recording, tracking what has been processed so a rerun is incremental.
+
+**Reviewing eight angles at once.** `MPV_Multiviewer/` drives N libmpv players over IPC from a Tkinter UI, scrubs them together, and writes per-camera offset corrections back to the catalog — so a sync correction found during review becomes data the pipeline uses, not a note in someone's file.
+
+**Publishing research tooling without publishing research data.** The catalog is real: it names cases, dates and cameras. It is committed as a `git-crypt` encrypted blob, so the schema, the queries and the entire application are public and reviewable while the contents are not. Generated pipeline checkpoints, which embed absolute paths into the data tree, are gitignored for the same reason.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph ingest["Processing pipeline"]
+        direction TB
+        P1["1 · SEQ curation<br/>organize, hash-verify,<br/>flag undersized"]
+        P2["2 · Update DB + IDX<br/>scan, enrich headers,<br/>ffprobe durations"]
+        P3["3 · SEQ → MP4<br/>GPU-first, sync group<br/>alignment"]
+        P1 --> P2 --> P3
+    end
+
+    DB[("SQLite catalog<br/>git-crypt encrypted")]
+    subgraph review["Review & analysis"]
+        direction TB
+        UI["NiceGUI dashboard<br/>12 pages"]
+        MPV["MPV Multiviewer<br/>N-camera sync"]
+        RED["Batch redaction"]
+    end
+    BORIS["BORIS exports<br/>+ monitor vitals"]
+
+    ingest <--> DB
+    DB <--> review
+    BORIS -->|"import + remap"| DB
+
+    style DB fill:#1f3a4a,stroke:#38a,color:#fff
+```
+
+The catalog is the coordination point: the pipeline writes status into it, the dashboard and review tools read from it, and the redaction and conversion planners take their inputs from views over it rather than from the filesystem.
+
+## Tech stack
+
+Python 3.11 · SQLite (+ `git-crypt`) · NiceGUI + pywebview (desktop dashboard) · Plotly · pandas / NumPy · Tkinter + libmpv (review tool) · FFmpeg / ffprobe with NVENC · NorPix SequenceViewer · PyMuPDF · pytest · GitHub Actions
+
+## Repository structure
+
+```text
+app/                  NiceGUI desktop dashboard (~4.7k lines, 12 pages)
+scripts/              the pipeline (~11.2k lines)
+  1_seq_curation.py     organize + verify raw SEQ exports
+  2_update_db.py        scan trees, enrich SEQ metadata, reconcile status
+  3_seq_to_mp4_convert.py  GPU-first conversion with sync-group alignment
+  helpers/              IDX repair, BORIS import + remap, redaction, comparison
+MPV_Multiviewer/      Tkinter + libmpv synchronized review tool (~1.9k lines)
+docs/                 SEQ/IDX format references, schema notes, frame-mapping spec
+tests/                7 files - unit, smoke, and an opt-in end-to-end pipeline test
+config.py             all paths in one place; `python config.py` validates them
+```
+
+## Testing
+
+```bash
+pip install -r requirements.txt
+python -m pytest tests/ -q      # 19 passed, 1 skipped on a clean clone
+```
+
+The end-to-end pipeline test drives the three real scripts as subprocesses and is **opt-in**: it skips unless `SCALPELLAB_TEST_SAMPLE_DIR` points at a small SEQ sample *and* ffmpeg / mkvmerge / NorPix are installed. See [`tests/README.md`](tests/README.md) for setting one up.
+
+**Not covered by tests:** anything needing real recordings or the vendor tools — actual SEQ→MP4 conversion, IDX creation via NorPix, redaction output, and the MPV review tool. Those are exercised by operating the system.
+
+## Limitations
+
+- **Windows-oriented.** Paths, drive letters and the NorPix/mpv integrations assume Windows.
+- **The database is encrypted and the key is not public.** You can read the schema, the queries and every line of application code, but you cannot run the dashboard against real data without the key and the recordings.
+- **No schema migrations.** Changes are applied directly against the live SQLite file; back up first, then re-export the diagram with `scripts/helpers/sqlite_to_dbdiagram.py`.
+- **Vendor tools are not bundled.** FFmpeg, mpv and NorPix SequenceViewer must be installed separately.
+- **Single-operator tooling.** There is no multi-user access control; it assumes one researcher on one workstation.
+
+## Future improvements
+
+- A migration framework, so schema changes stop being a manual `sqlite3` session against live research data.
+- A small synthetic SEQ fixture generator, which would let the end-to-end pipeline test run in CI instead of only on a machine with real recordings.
+- Making the sync-group alignment reproducible from the catalog alone, so a conversion can be re-derived years later without the original working directory.
+
+---
 ## Quick Start
 
 ### 1. Install dependencies
@@ -267,39 +397,6 @@ Default camera names from [`config.py`](config.py):
 - `Patient_Monitor`
 - `Ventilator_Monitor`
 - `Injection_Port`
-
-## Project Layout
-
-```text
-ScalpelLab/
-├── app/
-│   ├── app.py
-│   ├── utils.py
-│   └── pages/
-├── docs/
-│   ├── project_context/
-│   ├── ERD.pdf
-│   ├── mp4_statistics.pdf
-│   ├── scalpel_dbdiagram.txt
-│   ├── redaction_tracking.json
-│   └── seq_idx_repair_tracking.json
-├── MPV_Multiviewer/
-│   ├── docs/
-│   ├── lib/
-│   ├── config.ini
-│   └── run_viewer.py
-├── scripts/
-│   ├── 1_seq_curation.py
-│   ├── 2_update_db.py
-│   ├── 3_seq_to_mp4_convert.py
-│   └── helpers/
-│       ├── import_boris_tags.py
-│       └── import_analysis_finale.py
-├── config.py
-├── run_app.py
-├── requirements.txt
-└── ScalpelDatabase.sqlite
-```
 
 ## External Tools
 
