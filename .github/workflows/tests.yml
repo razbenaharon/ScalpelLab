@@ -18,10 +18,13 @@ permissions:
 jobs:
   tests:
     runs-on: windows-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12']
+        # One version. Windows runners bill at 2x, and this suite is a
+        # collect-and-import guard, not a compatibility matrix.
+        python-version: ['3.11']
     steps:
       - uses: actions/checkout@v4
 
