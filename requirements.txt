@@ -3,10 +3,7 @@
 #   pip install -r requirements.txt
 #
 # Every package below is imported by code in this repository. If you add one,
-# add the import too - an earlier version of this file pulled in PyTorch,
-# Ultralytics, torchreid and Optuna for a computer-vision directory that is not
-# part of the repo, which cost every new clone a multi-gigabyte download before
-# the dashboard would start.
+# add the import too.
 
 # --- Desktop dashboard -------------------------------------------------------
 nicegui>=2.0.0                # app/ - the whole UI layer
@@ -15,7 +12,6 @@ pywebview>=5.0                # required by NiceGUI native=True (run_app.py)
 # --- Data ---------------------------------------------------------------------
 pandas>=2.0.0                 # every dashboard page and most scripts/
 numpy>=1.24.0                 # SEQ header/IDX parsing, timing analysis
-plotly>=5.0.0                 # charts in app/charts.py
 
 # --- Documents and images -----------------------------------------------------
 PyMuPDF>=1.26.0               # app/pages/database.py renders docs/ERD.pdf
