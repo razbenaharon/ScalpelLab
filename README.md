@@ -19,6 +19,8 @@ ScalpelLab is the tooling that holds that chain together: ingestion, a SQLite ca
 | **Privacy** | The real catalog stays private; the repo ships an **anonymized mock catalog** with the same schema and recording metadata, so the dashboard and review tool run on a clean clone |
 | **Validation** | 22 tests pass on a clean clone (including a leak check on the mock catalog); CI runs the suite, a compileall sweep, and a config import on Windows |
 
+Milestones and what each one delivered: [`CHANGELOG.md`](CHANGELOG.md) (also as git tags `v0.1.0` … `v1.0.0`).
+
 ## The problem
 
 Recording surgery is the easy part. The problems come after:
