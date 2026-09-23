@@ -36,7 +36,9 @@ Install: `pip install -r requirements.txt`. Validate paths: `python config.py`.
 
 | Path                                | Role                                                     |
 |-------------------------------------|----------------------------------------------------------|
-| `ScalpelDatabase.sqlite`            | Source of truth. Tracked only through git-crypt.          |
+| `ScalpelDatabase.sqlite`            | Source of truth. **Private, gitignored, never committed.** |
+| `sample_data/ScalpelDatabase_mock.sqlite` | Public anonymized copy; `config.DB_PATH` falls back to it. |
+| `private/`                          | Gitignored local-only files (staff workbook, case-list reports). |
 | `config.py`                         | `DB_PATH`, `SEQ_ROOT`, `MP4_ROOT`, `NORPIX_SEQUENCE_VIEWER_PATH`, `DEFAULT_CAMERAS` |
 | `run_app.py`                        | Launches NiceGUI dashboard via `python -m app.app`       |
 | `app/`                              | NiceGUI dashboard — see [app/app.md](app/app.md)         |
@@ -85,7 +87,8 @@ Routing — read the relevant context file before editing:
 
 ## 5. Database / schema rules
 
-- **DB path resolution**: `config.DB_PATH` → overridable by `SCALPEL_DB`
+- **DB path resolution**: `config.DB_PATH` (real DB if present, else the
+  mock in `sample_data/`) → overridable by `SCALPEL_DB`
   env var → overridable per-session via the dashboard's left drawer.
 - **SequenceViewer path resolution**: `config.NORPIX_SEQUENCE_VIEWER_PATH` →
   overridable by `SCALPEL_NORPIX_SEQUENCE_VIEWER` → editable per-session and
@@ -113,20 +116,25 @@ Routing — read the relevant context file before editing:
   `scripts/helpers/sqlite_to_dbdiagram.py` to refresh
   `docs/scalpel_dbdiagram.txt` and update
   `docs/project_context/scalpel_database_sqlite_context.md`.
+  Then rebuild the public mock:
+  `python scripts/helpers/build_mock_db.py --force`.
 
 ## 6. Security and privacy rules
 
 This repo handles **medical/surgical recordings**. Treat all video and DB
 content as sensitive PHI-equivalent data.
 
-- **`ScalpelDatabase.sqlite` IS committed**, but only because it is
-  encrypted in-tree by **git-crypt** (`.gitattributes` maps `*.sqlite` to
-  `filter=git-crypt diff=git-crypt`). Before staging the DB, always run
-  `git crypt status ScalpelDatabase.sqlite` — it must report `encrypted:`.
-  If it reports `not encrypted`, **stop**: the working clone is missing
-  the git-crypt key (`git-crypt unlock` first) and a raw push would leak
-  the DB. Treat any other `*.sqlite` (e.g. backups like
-  `ScalpelDatabase.sqlite.bak_*`) the same way.
+- **The real `ScalpelDatabase.sqlite` is never committed.** It names
+  clinical staff (`anesthesiology.name`, resident codes, annotators). The
+  repo is public; it ships only `sample_data/ScalpelDatabase_mock.sqlite`,
+  produced by `scripts/helpers/build_mock_db.py` (pseudonymizes, rebuilds
+  with `VACUUM INTO`, byte-scans for leaks). Regenerate the mock with that
+  script, never by copying the real file. Backups (`*.sqlite.bak*`) and any
+  other copy of the real DB are private too.
+- **`private/` is local-only** (gitignored): the staff/resident workbook
+  and case-list reports live there. Never `git add -f` anything from it.
+- **Never put real staff names in code, docs or commit messages**, not even
+  as docstring examples. Use invented names (`Jane Doe -> JD1510`).
 - **Never commit**: any `.seq` / `.mp4` / `.idx` / `.aud` files,
   `docs/*_tracking.json` (may reference patient cases), or anything under
   `MPV_Multiviewer/` runtime config containing case paths. The
@@ -147,7 +155,7 @@ content as sensitive PHI-equivalent data.
 - **Don't commit unless asked.** When asked, follow the convention shown by
   recent history (`git log --oneline -n 10`): short imperative subject,
   occasional one-line body. Examples:
-  `Allow git-crypt unlock in Claude permissions`,
+  `Add mock DB builder`,
   `Replace ERD home with dashboard; add ERD zoom dialog`.
 - **One logical change per commit.** Don't bundle unrelated edits.
 - **Don't push, force-push, or rewrite history** without explicit user
@@ -156,9 +164,8 @@ content as sensitive PHI-equivalent data.
   published history without explicit confirmation.
 - **Never** use `--no-verify`, `--no-gpg-sign`, or otherwise skip hooks.
 - **Stage explicitly** (`git add <file>`) — avoid `git add -A` so videos,
-  tracking JSONs, and unencrypted DB backups don't slip in. The main
-  `ScalpelDatabase.sqlite` is fine to stage (git-crypt encrypts it on
-  commit), but verify with `git crypt status` first.
+  tracking JSONs, the real DB and its backups don't slip in. The only
+  `.sqlite` that may be staged is `sample_data/ScalpelDatabase_mock.sqlite`.
 - **Branch hygiene**: work on a feature branch when the change is
   non-trivial. The repo's main branch is `main`.
 

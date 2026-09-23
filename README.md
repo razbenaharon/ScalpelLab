@@ -14,9 +14,10 @@ ScalpelLab is the tooling that holds that chain together: ingestion, a SQLite ca
 |---|---|
 | **Scale** | ~18.9k lines of Python across 56 modules — dashboard, pipeline, and review tool |
 | **Cameras** | 8 per case, each on its own clock, reconciled to one synchronization group |
-| **Catalog** | SQLite: recordings, SEQ/MP4 status, parsed SEQ headers, BORIS events, monitor vitals |
-| **Privacy** | The database is **git-crypt encrypted** in this public repo; redaction is batch-driven from catalog timing tables |
-| **Validation** | 19 tests pass on a clean clone; CI runs the suite, a compileall sweep, and a config import on Windows |
+| **Sync** | Variable-frame-rate SEQ capture → constant 30 fps MP4, every camera in a case on one shared timeline |
+| **Catalog** | SQLite schema designed for this project: recordings, SEQ/MP4 status, parsed SEQ headers, BORIS events, monitor vitals |
+| **Privacy** | The real catalog stays private; the repo ships an **anonymized mock catalog** with the same schema and recording metadata, so the dashboard and review tool run on a clean clone |
+| **Validation** | 22 tests pass on a clean clone (including a leak check on the mock catalog); CI runs the suite, a compileall sweep, and a config import on Windows |
 
 ## The problem
 
@@ -27,7 +28,27 @@ Recording surgery is the easy part. The problems come after:
 3. **Redaction is mandatory and mechanical.** Patient and ventilator monitors are in frame. Every case needs the same regions blacked out over the same time ranges — hundreds of files, driven from data, not by hand.
 4. **Re-encoding invalidates existing research.** Behavioural annotations were coded in BORIS against the *original* exports. Producing new synchronized MP4s moves every frame index. Without a remap, thousands of hours of coding silently stop pointing at the right moments.
 
-## Timeline reconciliation — the interesting part
+## VFR → CFR synchronization
+
+NorPix cameras do not record at a constant rate. Frames arrive in bursts, drop under load, and every frame carries its own capture timestamp in the `.seq.idx`. A naive export treats the stream as constant-rate, so each camera drifts a little further from the others every minute. [`scripts/3_seq_to_mp4_convert.py`](scripts/3_seq_to_mp4_convert.py) keeps the real capture timing all the way to the final encode:
+
+```mermaid
+flowchart LR
+    SEQ[".seq + .seq.idx<br/>VFR, per-frame timestamps"] -->|"IDX byte offsets"| H264["raw H.264"]
+    SEQ -->|"IDX timestamps"| TC["timecodes v2"]
+    H264 --> MKV["mkvmerge<br/>VFR .mkv"]
+    TC --> MKV
+    MKV -->|"fps=30 nearest-neighbour<br/>+ tpad pre/post-roll<br/>+ hard cut at group duration"| MP4["hevc_nvenc<br/>CFR 30 fps .mp4"]
+```
+
+1. Raw H.264 frames are pulled out of the SEQ body using the IDX byte offsets, so no container ever re-guesses the timing.
+2. A *timecode format v2* file records each frame's real capture time in milliseconds.
+3. `mkvmerge` muxes the two into a VFR MKV that preserves the original capture timing exactly.
+4. FFmpeg resamples onto a constant 30 fps grid (duplicating a frame across a gap, dropping one inside a burst), pads black pre-roll and post-roll up to the earliest start and latest end of the camera's **sync group**, and cuts at the group's global duration.
+
+Every camera of a case therefore comes out the same length on the same timeline: frame *N* is the same instant on every angle. ffprobe then checks duration and sync after each encode, and the whole planner runs only on recordings that the catalog marks as syncable (see `cur_sync_status` below).
+
+## Timeline reconciliation — keeping old annotations valid
 
 This is the constraint the rest of the system is built around.
 
@@ -71,7 +92,7 @@ The pre-roll belongs *only* to the SEQ → NEW stage; applying it to the OLD ↔
 
 **Reviewing eight angles at once.** `MPV_Multiviewer/` drives N libmpv players over IPC from a Tkinter UI, scrubs them together, and writes per-camera offset corrections back to the catalog — so a sync correction found during review becomes data the pipeline uses, not a note in someone's file.
 
-**Publishing research tooling without publishing research data.** The catalog is real: it names cases, dates and cameras. It is committed as a `git-crypt` encrypted blob, so the schema, the queries and the entire application are public and reviewable while the contents are not. Generated pipeline checkpoints, which embed absolute paths into the data tree, are gitignored for the same reason.
+**Publishing research tooling without publishing research data.** The real catalog names clinical staff, so it never leaves the research workstation. [`scripts/helpers/build_mock_db.py`](scripts/helpers/build_mock_db.py) derives [`sample_data/ScalpelDatabase_mock.sqlite`](sample_data/) from it: identical schema, views and recording metadata, with every person replaced by a stable pseudonym. The builder writes through `VACUUM INTO` so no freed page keeps an original value, then byte-scans the output for every original name and code and refuses to keep the file on any hit. `config.py` falls back to the mock whenever the private file is absent, so a clean clone runs the full dashboard and review tool on realistic data.
 
 ## Architecture
 
@@ -85,7 +106,7 @@ flowchart LR
         P1 --> P2 --> P3
     end
 
-    DB[("SQLite catalog<br/>git-crypt encrypted")]
+    DB[("SQLite catalog<br/>private · mock in repo")]
     subgraph review["Review & analysis"]
         direction TB
         UI["NiceGUI dashboard<br/>12 pages"]
@@ -105,7 +126,7 @@ The catalog is the coordination point: the pipeline writes status into it, the d
 
 ## Tech stack
 
-Python 3.11 · SQLite (+ `git-crypt`) · NiceGUI + pywebview (desktop dashboard) · Plotly · pandas / NumPy · Tkinter + libmpv (review tool) · FFmpeg / ffprobe with NVENC · NorPix SequenceViewer · PyMuPDF · pytest · GitHub Actions
+Python 3.11 · SQLite · NiceGUI + pywebview + ECharts (desktop dashboard) · pandas / NumPy · Tkinter + libmpv (review tool) · FFmpeg / ffprobe with NVENC · NorPix SequenceViewer · PyMuPDF · pytest · GitHub Actions
 
 ## Repository structure
 
@@ -118,7 +139,7 @@ scripts/              the pipeline (~11.2k lines)
   helpers/              IDX repair, BORIS import + remap, redaction, comparison
 MPV_Multiviewer/      Tkinter + libmpv synchronized review tool (~1.9k lines)
 docs/                 SEQ/IDX format references, schema notes, frame-mapping spec
-tests/                7 files - unit, smoke, and an opt-in end-to-end pipeline test
+tests/                8 files - unit, smoke, and an opt-in end-to-end pipeline test
 config.py             all paths in one place; `python config.py` validates them
 ```
 
@@ -126,7 +147,7 @@ config.py             all paths in one place; `python config.py` validates them
 
 ```bash
 pip install -r requirements.txt
-python -m pytest tests/ -q      # 19 passed, 1 skipped on a clean clone
+python -m pytest tests/ -q      # 22 passed, 1 skipped on a clean clone
 ```
 
 The end-to-end pipeline test drives the three real scripts as subprocesses and is **opt-in**: it skips unless `SCALPELLAB_TEST_SAMPLE_DIR` points at a small SEQ sample *and* ffmpeg / mkvmerge / NorPix are installed. See [`tests/README.md`](tests/README.md) for setting one up.
@@ -136,7 +157,7 @@ The end-to-end pipeline test drives the three real scripts as subprocesses and i
 ## Limitations
 
 - **Windows-oriented.** Paths, drive letters and the NorPix/mpv integrations assume Windows.
-- **The database is encrypted and the key is not public.** You can read the schema, the queries and every line of application code, but you cannot run the dashboard against real data without the key and the recordings.
+- **The public catalog is a mock.** Staff names and codes are pseudonyms, so the roster and seniority charts show `Anesthesiologist NN`. The video recordings themselves are not public, so the pipeline and review tool need a real data tree to process or play anything.
 - **No schema migrations.** Changes are applied directly against the live SQLite file; back up first, then re-export the diagram with `scripts/helpers/sqlite_to_dbdiagram.py`.
 - **Vendor tools are not bundled.** FFmpeg, mpv and NorPix SequenceViewer must be installed separately.
 - **Single-operator tooling.** There is no multi-user access control; it assumes one researcher on one workstation.
@@ -156,7 +177,11 @@ The end-to-end pipeline test drives the three real scripts as subprocesses and i
 pip install -r requirements.txt
 ```
 
-### 2. Configure local paths
+### 2. Try it on the mock catalog
+
+A clean clone needs no configuration to open the dashboard: without a private `ScalpelDatabase.sqlite` in the project root, `config.py` points at `sample_data/ScalpelDatabase_mock.sqlite`. Skip to step 5.
+
+### 3. Configure local paths
 
 Edit [`config.py`](config.py) and set:
 
@@ -211,13 +236,13 @@ File types:
 - `motior_data.csv` — exported patient-monitor vital signs for the case
   (imported by `scripts/helpers/import_analysis_finale.py`).
 
-### 3. Validate configuration
+### 4. Validate configuration
 
 ```bash
 python config.py
 ```
 
-### 4. Launch the desktop app
+### 5. Launch the desktop app
 
 ```bash
 python run_app.py
@@ -255,8 +280,11 @@ pages and **Processing Pipeline** for operational actions.
 
 ### Database And Schema
 
-- [`ScalpelDatabase.sqlite`](ScalpelDatabase.sqlite) is the local working
-  database expected by default in the project root.
+- `ScalpelDatabase.sqlite` is the private working database in the project
+  root. It is gitignored and never committed.
+- [`sample_data/ScalpelDatabase_mock.sqlite`](sample_data/) is the public,
+  anonymized copy, used automatically when the private file is absent. Rebuild
+  it after catalog changes with `python scripts/helpers/build_mock_db.py --force`.
 - There is no migration framework. Schema changes are applied directly with
   `sqlite3` against the live database — back up first, then re-export the
   schema with `scripts/helpers/sqlite_to_dbdiagram.py`.
@@ -353,6 +381,7 @@ python scripts/helpers/batch_black_squere.py
 python scripts/helpers/repair_seq_idx.py --dry-run
 python scripts/helpers/cut_video.py
 python scripts/helpers/sqlite_to_dbdiagram.py
+python scripts/helpers/build_mock_db.py --force
 python MPV_Multiviewer/run_viewer.py
 ```
 
@@ -412,7 +441,7 @@ Some functionality depends on tools outside Python:
 ## Notes
 
 - The repo is Windows-oriented; paths and examples assume Windows drive letters.
-- The database file defaults to `ScalpelDatabase.sqlite` in the project root.
+- The database file defaults to the private `ScalpelDatabase.sqlite` in the project root, falling back to the mock in `sample_data/`.
 - `scripts/2_update_db.py` is designed to preserve columns it does not manage.
 - The NiceGUI app can point at different configured paths through the Home page
   Configuration panel or the relevant `SCALPEL_*` environment variables.

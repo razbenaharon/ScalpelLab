@@ -10,6 +10,7 @@ scripts/helpers/
 ├── cut_video.py              # FFmpeg stream-copy segment cuts
 ├── backup_dir.py             # mirror copy preserving structure
 ├── sqlite_to_dbdiagram.py    # export current SQLite schema to dbdiagram.io
+├── build_mock_db.py          # private catalog -> anonymized sample_data/ mock
 └── compare/
     ├── compare_databases.py
     ├── compare_mp4.py
@@ -95,3 +96,12 @@ Useful for verifying backups and migrations.
   NorPix SequenceViewer executable.
 - Tracking JSON files (`docs/*_tracking.json`) are checkpoint state; do not
   delete them mid-run.
+
+### `build_mock_db.py`
+Builds `sample_data/ScalpelDatabase_mock.sqlite` from the private catalog.
+Pseudonymizes `anesthesiology.name`, both `code` columns (one shared mapping,
+numeric YYMM suffix kept so seniority still computes) and
+`analysis_information.label_by`. Writes via `VACUUM INTO` and byte-scans the
+result for every original value; any hit deletes the output and exits
+non-zero. Rerun with `--force` after the real catalog changes. Add new
+person-identifying columns to `anonymize()` and `_collect_sensitive()`.
