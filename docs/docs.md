@@ -10,12 +10,10 @@ code relies on (e.g. tracking JSONs are checkpoints).
 docs/
 ├── DOCSTRING_GUIDE.md              # Google-style docstring template used across the repo
 ├── ERD.pdf                         # rendered ERD viewed by app/pages/database.py
-├── mp4_statistics.pdf              # static report
 ├── scalpel_dbdiagram.txt           # dbdiagram.io DBML export of the live schema
-├── sync_status_2026-03-10.md       # snapshot of sync coverage on that date
 ├── redaction_tracking.json         # checkpoint state, gitignored - created on first run
 ├── seq_idx_repair_tracking.json    # checkpoint state, gitignored - created on first run
-├── Data_summary_guide.xlsx         # human reference
+├── new recordings formula.md       # OLD MP4 <-> SEQ -> NEW MP4 frame-mapping spec
 └── project_context/
     ├── scalpel_database_sqlite_context.md   # authoritative table-by-table schema notes
     ├── seq_enriched_table_reference.md      # per-column meaning of seq_enriched
@@ -65,3 +63,9 @@ logs/idx_creation/
 logs/seq_analysis/
 logs/seq_to_mp4/
 ```
+
+## Private material
+
+Static case-list reports and the staff workbook were moved to the gitignored
+`private/` directory at the repo root. They contain real case listings and
+staff names, so they stay on the research workstation.
