@@ -75,7 +75,10 @@ class DatabaseBrowser:
                 db_path = os.path.normpath(os.path.join(base_dir, configured_path))
             else:
                 db_path = configured_path
-            
+        # The real catalog is private; public clones only ship the anonymized mock.
+        if not os.path.exists(db_path):
+            db_path = os.path.join(os.path.dirname(base_dir), "sample_data", "ScalpelDatabase_mock.sqlite")
+
         # MPV Path
         mpv_path = "mpv.exe"
         if 'MPV' in config_ini and 'mpv_path' in config_ini['MPV']:

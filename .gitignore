@@ -37,11 +37,6 @@ out/
 # Local Codex safety backups
 .codex_pull_backups/
 
-# SimCLR generated run outputs
-CV/SimCLR_reid/simclr_output/
-CV/SimCLR_reid/test_output_dry_run/
-experiments_output/
-
 # Local Claude Code settings (machine-specific tool allowlist, local paths)
 .claude/settings.local.json
 
@@ -49,3 +44,15 @@ experiments_output/
 # into the research data tree. Both loaders recreate them when absent.
 docs/seq_idx_repair_tracking.json
 docs/redaction_tracking.json
+
+# Private research data. The real catalog names clinical staff, so it never
+# leaves this machine; the public repo ships sample_data/ScalpelDatabase_mock.sqlite
+# (rebuild with scripts/helpers/build_mock_db.py).
+/ScalpelDatabase.sqlite
+*.sqlite.bak*
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+private/
+*.xlsx
+~$*

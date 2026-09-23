@@ -43,8 +43,11 @@ def _py_raw_string(value: str) -> str:
 def _db_assignment(db_path: str) -> str:
     selected = Path(db_path)
     try:
-        if selected.resolve() == (PROJECT_ROOT / "ScalpelDatabase.sqlite").resolve():
-            return 'DB_PATH = PROJECT_ROOT / "ScalpelDatabase.sqlite"'
+        if selected.resolve() in (
+            (PROJECT_ROOT / "ScalpelDatabase.sqlite").resolve(),
+            (PROJECT_ROOT / "sample_data" / "ScalpelDatabase_mock.sqlite").resolve(),
+        ):
+            return "DB_PATH = REAL_DB_PATH if REAL_DB_PATH.exists() else MOCK_DB_PATH"
     except OSError:
         pass
     return f"DB_PATH = Path({_py_raw_string(db_path)})"

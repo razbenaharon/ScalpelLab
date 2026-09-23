@@ -566,6 +566,8 @@ class SyncPanel:
                         db_path = os.path.normpath(os.path.join(base_dir, configured_path))
                     else:
                         db_path = configured_path
+            if not os.path.exists(db_path):
+                db_path = os.path.join(os.path.dirname(base_dir), "sample_data", "ScalpelDatabase_mock.sqlite")
 
             conn = sqlite3.connect(db_path)
             conn.execute("PRAGMA foreign_keys = ON")

@@ -11,7 +11,9 @@ The configuration is designed to be easily customizable for different deployment
 environments by editing the SEQ_ROOT, MP4_ROOT, and SequenceViewer paths.
 
 IMPORTANT:
-    - The database (ScalpelDatabase.sqlite) must always be in the project directory
+    - The private database (ScalpelDatabase.sqlite) lives in the project
+      directory and is never committed; without it, the anonymized mock in
+      sample_data/ is used
     - SEQ_ROOT and MP4_ROOT can be on different drives or locations
     - NORPIX_SEQUENCE_VIEWER_PATH points to the NorPix tool used to open .seq
       files and create companion .seq.idx files
@@ -34,9 +36,13 @@ from typing import List, Dict, Any
 # =============================================================================
 # Database Configuration
 # =============================================================================
-# Database is always in the project root directory
+# The real catalog is private and gitignored. A public clone only has the
+# anonymized mock (rebuilt by scripts/helpers/build_mock_db.py), so fall back
+# to it whenever the real file is absent.
 PROJECT_ROOT = Path(__file__).parent
-DB_PATH = PROJECT_ROOT / "ScalpelDatabase.sqlite"
+REAL_DB_PATH = PROJECT_ROOT / "ScalpelDatabase.sqlite"
+MOCK_DB_PATH = PROJECT_ROOT / "sample_data" / "ScalpelDatabase_mock.sqlite"
+DB_PATH = REAL_DB_PATH if REAL_DB_PATH.exists() else MOCK_DB_PATH
 
 # =============================================================================
 # File System Paths - EDIT THESE TO MATCH YOUR SYSTEM
