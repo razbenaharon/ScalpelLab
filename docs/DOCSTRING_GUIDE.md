@@ -10,7 +10,6 @@ This guide demonstrates how to add comprehensive Google-style docstrings to all 
 2. [Function Docstrings](#function-docstrings)
 3. [Class Docstrings](#class-docstrings)
 4. [Examples by Module](#examples-by-module)
-   - [yolo/ Module Examples](#yolo-module-examples)
    - [scripts/ Module Examples](#scripts-module-examples)
    - [app/ Module Examples](#app-module-examples)
 
@@ -180,261 +179,6 @@ class ClassName:
 ---
 
 ## Examples by Module
-
-### yolo/ Module Examples
-
-#### yolo/1_pose_anesthesiologist.py - Module-Level Docstring
-
-```python
-"""Multi-person pose detection and tracking using YOLOv8 with BoT-SORT.
-
-This module provides GPU-accelerated pose estimation for surgical videos,
-tracking multiple persons (surgeons, anesthesiologists, nurses) across
-entire video sequences. It integrates with the ScalpelLab database and
-outputs keypoint data in Parquet format for downstream analysis.
-
-Key Features:
-    - YOLOv8-Pose: 17 COCO keypoint detection per person
-    - BoT-SORT Tracking: Persistent track IDs with re-identification
-    - GPU Acceleration: CUDA-powered inference with CPU fallback
-    - Every-Frame Processing: Ensures tracking consistency
-    - Smart Sampling: Saves data at target FPS to manage file size
-    - Video Repair: Automatic FFmpeg repair for corrupted videos
-
-Architecture:
-    1. Video Integrity Check: repair_video() fixes corrupted videos
-    2. Model Setup: YOLO model loaded with specified configuration
-    3. Frame-by-Frame Processing: Tracks persons across ALL frames
-    4. Selective Saving: Saves keypoint data at target FPS
-    5. Parquet Export: Outputs structured keypoint data
-
-Data Flow:
-    MP4 Video → repair_video() → YOLO + BoT-SORT → Keypoint DataFrame →
-    Parquet File (17 keypoints × 3 values per person per frame)
-
-Performance:
-    - GPU (RTX 3080): ~30 FPS for 1920x1080 video with yolov8x-pose
-    - CPU (i7-10700K): ~3 FPS for same configuration
-    - Memory: ~2GB GPU VRAM for yolov8x-pose at 1280px input
-
-Configuration:
-    See yolo/0_yolo_config.json for model, tracker, and processing settings.
-
-Dependencies:
-    - ultralytics: YOLO model and tracking framework
-    - torch: PyTorch for GPU acceleration
-    - opencv-python (cv2): Video I/O operations
-    - pandas: DataFrame creation for keypoint data
-    - pyarrow: Parquet file serialization
-    - ffmpeg: Video repair (external tool)
-
-Example:
-    Command-line usage::
-
-        $ python yolo/1_pose_anesthesiologist.py video.mp4
-        # Outputs: video_mask.mp4_keypoints.parquet
-
-    Programmatic usage::
-
-        from yolo import pose_anesthesiologist_yolo
-
-        parquet_path = pose_anesthesiologist_yolo(
-            video_path="path/to/video.mp4",
-            output_path="path/to/output.mp4"
-        )
-
-Output Format:
-    Parquet file with columns:
-        - Frame_ID (int): Frame number (0-indexed)
-        - Timestamp (float): Time in seconds
-        - Track_ID (int): Unique person identifier
-        - {Keypoint}_x (float): X coordinate in pixels (17 keypoints)
-        - {Keypoint}_y (float): Y coordinate in pixels (17 keypoints)
-        - {Keypoint}_conf (float): Confidence score 0-1 (17 keypoints)
-
-COCO 17 Keypoints:
-    Nose, Left_Eye, Right_Eye, Left_Ear, Right_Ear,
-    Left_Shoulder, Right_Shoulder, Left_Elbow, Right_Elbow,
-    Left_Wrist, Right_Wrist, Left_Hip, Right_Hip,
-    Left_Knee, Right_Knee, Left_Ankle, Right_Ankle
-
-Notes:
-    - Processes EVERY frame for tracking consistency (fixes "too many IDs" issue)
-    - Saves data only at TARGET_FPS to keep file size manageable
-    - BoT-SORT tracking with reid=True handles occlusions and re-entry
-    - Half-precision (FP16) inference enabled by default on GPU
-
-See Also:
-    - yolo/2_inspect_parquet.py: Parquet file analysis and visualization
-    - yolo/3_process_tracks.py: Track filtering and merging
-    - yolo/visualize_overlay.py: Generate skeleton overlay videos
-    - yolo/0_yolo_config.json: Configuration file documentation
-
-Author:
-    ScalpelLab Development Team
-
-Version:
-    2.0.0 (2026-01-06)
-"""
-```
-
-#### Example Function: `load_config()`
-
-```python
-def load_config() -> dict:
-    """Load YOLOv8 configuration from JSON file.
-
-    Reads configuration from `0_yolo_config.json` in the same directory
-    as this module. If keys are missing, populates with default values
-    for yolo, tracking, device, and video settings.
-
-    Returns:
-        dict: Configuration dictionary with keys:
-            - yolo (dict): Model settings (model, conf, iou, imgsz, etc.)
-            - tracking (dict): Tracker settings (tracker, persist, verbose)
-            - device (dict): Device settings (use_cuda)
-            - video (dict): Video settings (auto_repair, paths)
-
-    Raises:
-        FileNotFoundError: If 0_yolo_config.json not found.
-        json.JSONDecodeError: If config file contains invalid JSON.
-
-    Example:
-        ::
-
-            config = load_config()
-            model_name = config['yolo']['model']
-            use_gpu = config['device']['use_cuda']
-
-    Note:
-        Missing configuration keys are automatically populated with defaults:
-        - yolo.model: "yolov8m-pose.pt"
-        - yolo.confidence_threshold: 0.15
-        - tracking.tracker: "botsort.yaml"
-        - device.use_cuda: True (if available)
-    """
-    config_path = os.path.join(os.path.dirname(__file__), "0_yolo_config.json")
-
-    with open(config_path, 'r') as f:
-        config = json.load(f)
-
-    # Ensure keys exist with defaults
-    if "yolo" not in config:
-        config["yolo"] = {
-            "model": "yolov8m-pose.pt",
-            "confidence_threshold": 0.15,
-            "iou_threshold": 0.7,
-            "brightness_boost": 1.0,
-            "use_half_precision": True,
-            "imgsz": 640
-        }
-
-    if "tracking" not in config:
-        config["tracking"] = {
-            "tracker": "botsort.yaml",
-            "persist": True,
-            "verbose": False
-        }
-
-    return config
-```
-
-#### Example Function: `pose_anesthesiologist_yolo()`
-
-```python
-def pose_anesthesiologist_yolo(video_path: str, output_path: str = None) -> str:
-    """Detect and track all persons in video using YOLOv8-Pose with BoT-SORT tracking.
-
-    Performs multi-person pose estimation across entire video sequence,
-    maintaining persistent track IDs even through occlusions. Processes
-    every frame for tracking consistency but saves keypoint data only
-    at target FPS to manage file size.
-
-    The function:
-        1. Repairs video if corrupted (optional, configurable)
-        2. Initializes YOLOv8-Pose model with BoT-SORT tracker
-        3. Processes every frame to maintain tracking consistency
-        4. Saves keypoint data at intervals (default: every frame if 30 FPS)
-        5. Exports Parquet file with 17 COCO keypoints per person
-
-    Args:
-        video_path: Path to input MP4 video file. Can be absolute or relative.
-            Video will be auto-repaired if corrupted (using FFmpeg).
-        output_path: Path for output files. If None, creates output
-            in same directory as input with "_mask.mp4" suffix.
-            Parquet file will have "_keypoints.parquet" suffix.
-            Defaults to None.
-
-    Returns:
-        str: Path to generated Parquet keypoint file
-            (e.g., "/path/to/video_mask.mp4_keypoints.parquet").
-
-    Raises:
-        FileNotFoundError: If video_path doesn't exist.
-        ValueError: If video cannot be opened or is invalid format.
-        RuntimeError: If YOLO model fails to load or inference fails.
-        MemoryError: If insufficient GPU/RAM for video processing.
-
-    Example:
-        Basic usage::
-
-            parquet_path = pose_anesthesiologist_yolo(
-                "F:/Recordings/case1.mp4"
-            )
-            print(f"Keypoints saved to: {parquet_path}")
-
-        With custom output path::
-
-            parquet_path = pose_anesthesiologist_yolo(
-                video_path="input_video.mp4",
-                output_path="output/processed_video.mp4"
-            )
-
-    Output Format:
-        Parquet file with columns:
-            - Frame_ID (int64): Frame number (0-indexed)
-            - Timestamp (float64): Time in seconds
-            - Track_ID (int64): Unique person ID (1, 2, 3, ...)
-            - {Keypoint}_x (float64): X pixel coordinate (17 keypoints)
-            - {Keypoint}_y (float64): Y pixel coordinate (17 keypoints)
-            - {Keypoint}_conf (float64): Confidence 0-1 (17 keypoints)
-
-        Example row:
-            Frame_ID=0, Timestamp=0.0, Track_ID=1,
-            Nose_x=960.5, Nose_y=540.2, Nose_conf=0.95, ...
-
-    Performance:
-        Typical processing speeds (1920x1080 @ 30 FPS):
-            - GPU (RTX 3080) + yolov8x-pose: ~30 FPS
-            - GPU (RTX 3060) + yolov8m-pose: ~45 FPS
-            - CPU (i7-10700K) + yolov8m-pose: ~3 FPS
-
-        Memory requirements:
-            - GPU VRAM: 2-4 GB (depending on model and imgsz)
-            - System RAM: 4-8 GB
-
-    Notes:
-        - Processes ALL frames (not just sampled) to ensure tracking consistency
-        - This solves the "too many unique track IDs" problem
-        - Saves data only at frame_interval to keep output size manageable
-        - Frame interval = max(1, int(video_fps / TARGET_FPS))
-        - BoT-SORT with reid=True handles occlusions and person re-entry
-
-    See Also:
-        - yolo/2_inspect_parquet.py: Inspect generated Parquet files
-        - yolo/3_process_tracks.py: Post-process tracks (filter, merge)
-        - yolo/visualize_overlay.py: Generate debug videos with overlays
-
-    Warning:
-        Large videos may generate large Parquet files:
-            - 60-minute video @ 30 FPS: ~2-5 GB Parquet file
-            - Reduce TARGET_FPS in code to decrease file size
-    """
-    # Implementation here...
-    pass
-```
-
----
 
 ### scripts/ Module Examples
 
@@ -837,7 +581,7 @@ def process(data):
 **Good**:
 ```python
 def process_video_keypoints(keypoint_df: pd.DataFrame) -> pd.DataFrame:
-    """Filter and smooth YOLO keypoint data for pose analysis.
+    """Filter and smooth pose keypoint data for pose analysis.
 
     Removes low-confidence keypoints, interpolates missing values,
     and applies rolling average smoothing to reduce jitter.
@@ -935,7 +679,7 @@ def analyze_tracks(parquet_path: str) -> Dict[int, Dict[str, Any]]:
     """Analyze pose tracks for motion and position statistics.
 
     Args:
-        parquet_path: Path to YOLO keypoint Parquet file.
+        parquet_path: Path to pose keypoint Parquet file.
 
     Returns:
         Dict[int, Dict[str, Any]]: Track statistics indexed by Track_ID.
@@ -1031,11 +775,11 @@ def convert_all_videos(seq_root: str, mp4_root: str) -> None:
 ```bash
 # Using interrogate
 pip install interrogate
-interrogate -v scripts/ yolo/ app/
+interrogate -v scripts/ app/
 
 # Using pydocstyle
 pip install pydocstyle
-pydocstyle scripts/ yolo/ app/
+pydocstyle scripts/ app/
 ```
 
 ### Generate Documentation
@@ -1043,7 +787,7 @@ pydocstyle scripts/ yolo/ app/
 ```bash
 # Using pdoc3
 pip install pdoc3
-pdoc3 --html --output-dir docs/ scripts/ yolo/ app/
+pdoc3 --html --output-dir docs/ scripts/ app/
 
 # Using sphinx
 pip install sphinx
